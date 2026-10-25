@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, Plus, Search } from "lucide-react";
 import { normalizeFa } from "../../utils/normalize";
+import { Floating, isFloatingPanel } from "./Floating";
 
 export interface SearchSelectItem {
   id: string;
@@ -55,7 +56,8 @@ export function SearchSelect({
   useEffect(() => {
     if (!open) return;
     const onDocDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node | null;
+      if (wrapRef.current && !wrapRef.current.contains(t) && !isFloatingPanel(t)) setOpen(false);
     };
     document.addEventListener("mousedown", onDocDown);
     return () => document.removeEventListener("mousedown", onDocDown);
@@ -91,7 +93,14 @@ export function SearchSelect({
       </button>
 
       {open && (
-        <div className="glass-strong anim-pop absolute inset-x-0 top-full z-[65] mt-2 overflow-hidden rounded-2xl">
+        <Floating
+          open={open}
+          anchorRef={wrapRef}
+          matchAnchorWidth
+          placement="bottom"
+          className="overflow-hidden rounded-2xl"
+          onClose={() => setOpen(false)}
+        >
           <div className="flex items-center gap-2 border-b border-ink-900/5 px-3.5 py-2.5 dark:border-white/5">
             <Search size={14} className="shrink-0 text-ink-400" />
             <input
@@ -153,7 +162,7 @@ export function SearchSelect({
               </button>
             )}
           </div>
-        </div>
+        </Floating>
       )}
     </div>
   );

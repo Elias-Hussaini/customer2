@@ -1,22 +1,23 @@
 import { useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { Eye, ImagePlus, Trash2, Download } from "lucide-react";
+import { Eye, ImagePlus, Inbox, Trash2, Download, FileImage } from "lucide-react";
 import { saveAs } from "file-saver";
 import { db } from "../../db/schema";
-import type { Attachment, AttachmentKind } from "../../types";
+import type { Attachment, DocType } from "../../types";
 import { saveAttachment, deleteAttachment } from "../../db/attachments";
 import { Modal } from "./Modal";
 import { useToast } from "../../hooks/useToast";
 import { formatTimestamp } from "../../utils/jalali";
 import { formatNumber } from "../../utils/num";
+import { toPersianDigits } from "../../utils/jalali";
 
-export const ATTACHMENT_SLOTS: { kind: AttachmentKind; label: string; hint: string }[] = [
-  { kind: "passport", label: "عکس پاسپورت", hint: "صفحه اول پاسپورت" },
-  { kind: "nidFront", label: "عکس روی تذکره", hint: "روی کارت ملی/تذکره" },
-  { kind: "nidBack", label: "عکس پشت تذکره", hint: "پشت کارت ملی/تذکره" },
-];
-
-/** Document slots for a customer: passport + national ID + extra files. */
+/**
+ * Documents & images section of a customer.
+ *
+ * The slots are fully data-driven: they come from the `docTypes` table and
+ * can be added / edited / reordered / removed from Settings → مدارک و تصاویر.
+ * "other" is a fixed bucket for extra files; receipt photos live on payments.
+ */
 export function DocumentSlots({ customerId }: { customerId: string }) {
   const toast = useToast();
   const [preview, setPreview] = useState<Attachment | null>(null);
@@ -28,12 +29,18 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
     [customerId],
   );
 
-  const byKind = (kind: AttachmentKind) =>
+  const docTypes = useLiveQuery(
+    async () =>
+      (await db.docTypes.toArray()).filter((d) => !d.archivedAt).sort((a, b) => a.order - b.order),
+    [],
+  );
+
+  const byKind = (kind: string) =>
     (attachments ?? []).filter((a) => a.kind === kind).sort((a, b) => b.createdAt - a.createdAt);
 
   const others = byKind("other");
 
-  const handleFile = async (kind: AttachmentKind, file: File | undefined) => {
+  const handleFile = async (kind: string, file: File | undefined) => {
     if (!file) return;
     setBusy(kind);
     try {
@@ -47,61 +54,97 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
     }
   };
 
-  const slotCard = (
-    kind: AttachmentKind,
-    label: string,
-    hint: string,
-    files: Attachment[],
-  ) => {
+  const hiddenInput = (kind: string, multiple = false) => (
+    <input
+      ref={(el) => {
+        fileInputs.current[kind] = el;
+      }}
+      type="file"
+      accept="image/*,.pdf"
+      multiple={multiple}
+      className="hidden"
+      onChange={(e) => {
+        if (multiple) {
+          const files = Array.from(e.target.files ?? []);
+          files.forEach((f) => void handleFile(kind, f));
+        } else {
+          void handleFile(kind, e.target.files?.[0]);
+        }
+        e.target.value = "";
+      }}
+    />
+  );
+
+  /** Compact single-line slot: thumb + one-line texts + icon actions. */
+  const slotRow = (dt: DocType, files: Attachment[]) => {
     const latest = files[0];
     return (
-      <div
-        key={kind}
-        className="glass-soft flex flex-col gap-2.5 rounded-2xl p-3.5"
+      <li
+        key={dt.id}
+        className="glass-soft flex items-center gap-3 rounded-2xl p-2.5"
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
           e.preventDefault();
-          void handleFile(kind, e.dataTransfer.files?.[0]);
+          void handleFile(dt.id, e.dataTransfer.files?.[0]);
         }}
       >
-        <div className="flex items-center justify-between gap-2">
-          <div>
-            <p className="text-[13px] font-bold">{label}</p>
-            <p className="text-[11px] text-ink-500 dark:text-ink-400">{hint}</p>
-          </div>
-          <span className="chip-soft num rounded-full px-2 py-0.5 text-[10px]">
-            {formatNumber(files.length)}
-          </span>
-        </div>
-
-        {latest && (
+        {/* Thumbnail / empty placeholder */}
+        {latest ? (
           <button
-            className="group relative aspect-[16/10] overflow-hidden rounded-xl border border-ink-900/5 dark:border-white/10"
+            type="button"
+            className="h-16 w-16 shrink-0 overflow-hidden rounded-[14px] border border-ink-900/5 dark:border-white/10"
             onClick={() => setPreview(latest)}
+            aria-label={`مشاهده ${dt.label}`}
           >
             {latest.mime.startsWith("image/") ? (
               <img
                 src={URL.createObjectURL(latest.blob)}
-                alt={label}
+                alt={dt.label}
                 className="h-full w-full object-cover"
               />
             ) : (
-              <span className="flex h-full items-center justify-center text-xs text-ink-500">
-                {latest.name}
+              <span className="flex h-full w-full items-center justify-center text-ink-400">
+                <FileImage size={20} />
               </span>
             )}
           </button>
-        )}
-
-        <div className="flex items-center gap-2">
+        ) : (
           <button
             type="button"
-            className="btn btn-glass btn-sm flex-1"
-            disabled={busy === kind}
-            onClick={() => fileInputs.current[kind]?.click()}
+            className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[14px] border border-dashed border-ink-300/70 text-ink-400 transition-colors hover:border-brand-400 hover:text-brand-500 dark:border-ink-700"
+            onClick={() => fileInputs.current[dt.id]?.click()}
+            aria-label={`افزودن ${dt.label}`}
           >
-            <ImagePlus size={14} />
-            {latest ? "جایگزینی" : "افزودن"}
+            <ImagePlus size={20} />
+          </button>
+        )}
+
+        {/* One-line texts — never wrap into the mess below */}
+        <div className="min-w-0 flex-1">
+          <p className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-[13px] font-bold">{dt.label}</span>
+            {files.length > 1 && (
+              <span className="chip-soft num shrink-0 rounded-full px-2 py-0.5 text-[10px]">
+                {toPersianDigits(files.length)}
+              </span>
+            )}
+          </p>
+          <p className="truncate text-[11px] text-ink-500 dark:text-ink-400">
+            {latest ? `${dt.hint ?? "مدرک"} • ${formatTimestamp(latest.createdAt)}` : (dt.hint ?? "بارگذاری نشده")}
+          </p>
+        </div>
+
+        {/* Actions */}
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            className="icon-btn !h-8 !w-8 text-brand-600 dark:text-brand-300"
+            title={latest ? "جایگزینی با فایل جدید" : "افزودن"}
+            aria-label={latest ? "جایگزینی" : "افزودن"}
+            disabled={busy === dt.id}
+            onClick={() => fileInputs.current[dt.id]?.click()}
+          >
+            <ImagePlus size={15} />
           </button>
           {latest && (
             <>
@@ -117,7 +160,7 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
               <button
                 type="button"
                 className="icon-btn !h-8 !w-8 hover:!text-[#ef4444]"
-                title="حذف آخرین"
+                title="حذف"
                 aria-label="حذف"
                 onClick={async () => {
                   await deleteAttachment(latest.id);
@@ -129,32 +172,34 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
             </>
           )}
         </div>
-
-        <input
-          ref={(el) => {
-            fileInputs.current[kind] = el;
-          }}
-          type="file"
-          accept="image/*,.pdf"
-          className="hidden"
-          onChange={(e) => {
-            void handleFile(kind, e.target.files?.[0]);
-            e.target.value = "";
-          }}
-        />
-      </div>
+        {hiddenInput(dt.id)}
+      </li>
     );
   };
 
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        {ATTACHMENT_SLOTS.map((s) => slotCard(s.kind, s.label, s.hint, byKind(s.kind)))}
-      </div>
+  const docList = docTypes ?? [];
 
+  return (
+    <div className="flex flex-col gap-3.5">
+      {docList.length === 0 ? (
+        <p className="rounded-2xl border border-dashed border-ink-300/60 px-4 py-5 text-center text-xs leading-6 text-ink-400 dark:border-ink-700">
+          هنوز نوع مدرکی تعریف نشده — از تنظیمات ← «مدارک و تصاویر» اضافه کنید
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-2">{docList.map((dt) => slotRow(dt, byKind(dt.id)))}</ul>
+      )}
+
+      {/* Fixed bucket for extra files */}
       <div>
-        <div className="mb-2 flex items-center justify-between">
-          <p className="text-[13px] font-bold">سایر مدارک</p>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <p className="text-[13px] font-bold">
+            سایر مدارک
+            {others.length > 0 && (
+              <span className="chip-soft num mr-2 rounded-full px-2 py-0.5 text-[10px]">
+                {toPersianDigits(others.length)}
+              </span>
+            )}
+          </p>
           <button
             type="button"
             className="btn btn-glass btn-sm"
@@ -163,23 +208,10 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
             <ImagePlus size={14} />
             افزودن فایل
           </button>
-          <input
-            ref={(el) => {
-              fileInputs.current["other"] = el;
-            }}
-            type="file"
-            accept="image/*,.pdf"
-            multiple
-            className="hidden"
-            onChange={(e) => {
-              const files = Array.from(e.target.files ?? []);
-              files.forEach((f) => void handleFile("other", f));
-              e.target.value = "";
-            }}
-          />
+          {hiddenInput("other", true)}
         </div>
         {others.length === 0 ? (
-          <p className="rounded-2xl border border-dashed border-ink-300/60 px-4 py-4 text-center text-xs text-ink-400 dark:border-ink-700">
+          <p className="rounded-2xl border border-dashed border-ink-300/60 px-4 py-3 text-center text-xs text-ink-400 dark:border-ink-700">
             فایل دیگری بارگذاری نشده است
           </p>
         ) : (
@@ -187,10 +219,13 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
             {others.map((a) => (
               <li
                 key={a.id}
-                className="glass-soft flex items-center gap-3 rounded-2xl px-3.5 py-2.5"
+                className="glass-soft flex items-center gap-3 rounded-2xl px-3 py-2"
               >
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-500/10 text-brand-600 dark:text-brand-300">
+                  {a.mime.startsWith("image/") ? <FileImage size={16} /> : <Inbox size={16} />}
+                </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] font-medium">{a.name}</span>
+                  <span className="block truncate text-[12.5px] font-medium">{a.name}</span>
                   <span className="text-[11px] text-ink-400">
                     {formatNumber(Math.round(a.size / 1024))} کیلوبایت • {formatTimestamp(a.createdAt)}
                   </span>

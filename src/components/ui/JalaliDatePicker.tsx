@@ -14,6 +14,7 @@ import {
   toPersianDigits,
   compareIso,
 } from "../../utils/jalali";
+import { Floating, isFloatingPanel } from "./Floating";
 
 interface JalaliDatePickerProps {
   value: string | null | undefined;
@@ -58,7 +59,8 @@ export function JalaliDatePicker({
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node | null;
+      if (wrapRef.current && !wrapRef.current.contains(t) && !isFloatingPanel(t)) setOpen(false);
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
@@ -159,10 +161,14 @@ export function JalaliDatePicker({
       </div>
 
       {open && (
-        <div
-          className={`glass-strong anim-pop absolute top-full right-0 z-[65] mt-2 w-[286px] rounded-3xl p-3.5 ${
-            disabled ? "hidden" : ""
-          }`}
+        <Floating
+          open={open && !disabled}
+          anchorRef={wrapRef}
+          width={286}
+          placement="bottom"
+          align="right"
+          className="rounded-3xl p-3.5"
+          onClose={() => setOpen(false)}
         >
           {/* header */}
           <div className="mb-2 flex items-center justify-between">
@@ -251,7 +257,7 @@ export function JalaliDatePicker({
               </button>
             )}
           </div>
-        </div>
+        </Floating>
       )}
     </div>
   );

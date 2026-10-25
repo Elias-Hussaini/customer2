@@ -1,18 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, FilePlus2 } from "lucide-react";
 import { Modal } from "../ui/Modal";
 import { Button } from "../ui/Button";
-import { FormField, Input, Textarea } from "../ui/fields";
+import { FormField, Input, Textarea, Toggle } from "../ui/fields";
 import { JalaliDatePicker } from "../ui/JalaliDatePicker";
 import { DatePicker } from "../ui/DatePicker";
 import { SearchSelect } from "../ui/inputs";
+import { MoneyInput } from "../ui/MoneyInput";
 import { CustomFieldsGroup } from "../ui/CustomFields";
 import { createCustomer, findDuplicatePassport, updateCustomer, customerFullName } from "../../db/customers";
+import { createRequest } from "../../db/requests";
+import { createVisaType } from "../../db/taxonomy";
 import { updatePrefs } from "../../db/prefs";
-import { useCustomFields, useLists, usePrefs, useRepresentatives } from "../../hooks/useData";
+import { useCustomFields, useLists, usePrefs, useRepresentatives, useVisaTypes } from "../../hooks/useData";
 import { useToast } from "../../hooks/useToast";
 import { todayIso } from "../../utils/jalali";
-import type { Customer } from "../../types";
+import type { Currency, Customer } from "../../types";
 
 interface Props {
   open: boolean;
@@ -58,10 +61,17 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
   const prefs = usePrefs();
   const representatives = useRepresentatives();
   const lists = useLists();
+  const visaTypes = useVisaTypes();
   const [form, setForm] = useState<FormState>(EMPTY);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [dupWarning, setDupWarning] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Simultaneous visa-request section (create mode only).
+  const [withRequest, setWithRequest] = useState(true);
+  const [reqVisaType, setReqVisaType] = useState<string | null>(null);
+  const [reqAmount, setReqAmount] = useState<number | null>(null);
+  const [reqCurrency, setReqCurrency] = useState<Currency>("IRT");
 
   // Read the latest values inside the open-effect without re-running it
   // whenever live queries refresh (would wipe user input otherwise).
@@ -117,6 +127,11 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
             ? p.lastListId
             : null;
         setForm({ ...EMPTY, representativeId: lastRep, listId: lastList, registrationDate: todayIso() });
+        // Reset the visa-request section.
+        setWithRequest(true);
+        setReqVisaType(p.defaultVisaType ?? null);
+        setReqAmount(null);
+        setReqCurrency(p.defaultCurrency);
       }
     }
   }, [open, customer]);
@@ -130,6 +145,11 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
     setDupWarning(dup ? `این شماره پاسپورت قبلاً برای «${customerFullName(dup)}» ثبت شده است.` : null);
   };
 
+  const visaTypeItems = useMemo(
+    () => (visaTypes ?? []).map((v) => ({ id: v.name, title: v.name })),
+    [visaTypes],
+  );
+
   const validate = (): boolean => {
     const next: Record<string, string> = {};
     if (!form.firstName.trim() && !form.lastName.trim() && !form.passportNo.trim()) {
@@ -140,6 +160,9 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
     }
     if (!form.listId) {
       next.listId = "هر مشتری باید در یک لیست قرار بگیرد";
+    }
+    if (!customer && withRequest && !reqVisaType) {
+      next.visaType = "نوع ویزا را انتخاب کنید یا با تایپ، نوع جدید بسازید";
     }
     for (const field of fields) {
       const v = form.customValues[field.key];
@@ -176,7 +199,25 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
         onSaved?.({ ...customer, ...input });
       } else {
         const created = await createCustomer(input);
-        toast.success(`مشتری «${customerFullName(created)}» ثبت شد`);
+        // Register the visa request together with the customer — same
+        // representative, list and registration date. No re-asking.
+        if (withRequest && reqVisaType) {
+          await createRequest({
+            customerId: created.id,
+            representativeId: form.representativeId,
+            listId: form.listId,
+            visaType: reqVisaType,
+            tags: [],
+            quotedAmount: reqAmount ?? undefined,
+            currency: reqAmount != null ? reqCurrency : undefined,
+            registrationDate: input.registrationDate,
+            issued: false,
+            issuedAt: null,
+          });
+          toast.success(`مشتری «${customerFullName(created)}» با درخواست «${reqVisaType}» ثبت شد`);
+        } else {
+          toast.success(`مشتری «${customerFullName(created)}» ثبت شد`);
+        }
         onSaved?.(created);
       }
       // Remember list & representative for the next quick entry.
@@ -311,6 +352,51 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
             />
           </FormField>
         </div>
+
+        {/* Simultaneous visa request — create mode only. */}
+        {!customer && (
+          <div className="rounded-2xl border border-ink-900/8 p-3.5 dark:border-white/10">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="flex items-center gap-1.5 text-[13px] font-bold">
+                  <FilePlus2 size={14} className="text-brand-500" />
+                  ثبت همزمان درخواست ویزا
+                </p>
+                <p className="mt-0.5 text-[11px] leading-5 text-ink-500 dark:text-ink-400">
+                  با همان نماینده و لیستِ همین فرم ثبت می‌شود و دیگر لازم نیست جداگانه ثبتش کنید.
+                  بعداً می‌توانید مبلغ، وضعیت صدور و مدارک را تکمیل کنید.
+                </p>
+              </div>
+              <Toggle checked={withRequest} onChange={setWithRequest} />
+            </div>
+            {withRequest && (
+              <div className="mt-3 grid grid-cols-1 gap-3 border-t border-ink-900/5 pt-3 sm:grid-cols-2 dark:border-white/5">
+                <FormField label="نوع ویزا" required error={errors.visaType}>
+                  <SearchSelect
+                    items={visaTypeItems}
+                    value={reqVisaType}
+                    onSelect={setReqVisaType}
+                    onCreate={async (name) => {
+                      await createVisaType(name);
+                      setReqVisaType(name);
+                    }}
+                    createLabel={(q) => `ایجاد و ثبت «${q}»`}
+                    placeholder="انتخاب یا ساخت…"
+                    clearable={false}
+                  />
+                </FormField>
+                <FormField label="مبلغ پیشنهادی" hint="اختیاری — بعداً هم قابل ثبت است">
+                  <MoneyInput
+                    amount={reqAmount}
+                    currency={reqCurrency}
+                    onAmountChange={setReqAmount}
+                    onCurrencyChange={setReqCurrency}
+                  />
+                </FormField>
+              </div>
+            )}
+          </div>
+        )}
 
         {dupWarning && (
           <div className="flex items-start gap-2.5 rounded-2xl bg-[#f59e0b]/10 px-3.5 py-3 text-xs leading-5 text-[#c77d0a] dark:text-[#f5b84f]">

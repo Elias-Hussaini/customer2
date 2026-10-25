@@ -61,7 +61,12 @@ export async function updatePayment(id: string, input: PaymentInput): Promise<vo
 
 export async function deletePayment(id: string): Promise<void> {
   const p = await db.payments.get(id);
-  await db.payments.delete(id);
+  await db.transaction("rw", db.payments, db.attachments, async () => {
+    // Remove the receipt photo together with the payment.
+    const receipts = await db.attachments.where("paymentId").equals(id).toArray();
+    await Promise.all(receipts.map((r) => db.attachments.delete(r.id)));
+    await db.payments.delete(id);
+  });
   if (p) {
     await logActivity({
       type: "delete",

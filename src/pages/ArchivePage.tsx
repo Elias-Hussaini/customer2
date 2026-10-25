@@ -22,7 +22,7 @@ import {
 } from "../hooks/useData";
 import { useConfirm } from "../hooks/useConfirm";
 import { useToast } from "../hooks/useToast";
-import { formatJalali, toPersianDigits } from "../utils/jalali";
+import { formatJalali, isoFromDate, toPersianDigits } from "../utils/jalali";
 import type { Customer, ListFolder, Representative, Tag, VisaRequest } from "../types";
 
 function ArchiveRow({
@@ -43,9 +43,8 @@ function ArchiveRow({
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13.5px] font-bold">{title}</p>
         <p className="text-[11px] text-ink-400">
-          {subtitle ? `${subtitle} • ` : ""}بایگانی: {formatJalali(
-            archivedAt ? new Date(archivedAt).toISOString().slice(0, 10) : undefined,
-          )}
+          {subtitle ? `${subtitle} • ` : ""}بایگانی:{" "}
+          {formatJalali(archivedAt ? isoFromDate(new Date(archivedAt)) : undefined)}
         </p>
       </div>
       <button className="btn btn-glass btn-sm" onClick={onRestore}>

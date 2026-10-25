@@ -1,5 +1,5 @@
 import { db } from "./schema";
-import type { Attachment, AttachmentKind } from "../types";
+import type { Attachment } from "../types";
 import { uid } from "../utils/id";
 
 /** Downscale large photos before storing so IndexedDB stays lean. */
@@ -30,13 +30,14 @@ export async function processImage(file: File, maxDim = 1600, quality = 0.85): P
 
 export async function saveAttachment(
   customerId: string,
-  kind: AttachmentKind,
+  kind: string,
   file: File,
 ): Promise<Attachment> {
   const blob = await processImage(file);
   const att: Attachment = {
     id: uid(),
     customerId,
+    paymentId: null,
     kind,
     name: file.name || `${kind}.jpg`,
     mime: blob.type || file.type,
@@ -46,6 +47,29 @@ export async function saveAttachment(
   };
   await db.attachments.add(att);
   return att;
+}
+
+/** Optional receipt photo attached to a payment (customerId stays null). */
+export async function saveReceipt(paymentId: string, file: File): Promise<Attachment> {
+  const blob = await processImage(file);
+  const att: Attachment = {
+    id: uid(),
+    customerId: null,
+    paymentId,
+    kind: "receipt",
+    name: file.name || "رسید.jpg",
+    mime: blob.type || file.type,
+    size: blob.size,
+    blob: blob instanceof Blob ? blob : new Blob([blob]),
+    createdAt: Date.now(),
+  };
+  await db.attachments.add(att);
+  return att;
+}
+
+/** The receipt of a payment, if any. */
+export async function getReceipt(paymentId: string): Promise<Attachment | undefined> {
+  return db.attachments.where("paymentId").equals(paymentId).first();
 }
 
 export async function deleteAttachment(id: string): Promise<void> {

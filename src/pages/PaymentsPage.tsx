@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Banknote, FileDown, Pencil, Plus, Trash2 } from "lucide-react";
+import { Banknote, FileDown, Pencil, Plus, Receipt, Trash2 } from "lucide-react";
 import { PageHeader } from "../components/ui/StatCard";
 import { DataTable, type Column } from "../components/ui/DataTable";
 import { EmptyState } from "../components/ui/EmptyState";
@@ -7,15 +7,16 @@ import { FilterSelect, SearchBox } from "../components/ui/inputs";
 import { JalaliDatePicker } from "../components/ui/JalaliDatePicker";
 import { Menu } from "../components/ui/Menu";
 import { PaymentFormModal } from "../components/domain/PaymentFormModal";
+import { AttachmentPreview } from "../components/ui/AttachmentPreview";
 import { ExportDialog } from "../components/exports/ExportDialog";
 import { deletePayment } from "../db/payments";
-import { useCustomers, usePayments, useRepresentatives, useRequests } from "../hooks/useData";
+import { useCustomers, usePayments, useReceipts, useRepresentatives, useRequests } from "../hooks/useData";
 import { useConfirm } from "../hooks/useConfirm";
 import { useToast } from "../hooks/useToast";
 import { formatJalali, toPersianDigits } from "../utils/jalali";
 import { formatMoney } from "../utils/num";
 import { customerFullName } from "../db/customers";
-import type { Payment } from "../types";
+import type { Attachment, Payment } from "../types";
 
 export function PaymentsPage() {
   const { confirm } = useConfirm();
@@ -24,6 +25,7 @@ export function PaymentsPage() {
   const representatives = useRepresentatives();
   const requests = useRequests();
   const customers = useCustomers();
+  const receipts = useReceipts();
 
   const [repId, setRepId] = useState("");
   const [currency, setCurrency] = useState("");
@@ -32,6 +34,12 @@ export function PaymentsPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Payment | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  const [previewReceipt, setPreviewReceipt] = useState<Attachment | null>(null);
+
+  const receiptByPayment = useMemo(
+    () => new Map((receipts ?? []).map((r) => [r.paymentId ?? "", r] as const)),
+    [receipts],
+  );
 
   const filtered = useMemo(() => {
     return (payments ?? [])
@@ -84,6 +92,30 @@ export function PaymentsPage() {
       key: "description",
       header: "توضیحات",
       render: (p) => <span className="text-ink-600 dark:text-ink-300">{p.description ?? "—"}</span>,
+    },
+    {
+      key: "receipt",
+      header: "رسید",
+      align: "center",
+      sortValue: (p) => (receiptByPayment.has(p.id) ? 1 : 0),
+      render: (p) => {
+        const r = receiptByPayment.get(p.id);
+        return r ? (
+          <button
+            className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#10b981]/12 text-[#0b9e6e] transition-colors hover:bg-[#10b981]/20 dark:text-[#3ddc9a]"
+            title="مشاهده رسید"
+            aria-label="مشاهده رسید"
+            onClick={(e) => {
+              e.stopPropagation();
+              setPreviewReceipt(r);
+            }}
+          >
+            <Receipt size={15} />
+          </button>
+        ) : (
+          <span className="text-[11px] text-ink-400">—</span>
+        );
+      },
     },
     {
       key: "actions",
@@ -199,6 +231,8 @@ export function PaymentsPage() {
         }}
         payment={editing ?? undefined}
       />
+
+      <AttachmentPreview attachment={previewReceipt} onClose={() => setPreviewReceipt(null)} />
 
       <ExportDialog
         open={exportOpen}

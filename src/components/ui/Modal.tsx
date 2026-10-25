@@ -31,7 +31,12 @@ function useEscape(active: boolean, onClose: () => void) {
   useEffect(() => {
     if (!active) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        // If a floating popover (menu / date picker / select) is open on top,
+        // Escape should close that first — not the dialog behind it.
+        if (document.querySelector("[data-floating-panel]")) return;
+        onClose();
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);

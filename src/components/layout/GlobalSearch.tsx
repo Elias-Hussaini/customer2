@@ -5,6 +5,7 @@ import type { Customer, CustomFieldDef, ListFolder, Representative, Tag, VisaReq
 import { buildSearchDataset, searchDataset, type SearchHit } from "../../services/search";
 import { customerFullName } from "../../db/customers";
 import { normalizeFa } from "../../utils/normalize";
+import { Floating, isFloatingPanel } from "../ui/Floating";
 
 const TYPE_LABELS: Record<string, string> = {
   customer: "مشتری",
@@ -55,7 +56,8 @@ export function GlobalSearch({
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node | null;
+      if (wrapRef.current && !wrapRef.current.contains(t) && !isFloatingPanel(t)) setOpen(false);
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
@@ -95,7 +97,14 @@ export function GlobalSearch({
         />
       </div>
       {open && normalizeFa(query).length >= 2 && (
-        <div className="glass-strong anim-pop absolute inset-x-0 top-full z-[60] mt-2 overflow-hidden rounded-2xl">
+        <Floating
+          open={open}
+          anchorRef={wrapRef}
+          matchAnchorWidth
+          placement="bottom"
+          className="overflow-hidden rounded-2xl"
+          onClose={() => setOpen(false)}
+        >
           {hits.length === 0 ? (
             <p className="px-4 py-4 text-center text-xs text-ink-400">نتیجه‌ای یافت نشد</p>
           ) : (
@@ -142,7 +151,7 @@ export function GlobalSearch({
               </button>
             </>
           )}
-        </div>
+        </Floating>
       )}
     </div>
   );

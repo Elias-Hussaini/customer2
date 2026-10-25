@@ -1,16 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLiveQuery } from "dexie-react-hooks";
+import { Eye, ImagePlus, Trash2 } from "lucide-react";
 import { Modal } from "../ui/Modal";
 import { Button } from "../ui/Button";
 import { FormField, Input, Textarea } from "../ui/fields";
 import { JalaliDatePicker } from "../ui/JalaliDatePicker";
 import { MoneyInput } from "../ui/MoneyInput";
 import { SearchSelect } from "../ui/inputs";
+import { AttachmentPreview } from "../ui/AttachmentPreview";
 import { createPayment, updatePayment } from "../../db/payments";
+import { saveReceipt, deleteAttachment, getReceipt } from "../../db/attachments";
 import { useCustomers, usePrefs, useRepresentatives, useRequests } from "../../hooks/useData";
 import { useToast } from "../../hooks/useToast";
 import { todayIso } from "../../utils/jalali";
 import { customerFullName } from "../../db/customers";
-import type { Currency, Payment } from "../../types";
+import type { Attachment, Currency, Payment } from "../../types";
 
 interface Props {
   open: boolean;
@@ -36,9 +40,27 @@ export function PaymentFormModal({ open, onClose, payment, defaultRepresentative
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
+  // Optional receipt photo — picked locally (new/replace) or existing.
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [receiptRemoved, setReceiptRemoved] = useState(false);
+  const [previewAtt, setPreviewAtt] = useState<Pick<Attachment, "name" | "mime" | "blob"> | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const existingReceipt = useLiveQuery(
+    () => (payment ? getReceipt(payment.id) : Promise.resolve(undefined)),
+    [payment?.id],
+  );
+
+  const shownReceipt: Attachment | null = receiptRemoved
+    ? null
+    : (existingReceipt ?? null);
+
   useEffect(() => {
     if (open) {
       setErrors({});
+      setReceiptFile(null);
+      setReceiptRemoved(false);
+      setPreviewAtt(null);
       if (payment) {
         setRepresentativeId(payment.representativeId);
         setAmount(payment.amount);
@@ -97,9 +119,17 @@ export function PaymentFormModal({ open, onClose, payment, defaultRepresentative
       };
       if (payment) {
         await updatePayment(payment.id, input);
+        // Receipt housekeeping: replace or remove together with the edit.
+        if (receiptFile) {
+          if (existingReceipt) await deleteAttachment(existingReceipt.id);
+          await saveReceipt(payment.id, receiptFile);
+        } else if (receiptRemoved && existingReceipt) {
+          await deleteAttachment(existingReceipt.id);
+        }
         toast.success("پرداخت ویرایش شد");
       } else {
-        await createPayment(input);
+        const created = await createPayment(input);
+        if (receiptFile) await saveReceipt(created.id, receiptFile);
         toast.success("پرداخت ثبت شد");
       }
       onSaved?.();
@@ -111,6 +141,14 @@ export function PaymentFormModal({ open, onClose, payment, defaultRepresentative
       setSaving(false);
     }
   };
+
+  const receiptUrl = receiptFile ? URL.createObjectURL(receiptFile) : null;
+  // Keep the object URL stable while the file is unchanged.
+  useEffect(() => {
+    return () => {
+      if (receiptUrl) URL.revokeObjectURL(receiptUrl);
+    };
+  }, [receiptUrl]);
 
   return (
     <Modal
@@ -165,7 +203,111 @@ export function PaymentFormModal({ open, onClose, payment, defaultRepresentative
             placeholder="مثلاً پیش‌پرداخت، قسط اول…"
           />
         </FormField>
+
+        {/* Optional receipt photo */}
+        <FormField label="عکس رسید" hint="اختیاری — رسید پرداخت را همراه همین ثبت پیوست کنید">
+          <div className="flex flex-wrap items-center gap-2.5">
+            {receiptFile ? (
+              <>
+                <button
+                  type="button"
+                  className="h-16 w-16 overflow-hidden rounded-xl border border-ink-900/5 dark:border-white/10"
+                  onClick={() =>
+                    setPreviewAtt({ name: receiptFile.name, mime: receiptFile.type, blob: receiptFile })
+                  }
+                >
+                  <img src={receiptUrl ?? ""} alt="رسید" className="h-full w-full object-cover" />
+                </button>
+                <span className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    className="btn btn-glass btn-sm"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <ImagePlus size={14} /> جایگزینی
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-btn !h-8 !w-8 hover:!text-[#ef4444]"
+                    aria-label="حذف"
+                    onClick={() => {
+                      setReceiptFile(null);
+                      setReceiptRemoved(true);
+                    }}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </span>
+              </>
+            ) : shownReceipt ? (
+              <>
+                <button
+                  type="button"
+                  className="h-16 w-16 overflow-hidden rounded-xl border border-ink-900/5 dark:border-white/10"
+                  onClick={() => setPreviewAtt(shownReceipt)}
+                >
+                  {shownReceipt.mime.startsWith("image/") ? (
+                    <img
+                      src={URL.createObjectURL(shownReceipt.blob)}
+                      alt="رسید"
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <span className="flex h-full w-full items-center justify-center text-ink-400">
+                      {shownReceipt.name}
+                    </span>
+                  )}
+                </button>
+                <span className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    className="icon-btn !h-8 !w-8"
+                    aria-label="مشاهده"
+                    onClick={() => setPreviewAtt(shownReceipt)}
+                  >
+                    <Eye size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-glass btn-sm"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <ImagePlus size={14} /> جایگزینی
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-btn !h-8 !w-8 hover:!text-[#ef4444]"
+                    aria-label="حذف"
+                    onClick={() => setReceiptRemoved(true)}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </span>
+              </>
+            ) : (
+              <button type="button" className="btn btn-glass btn-sm" onClick={() => fileInputRef.current?.click()}>
+                <ImagePlus size={14} /> افزودن عکس رسید
+              </button>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,.pdf"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) {
+                  setReceiptFile(f);
+                  setReceiptRemoved(false);
+                }
+                e.target.value = "";
+              }}
+            />
+          </div>
+        </FormField>
       </div>
+
+      <AttachmentPreview attachment={previewAtt} onClose={() => setPreviewAtt(null)} />
     </Modal>
   );
 }

@@ -5,6 +5,7 @@ import {
   ArrowUp,
   Coins,
   DatabaseBackup,
+  FileImage,
   Layers,
   Monitor,
   Moon,
@@ -26,7 +27,7 @@ import { Button } from "../components/ui/Button";
 import { FormField, Input, Checkbox, Toggle, Select } from "../components/ui/fields";
 import { EmptyState } from "../components/ui/EmptyState";
 import { useTheme, type Theme } from "../hooks/useTheme";
-import { useCustomFields, usePrefs, useTags, useVisaTypes, useCustomers } from "../hooks/useData";
+import { useCustomFields, usePrefs, useTags, useVisaTypes, useCustomers, useDocTypes } from "../hooks/useData";
 import { updatePrefs } from "../db/prefs";
 import {
   TAG_PALETTE,
@@ -44,6 +45,12 @@ import {
   restoreVisaType,
   renameVisaType,
 } from "../db/taxonomy";
+import {
+  createDocType,
+  updateDocType,
+  reorderDocType,
+  deleteDocType,
+} from "../db/docTypes";
 import { seedDemoData } from "../db/seed";
 import { useToast } from "../hooks/useToast";
 import { useConfirm } from "../hooks/useConfirm";
@@ -56,6 +63,7 @@ type SettingsSection =
   | "fields"
   | "tags"
   | "visaTypes"
+  | "docTypes"
   | "currency"
   | "defaults"
   | "backup"
@@ -67,6 +75,7 @@ const SECTIONS: { key: SettingsSection; label: string; icon: typeof Palette }[] 
   { key: "fields", label: "فیلدهای سفارشی", icon: Layers },
   { key: "tags", label: "تگ‌ها", icon: TagIcon },
   { key: "visaTypes", label: "انواع ویزا", icon: VisaIcon },
+  { key: "docTypes", label: "مدارک و تصاویر", icon: FileImage },
   { key: "currency", label: "واحد پول", icon: Coins },
   { key: "defaults", label: "پیش‌فرض‌های فرم", icon: Wand2 },
   { key: "backup", label: "پشتیبان‌گیری", icon: DatabaseBackup },
@@ -113,6 +122,7 @@ export function SettingsPage() {
           {section === "fields" && <CustomFieldsSection />}
           {section === "tags" && <TagsSection />}
           {section === "visaTypes" && <VisaTypesSection />}
+          {section === "docTypes" && <DocTypesSection />}
           {section === "currency" && <CurrencySection />}
           {section === "defaults" && <DefaultsSection />}
           {section === "backup" && <BackupSection />}
@@ -762,6 +772,174 @@ function VisaTypesSection() {
         </div>
       )}
     </SectionCard>
+  );
+}
+
+/* ---------------------------- Document types ----------------------------- */
+
+interface DocTypeFormState {
+  label: string;
+  hint: string;
+}
+
+function DocTypesSection() {
+  const docTypes = useDocTypes();
+  const toast = useToast();
+  const { confirm } = useConfirm();
+  const [editOpen, setEditOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<DocTypeFormState | null>(null);
+  const [error, setError] = useState("");
+
+  const list = docTypes ?? [];
+
+  const openCreate = () => {
+    setEditingId(null);
+    setError("");
+    setForm({ label: "", hint: "" });
+    setEditOpen(true);
+  };
+
+  const openEdit = (id: string) => {
+    const dt = list.find((d) => d.id === id);
+    if (!dt) return;
+    setEditingId(id);
+    setError("");
+    setForm({ label: dt.label, hint: dt.hint ?? "" });
+    setEditOpen(true);
+  };
+
+  const save = async () => {
+    if (!form) return;
+    if (!form.label.trim()) {
+      setError("عنوان مدرک الزامی است");
+      return;
+    }
+    if (editingId) {
+      await updateDocType(editingId, form);
+      toast.success("مدرک ویرایش شد");
+    } else {
+      await createDocType(form);
+      toast.success("مدرک جدید اضافه شد");
+    }
+    setEditOpen(false);
+  };
+
+  return (
+    <>
+      <SectionCard
+        title="مدارک و تصاویر"
+        icon={<FileImage size={15} className="text-brand-500" />}
+        action={
+          <button className="btn btn-primary btn-sm" onClick={openCreate}>
+            <Plus size={14} /> مدرک جدید
+          </button>
+        }
+      >
+        <p className="mb-3 text-[12px] leading-6 text-ink-500 dark:text-ink-400">
+          نوع مدارک پرونده مشتری را مثل «عکس ویزه» یا «عکس سند» اضافه، ویرایش یا جابه‌جا کنید.
+          این اسلات‌ها در صفحه هر مشتری، بخش «مدارک و تصاویر» نمایش داده می‌شوند.
+        </p>
+        {list.length === 0 ? (
+          <EmptyState
+            icon={FileImage}
+            title="مدرکی تعریف نشده"
+            compact
+            description="مثل «عکس پاسپورت» — چند نمونه آماده هم به‌صورت خودکار موجود است"
+          />
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {list.map((dt, i) => (
+              <li key={dt.id} className="glass-soft flex items-center gap-2 rounded-2xl p-3">
+                <div className="flex flex-col gap-1">
+                  <button
+                    className="icon-btn !h-6 !w-6"
+                    aria-label="انتقال به بالا"
+                    disabled={i === 0}
+                    onClick={() => void reorderDocType(dt.id, -1)}
+                  >
+                    <ArrowUp size={12} />
+                  </button>
+                  <button
+                    className="icon-btn !h-6 !w-6"
+                    aria-label="انتقال به پایین"
+                    disabled={i === list.length - 1}
+                    onClick={() => void reorderDocType(dt.id, 1)}
+                  >
+                    <ArrowDown size={12} />
+                  </button>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[13px] font-bold">{dt.label}</p>
+                  <p className="truncate text-[10.5px] text-ink-400">
+                    {dt.hint || "بدون توضیح"}
+                  </p>
+                </div>
+                <button className="icon-btn !h-8 !w-8" aria-label="ویرایش" onClick={() => openEdit(dt.id)}>
+                  <Pencil size={14} />
+                </button>
+                <button
+                  className="icon-btn !h-8 !w-8 hover:!text-[#ef4444]"
+                  aria-label="حذف"
+                  onClick={async () => {
+                    const ok = await confirm({
+                      title: `حذف «${dt.label}»`,
+                      message:
+                        "فایل‌های بارگذاری‌شدهٔ این بخش حذف نمی‌شوند؛ به «سایر مدارک» منتقل می‌شوند.",
+                      danger: true,
+                      confirmLabel: "حذف",
+                    });
+                    if (ok) {
+                      await deleteDocType(dt.id, dt.label);
+                      toast.info("مدرک حذف شد");
+                    }
+                  }}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </SectionCard>
+
+      <Modal
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+        title={editingId ? "ویرایش مدرک" : "مدرک جدید"}
+        size="sm"
+        footer={
+          <div className="flex justify-end gap-2">
+            <button className="btn btn-ghost" onClick={() => setEditOpen(false)}>
+              انصراف
+            </button>
+            <Button variant="primary" onClick={() => void save()}>
+              ذخیره
+            </Button>
+          </div>
+        }
+      >
+        {form && (
+          <div className="flex flex-col gap-4">
+            <FormField label="عنوان" required error={error}>
+              <Input
+                value={form.label}
+                onChange={(e) => setForm({ ...form, label: e.target.value })}
+                placeholder="مثلاً عکس ویزه"
+                autoFocus
+              />
+            </FormField>
+            <FormField label="توضیح کوتاه" hint="اختیاری — زیر عنوان نمایش داده می‌شود">
+              <Input
+                value={form.hint}
+                onChange={(e) => setForm({ ...form, hint: e.target.value })}
+                placeholder="مثلاً صفحه ویزه پاسپورت"
+              />
+            </FormField>
+          </div>
+        )}
+      </Modal>
+    </>
   );
 }
 

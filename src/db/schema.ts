@@ -5,6 +5,7 @@ import type {
   Attachment,
   CustomFieldDef,
   Customer,
+  DocType,
   ListFolder,
   Payment,
   Representative,
@@ -31,6 +32,7 @@ export class VisaDB extends Dexie {
   customFields!: Table<CustomFieldDef, string>;
   activities!: Table<Activity, string>;
   attachments!: Table<Attachment, string>;
+  docTypes!: Table<DocType, string>;
   preferences!: Table<AppPreferences, string>;
 
   constructor() {
@@ -55,6 +57,12 @@ export class VisaDB extends Dexie {
       customers:
         "id, firstName, lastName, passportNo, registrationDate, createdAt, archivedAt, listId, representativeId",
     });
+    // v3: user-definable document slots (مدارک و تصاویر) + payment receipt
+    // photos. Attachments gain a paymentId index; receipts keep customerId null.
+    this.version(3).stores({
+      attachments: "id, customerId, paymentId, kind, createdAt",
+      docTypes: "id, order, createdAt, archivedAt",
+    });
   }
 }
 
@@ -71,5 +79,6 @@ export const DB_TABLES = [
   "customFields",
   "activities",
   "attachments",
+  "docTypes",
   "preferences",
 ] as const;

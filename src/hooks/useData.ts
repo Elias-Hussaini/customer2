@@ -4,8 +4,10 @@ import { DEFAULT_PREFS, updatePrefs } from "../db/prefs";
 import type {
   Activity,
   AppPreferences,
+  Attachment,
   CustomFieldDef,
   Customer,
+  DocType,
   ListFolder,
   Payment,
   Representative,
@@ -103,6 +105,22 @@ export function useVisaTypes(activeOnly = true): VisaType[] | undefined {
 
 export function useCustomFields(): CustomFieldDef[] | undefined {
   return useLiveQuery(() => db.customFields.toArray(), []);
+}
+
+/** Active document slots (مدارک و تصاویر) in display order. */
+export function useDocTypes(): DocType[] | undefined {
+  return useLiveQuery(
+    async () =>
+      (await db.docTypes.toArray())
+        .filter((d) => !d.archivedAt)
+        .sort((a, b) => a.order - b.order),
+    [],
+  );
+}
+
+/** All payment receipt photos, keyed lookup at the call site. */
+export function useReceipts(): Attachment[] | undefined {
+  return useLiveQuery(() => db.attachments.where("paymentId").above("").toArray(), []);
 }
 
 export function useActivities(limit = 20, entityId?: string): Activity[] | undefined {

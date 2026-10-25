@@ -22,6 +22,7 @@ export async function buildBackup(): Promise<BackupFile> {
     tags,
     visaTypes,
     customFields,
+    docTypes,
     activities,
     preferences,
   ] = await Promise.all([
@@ -33,6 +34,7 @@ export async function buildBackup(): Promise<BackupFile> {
     db.tags.toArray(),
     db.visaTypes.toArray(),
     db.customFields.toArray(),
+    db.docTypes.toArray(),
     db.activities.orderBy("ts").reverse().limit(800).toArray(),
     db.preferences.get("app"),
   ]);
@@ -51,6 +53,7 @@ export async function buildBackup(): Promise<BackupFile> {
       tags: tags.length,
       visaTypes: visaTypes.length,
       customFields: customFields.length,
+      docTypes: docTypes.length,
       activities: activities.length,
     },
     data: {
@@ -62,6 +65,7 @@ export async function buildBackup(): Promise<BackupFile> {
       tags,
       visaTypes,
       customFields,
+      docTypes,
       activities,
       preferences: preferences ?? null,
     },
@@ -247,6 +251,7 @@ export async function applyRestore(backup: BackupFile, mode: RestoreMode): Promi
       db.tags,
       db.visaTypes,
       db.customFields,
+      db.docTypes,
       db.activities,
       db.preferences,
     ],
@@ -261,6 +266,7 @@ export async function applyRestore(backup: BackupFile, mode: RestoreMode): Promi
           db.tags.clear(),
           db.visaTypes.clear(),
           db.customFields.clear(),
+          db.docTypes.clear(),
           db.activities.clear(),
           db.preferences.clear(),
         ]);
@@ -293,6 +299,13 @@ export async function applyRestore(backup: BackupFile, mode: RestoreMode): Promi
       await upsert(db.tags, d.tags);
       await upsert(db.visaTypes, d.visaTypes);
       await upsert(db.customFields, d.customFields);
+      if (d.docTypes?.length) {
+        for (const dt of d.docTypes) {
+          const exists = (await db.docTypes.get(dt.id)) != null;
+          exists ? updated++ : inserted++;
+          await db.docTypes.put(dt);
+        }
+      }
 
       if (d.activities?.length) {
         await db.activities.bulkPut(d.activities);
@@ -319,10 +332,26 @@ export async function buildAttachmentsZip(
   const nameById = new Map(customers.map((c) => [c.id, customerFullName(c)]));
 
   const zip = new JSZip();
+  const payments = await db.payments.toArray();
+  const repNames = new Map((await db.representatives.toArray()).map((r) => [r.id, r.name]));
   for (const att of attachments) {
-    const folder = zip.folder(
-      `${(nameById.get(att.customerId) ?? "مشتری-نامشخص").replace(/[\\/:*?"<>|]/g, "-")} (${att.customerId.slice(0, 8)})`,
-    );
+    let folder;
+    if (att.paymentId) {
+      // Receipt photo → its own folder next to the customer documents.
+      const pay = payments.find((p) => p.id === att.paymentId);
+      folder = zip.folder(
+        `رسید-پرداخت‌ها/${(repNames.get(pay?.representativeId ?? "") ?? "نماینده-نامشخص").replace(
+          /[\\/:*?"<>|]/g,
+          "-",
+        )}`,
+      );
+    } else {
+      folder = zip.folder(
+        `${(nameById.get(att.customerId ?? "") ?? "مشتری-نامشخص").replace(/[\\/:*?"<>|]/g, "-")} (${
+          att.customerId ? att.customerId.slice(0, 8) : "—"
+        })`,
+      );
+    }
     const ext = att.name.includes(".") ? "" : guessExt(att.mime);
     folder?.file(`${att.kind}-${att.name}${ext}`, att.blob);
   }

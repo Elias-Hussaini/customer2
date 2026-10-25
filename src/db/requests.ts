@@ -2,7 +2,7 @@ import { db } from "./schema";
 import { logActivity } from "./activities";
 import type { VisaRequest } from "../types";
 import { uid } from "../utils/id";
-import { todayIso } from "../utils/jalali";
+import { todayIso, formatJalali } from "../utils/jalali";
 import { normalizeAmount } from "../utils/num";
 
 export interface RequestInput {
@@ -48,7 +48,7 @@ export async function createRequest(input: RequestInput): Promise<VisaRequest> {
     entity: "request",
     entityId: request.id,
     title: `درخواست ویزا ثبت شد${request.visaType ? ` — ${request.visaType}` : ""}`,
-    detail: `تاریخ ثبت: ${request.registrationDate}`,
+    detail: `تاریخ ثبت: ${formatJalali(request.registrationDate)}`,
   });
   return request;
 }
@@ -96,7 +96,7 @@ export async function setRequestIssued(
     entity: "request",
     entityId: id,
     title: issued ? "وضعیت به «صادر شده» تغییر کرد" : "وضعیت صدور لغو شد",
-    detail: issued ? `تاریخ صدور: ${issuedAt || todayIso()}` : "وضعیت به «در حال کار» برگشت",
+    detail: issued ? `تاریخ صدور: ${formatJalali(issuedAt || todayIso())}` : "وضعیت به «در حال کار» برگشت",
   });
 }
 

@@ -8,6 +8,7 @@ import {
   FilePenLine,
   FilePlus2,
   Phone,
+  Receipt,
   Users,
 } from "lucide-react";
 import { PageHeader, StatCard } from "../components/ui/StatCard";
@@ -19,6 +20,7 @@ import { ActivityFeed } from "../components/ui/ActivityFeed";
 import { RequestsTable } from "../components/domain/RequestsTable";
 import { RepresentativeFormModal } from "../components/domain/RepresentativeFormModal";
 import { PaymentFormModal } from "../components/domain/PaymentFormModal";
+import { AttachmentPreview } from "../components/ui/AttachmentPreview";
 import { ExportDialog } from "../components/exports/ExportDialog";
 import { uiActions } from "../components/layout/uiStore";
 import {
@@ -26,6 +28,7 @@ import {
   useCustomers,
   useLists,
   usePayments,
+  useReceipts,
   useRepresentativeOrDefault,
   useRequests,
   useTags,
@@ -34,7 +37,7 @@ import { computeBalances, computeRepStats } from "../services/stats";
 import { formatMoney } from "../utils/num";
 import { formatJalali, toPersianDigits } from "../utils/jalali";
 import { customerFullName } from "../db/customers";
-import type { Payment } from "../types";
+import type { Attachment, Payment } from "../types";
 
 export function RepresentativeDetailPage() {
   const { id } = useParams();
@@ -46,11 +49,18 @@ export function RepresentativeDetailPage() {
   const customers = useCustomers();
   const lists = useLists();
   const tags = useTags();
+  const receipts = useReceipts();
   const activities = useActivities(20, id);
 
   const [editOpen, setEditOpen] = useState(false);
   const [payOpen, setPayOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [previewReceipt, setPreviewReceipt] = useState<Attachment | null>(null);
+
+  const receiptByPayment = useMemo(
+    () => new Map((receipts ?? []).map((r) => [r.paymentId ?? "", r] as const)),
+    [receipts],
+  );
 
   const urgentTagIds = useMemo(
     () => new Set((tags ?? []).filter((t) => t.isUrgent).map((t) => t.id)),
@@ -109,6 +119,30 @@ export function RepresentativeDetailPage() {
       },
     },
     { key: "description", header: "توضیحات", render: (p) => p.description ?? "—" },
+    {
+      key: "receipt",
+      header: "رسید",
+      align: "center",
+      sortValue: (p) => (receiptByPayment.has(p.id) ? 1 : 0),
+      render: (p) => {
+        const r = receiptByPayment.get(p.id);
+        return r ? (
+          <button
+            className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#10b981]/12 text-[#0b9e6e] transition-colors hover:bg-[#10b981]/20 dark:text-[#3ddc9a]"
+            title="مشاهده رسید"
+            aria-label="مشاهده رسید"
+            onClick={(e) => {
+              e.stopPropagation();
+              setPreviewReceipt(r);
+            }}
+          >
+            <Receipt size={15} />
+          </button>
+        ) : (
+          <span className="text-[11px] text-ink-400">—</span>
+        );
+      },
+    },
   ];
 
   return (
@@ -282,6 +316,7 @@ export function RepresentativeDetailPage() {
 
       <RepresentativeFormModal open={editOpen} onClose={() => setEditOpen(false)} representative={rep} />
       <PaymentFormModal open={payOpen} onClose={() => setPayOpen(false)} defaultRepresentativeId={rep.id} />
+      <AttachmentPreview attachment={previewReceipt} onClose={() => setPreviewReceipt(null)} />
       <ExportDialog
         open={exportOpen}
         onClose={() => setExportOpen(false)}

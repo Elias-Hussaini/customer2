@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
+import { Floating, isFloatingPanel } from "./Floating";
 
 export interface MenuItem {
   icon?: LucideIcon;
@@ -13,18 +14,23 @@ interface MenuProps {
   items: MenuItem[];
   trigger: ReactNode;
   align?: "start" | "end";
-  /** Open the menu upward (for elements near the bottom edge). */
+  /** Preferred side (auto-flips when there is no room). */
   up?: boolean;
 }
 
+/**
+ * Context menu rendered in a portal above every layer — never clipped by
+ * glass cards or covered by following rows/cards.
+ */
 export function Menu({ items, trigger, align = "end", up = true }: MenuProps) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const ref = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node | null;
+      if (ref.current && !ref.current.contains(t) && !isFloatingPanel(t)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
@@ -38,8 +44,10 @@ export function Menu({ items, trigger, align = "end", up = true }: MenuProps) {
   }, [open]);
 
   return (
-    <div className="relative inline-block" ref={ref}>
+    <>
       <span
+        ref={ref}
+        className="relative inline-block"
         onClick={(e) => {
           e.stopPropagation();
           setOpen((o) => !o);
@@ -47,13 +55,15 @@ export function Menu({ items, trigger, align = "end", up = true }: MenuProps) {
       >
         {trigger}
       </span>
-      {open && (
-        <div
-          className={`glass-strong anim-pop absolute z-[60] min-w-[190px] overflow-hidden rounded-2xl p-1.5 ${
-            up ? "bottom-full mb-2" : "top-full mt-2"
-          } ${align === "end" ? "left-0" : "right-0"}`}
-          role="menu"
-        >
+      <Floating
+        open={open}
+        anchorRef={ref}
+        placement={up ? "top" : "bottom"}
+        align={align === "end" ? "left" : "right"}
+        className="min-w-[190px] overflow-hidden rounded-2xl p-1.5"
+        onClose={() => setOpen(false)}
+      >
+        <div role="menu">
           {items.map((item, i) => (
             <button
               key={i}
@@ -74,7 +84,7 @@ export function Menu({ items, trigger, align = "end", up = true }: MenuProps) {
             </button>
           ))}
         </div>
-      )}
-    </div>
+      </Floating>
+    </>
   );
 }

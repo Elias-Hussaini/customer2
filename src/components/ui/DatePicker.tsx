@@ -19,6 +19,7 @@ import {
   toPersianDigits,
 } from "../../utils/jalali";
 import type { CalendarMode } from "../../types";
+import { Floating, isFloatingPanel } from "./Floating";
 
 interface DatePickerProps {
   value: string | null | undefined;
@@ -103,7 +104,8 @@ export function DatePicker({
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node | null;
+      if (wrapRef.current && !wrapRef.current.contains(t) && !isFloatingPanel(t)) setOpen(false);
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
@@ -229,10 +231,14 @@ export function DatePicker({
       </div>
 
       {open && (
-        <div
-          className={`glass-strong anim-pop absolute top-full right-0 z-[65] mt-2 w-[286px] rounded-3xl p-3.5 ${
-            disabled ? "hidden" : ""
-          }`}
+        <Floating
+          open={open && !disabled}
+          anchorRef={wrapRef}
+          width={286}
+          placement="bottom"
+          align="right"
+          className="rounded-3xl p-3.5"
+          onClose={() => setOpen(false)}
         >
           {/* header */}
           <div className="mb-2 flex items-center justify-between">
@@ -319,7 +325,7 @@ export function DatePicker({
               </button>
             )}
           </div>
-        </div>
+        </Floating>
       )}
     </div>
   );

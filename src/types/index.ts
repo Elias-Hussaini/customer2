@@ -169,17 +169,34 @@ export interface Activity {
   detail?: string;
 }
 
-export type AttachmentKind = "passport" | "nidFront" | "nidBack" | "other";
+/** Slot ids are free-form strings: built-in ones, custom doc-type ids, "receipt", "other". */
+export type AttachmentKind = string;
 
 export interface Attachment {
   id: string;
-  customerId: string;
+  /** Owning customer — null for payment receipt photos. */
+  customerId: string | null;
+  /** Set when this is the receipt photo of a payment. */
+  paymentId?: string | null;
+  /** DocType id ("passport", "nidFront", … custom ids) or "receipt" / "other". */
   kind: AttachmentKind;
   name: string;
   mime: string;
   size: number;
   blob: Blob;
   createdAt: number;
+}
+
+/** A user-definable document slot shown on the customer page (مدارک و تصاویر). */
+export interface DocType {
+  id: string;
+  label: string;
+  /** Short one-line description under the label. */
+  hint?: string;
+  order: number;
+  createdAt: number;
+  updatedAt: number;
+  archivedAt?: number | null;
 }
 
 export interface AppPreferences {
@@ -191,6 +208,8 @@ export interface AppPreferences {
   rememberLastSelections: boolean;
   lastRepresentativeId?: string | null;
   lastListId?: string | null;
+  /** Internal: default document slots have been seeded once. */
+  docTypesSeeded?: boolean;
   updatedAt: number;
 }
 
@@ -211,6 +230,8 @@ export interface BackupFile {
     tags: Tag[];
     visaTypes: VisaType[];
     customFields: CustomFieldDef[];
+    /** Present in newer backups. */
+    docTypes?: DocType[];
     activities: Activity[];
     preferences: AppPreferences | null;
   };
