@@ -53,6 +53,7 @@ export function ExportDialog({
   const [busy, setBusy] = useState(false);
   const docRef = useRef<HTMLDivElement>(null);
   const [pendingDoc, setPendingDoc] = useState(false);
+  const readyCb = useRef<(() => void) | null>(null);
 
   const activeColumns = columns.filter((c) => selected.includes(c.key));
 
@@ -75,9 +76,18 @@ export function ExportDialog({
         await exportXlsx(name, title, activeColumns, dataRows);
         toast.success("خروجی اکسل دانلود شد");
       } else {
-        // PDF / PNG: render the print document off-screen, then rasterize.
+        // PDF / PNG: render the print document off-screen, wait until its
+        // auto-width layout is measured (fonts loaded), then rasterize.
         setPendingDoc(true);
-        await new Promise((r) => setTimeout(r, 80));
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 2500); // hard fallback
+          readyCb.current = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+        });
+        // One frame so React commits the measured layout to the DOM.
+        await new Promise((r) => requestAnimationFrame(() => r(null)));
         const el = docRef.current;
         if (!el) throw new Error("export doc not ready");
         if (format === "pdf") {
@@ -201,6 +211,7 @@ export function ExportDialog({
               columns={activeColumns}
               rows={rows}
               summary={summary}
+              onReady={() => readyCb.current?.()}
             />
           </div>,
           document.body,

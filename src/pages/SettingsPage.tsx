@@ -6,6 +6,7 @@ import {
   Coins,
   DatabaseBackup,
   FileImage,
+  Keyboard,
   Layers,
   Monitor,
   Moon,
@@ -20,6 +21,7 @@ import {
   Plane as VisaIcon,
   Wand2,
 } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 import { PageHeader } from "../components/ui/StatCard";
 import { SectionCard, RadioSelect } from "../components/ui/inputs";
 import { Modal } from "../components/ui/Modal";
@@ -60,6 +62,7 @@ import { slugify } from "../utils/normalize";
 
 type SettingsSection =
   | "appearance"
+  | "shortcuts"
   | "fields"
   | "tags"
   | "visaTypes"
@@ -72,6 +75,7 @@ type SettingsSection =
 
 const SECTIONS: { key: SettingsSection; label: string; icon: typeof Palette }[] = [
   { key: "appearance", label: "ظاهر", icon: Palette },
+  { key: "shortcuts", label: "کلیدهای میان‌بر", icon: Keyboard },
   { key: "fields", label: "فیلدهای سفارشی", icon: Layers },
   { key: "tags", label: "تگ‌ها", icon: TagIcon },
   { key: "visaTypes", label: "انواع ویزا", icon: VisaIcon },
@@ -84,7 +88,16 @@ const SECTIONS: { key: SettingsSection; label: string; icon: typeof Palette }[] 
 ];
 
 export function SettingsPage() {
-  const [section, setSection] = useState<SettingsSection>("appearance");
+  const [searchParams] = useSearchParams();
+  const tabParam = searchParams.get("tab") as SettingsSection | null;
+  const [section, setSection] = useState<SettingsSection>(
+    tabParam && SECTIONS.some((s) => s.key === tabParam) ? tabParam : "appearance",
+  );
+
+  // Deep links like /settings?tab=shortcuts (opened by the "?" shortcut).
+  useEffect(() => {
+    if (tabParam && SECTIONS.some((s) => s.key === tabParam)) setSection(tabParam);
+  }, [tabParam]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -119,6 +132,7 @@ export function SettingsPage() {
         </nav>
         <div className="flex flex-col gap-4">
           {section === "appearance" && <AppearanceSection />}
+          {section === "shortcuts" && <ShortcutsSection />}
           {section === "fields" && <CustomFieldsSection />}
           {section === "tags" && <TagsSection />}
           {section === "visaTypes" && <VisaTypesSection />}
@@ -178,6 +192,67 @@ function AppearanceSection() {
         انتخاب شما در همین مرورگر ذخیره می‌شود.
       </p>
     </SectionCard>
+  );
+}
+
+/* ------------------------------ Shortcuts ------------------------------- */
+
+function ShortcutRow({ keys, label }: { keys: string[]; label: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-2xl bg-brand-500/6 px-4 py-3">
+      <span className="text-[12.5px] font-semibold">{label}</span>
+      <span className="flex shrink-0 items-center gap-1" dir="ltr">
+        {keys.map((k, i) => (
+          <span key={i} className="flex items-center gap-1">
+            {i > 0 && <span className="text-[10px] font-bold text-ink-400">+</span>}
+            <kbd className="kbd">{k}</kbd>
+          </span>
+        ))}
+      </span>
+    </div>
+  );
+}
+
+function ShortcutsSection() {
+  return (
+    <>
+      <SectionCard title="کلیدهای میان‌بر" icon={<Keyboard size={15} className="text-brand-500" />}>
+        <div className="flex flex-col gap-2">
+          <p className="mb-1 text-[12px] leading-6 text-ink-500 dark:text-ink-400">
+            برای سرعت بیشتر، همه‌جا می‌توانید با کیبورد کار کنید — ثبت و ذخیره با یک کلید، باز
+            کردن فرم‌ها با دو بار فشردن یک حرف. این راهنما را با کلید <kbd className="kbd">?</kbd> هم
+            می‌توانید باز کنید.
+          </p>
+          <ShortcutRow keys={["Enter"]} label="ذخیره / تأیید فرم باز" />
+          <ShortcutRow keys={["Ctrl", "S"]} label="ذخیره فرم فعال (همین صفحه)" />
+          <ShortcutRow keys={["Shift", "Enter"]} label="خط جدید در متن چندخطی" />
+          <ShortcutRow keys={["Ctrl", "Enter"]} label="ذخیره از داخل متن چندخطی" />
+          <ShortcutRow keys={["Esc"]} label="بستن پنجره / منوی باز" />
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="میان‌برهای دوبل (سریع)"
+        icon={<Wand2 size={15} className="text-brand-500" />}
+      >
+        <div className="flex flex-col gap-2">
+          <p className="mb-1 text-[12px] leading-6 text-ink-500 dark:text-ink-400">
+            هر حرف را دو بار پشت‌سرهم (با فاصله کمتر از یک ثانیه) بزنید. وقتی داخل فیلد تایپ
+            هستید یا پنجره‌ای باز است، این میان‌برها اجرا نمی‌شوند تا مزاحم تایپ شما نشوند.
+          </p>
+          <ShortcutRow keys={["F", "F"]} label="فرم درخواست ویزای جدید" />
+          <ShortcutRow keys={["C", "C"]} label="مشتری جدید" />
+          <ShortcutRow keys={["P", "P"]} label="ثبت پرداخت جدید" />
+          <ShortcutRow keys={["S", "S"]} label="پریدن به جستجوی سراسری" />
+          <ShortcutRow keys={["R", "R"]} label="گزارش‌ها" />
+          <ShortcutRow keys={["D", "D"]} label="داشبورد" />
+          <p className="mt-1 text-[11px] leading-5 text-ink-400">
+            میان‌برهای دوبل بر اساس جای فیزیکی کلیدها کار می‌کنند؛ یعنی حتی وقتی کیبورد فارسی
+            است، همان کلیدِ F (که حرف «ب» می‌نویسد) را دو بار بزنید و فرم درخواست باز می‌شود.
+          </p>
+        </div>
+      </SectionCard>
+    </>
   );
 }
 
@@ -1152,6 +1227,25 @@ function PwaSection() {
             <Smartphone size={14} /> نصب برنامه
           </button>
         )}
+        <div className="flex flex-col gap-2 rounded-2xl border border-ink-900/8 p-4 dark:border-white/10">
+          <p className="text-[12px] font-bold">این برنامه را روی گوشی یا کامپیوتر نصب کنید</p>
+          <p className="text-[11.5px] leading-6 text-ink-500 dark:text-ink-400">
+            <b>کروم / اج دسکتاپ:</b> روی آیکون نصب (نماد صفحه‌نمایش با علامت +) در انتهای نوار
+            آدرس کلیک کنید، یا از منوی سه‌نقطه گزینه «Install / نصب» را بزنید.
+          </p>
+          <p className="text-[11.5px] leading-6 text-ink-500 dark:text-ink-400">
+            <b>اندروید (کروم):</b> منوی سه‌نقطه ⋮ ← «Add to Home screen / افزودن به صفحه اصلی»
+            یا «نصب برنامه». آیکون برنامه مثل بقیه اپ‌ها روی صفحه اصلی گوشی می‌نشیند.
+          </p>
+          <p className="text-[11.5px] leading-6 text-ink-500 dark:text-ink-400">
+            <b>آیفون / آیپد (سافاری):</b> دکمه اشتراک‌گذاری (Share) ← «Add to Home Screen /
+            افزودن به صفحه اصلی». در iOS نصب فقط از طریق سافاری انجام می‌شود.
+          </p>
+          <p className="text-[11px] leading-5 text-ink-400">
+            نصب فقط روی آدرس امن HTTPS امکان‌پذیر است — آدرس GitHub Pages برنامه همین حالا
+            HTTPS است، پس آیکون نصب بعد از اولین بازدید ظاهر می‌شود.
+          </p>
+        </div>
         <p className="text-[11px] leading-5 text-ink-400">
           بعد از اولین بازدید، فایل‌های برنامه کش می‌شوند و برنامه بدون اینترنت باز می‌شود.
           داده‌ها فقط روی همین دستگاه و همین مرورگر هستند و بین دستگاه‌ها هم‌گام‌سازی

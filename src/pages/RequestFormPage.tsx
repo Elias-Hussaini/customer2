@@ -269,7 +269,7 @@ export function RequestFormPage() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4" data-page-form>
       <PageHeader
         title={isEdit ? "ویرایش درخواست ویزا" : "درخواست ویزا جدید"}
         subtitle="مشتری، نماینده و لیست الزامی هستند — بقیه را بعداً تکمیل کنید"

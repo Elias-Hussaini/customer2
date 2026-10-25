@@ -29,10 +29,18 @@ export async function exportElementAsPng(el: HTMLElement, filename: string): Pro
 export async function exportElementAsPdf(el: HTMLElement, filename: string): Promise<void> {
   const [{ jsPDF }] = await Promise.all([import("jspdf")]);
   const canvas = await captureElement(el);
-  const pdf = new jsPDF({ unit: "pt", format: "a4", orientation: "portrait", compress: true });
+  // Wide reports (auto-width export doc) flip the page to landscape so the
+  // single-line table stays readable instead of being shrunk too hard.
+  const landscape = canvas.width / 2 > 860;
+  const pdf = new jsPDF({
+    unit: "pt",
+    format: "a4",
+    orientation: landscape ? "landscape" : "portrait",
+    compress: true,
+  });
   const pageW = pdf.internal.pageSize.getWidth();
   const pageH = pdf.internal.pageSize.getHeight();
-  const margin = 28;
+  const margin = landscape ? 22 : 28;
   const imgW = pageW - margin * 2;
   const scale = imgW / canvas.width;
   const pageCanvasH = Math.floor((pageH - margin * 2) / scale);

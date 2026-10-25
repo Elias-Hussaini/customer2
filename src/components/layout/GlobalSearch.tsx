@@ -82,6 +82,7 @@ export function GlobalSearch({
         <input
           className="field !py-2 pr-9 text-[13px]"
           placeholder="جستجوی سراسری… (نام، پاسپورت، شماره تماس)"
+          data-global-search
           value={query}
           onFocus={() => setOpen(true)}
           onChange={(e) => {

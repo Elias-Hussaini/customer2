@@ -5,6 +5,7 @@ import { TopBar } from "./TopBar";
 import { FloatingDock } from "./FloatingDock";
 import { MoreSheet } from "./MoreSheet";
 import { QuickModals } from "../domain/QuickModals";
+import { GlobalHotkeys } from "./GlobalHotkeys";
 import { useRegisterPwaUpdate } from "../../pwa/usePwaUpdate";
 
 /** Application shell: background, top bar, routed content and floating dock. */
@@ -29,6 +30,7 @@ export function AppShell() {
       <FloatingDock />
       <MoreSheet />
       <QuickModals />
+      <GlobalHotkeys />
     </div>
   );
 }
