@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { Archive, FileDown, FilePenLine, FilePlus2, Trash2, Wand2 } from "lucide-react";
+import { Archive, FileDown, FilePenLine, FilePlus2, Trash2 } from "lucide-react";
 import { PageHeader } from "../components/ui/StatCard";
 import { SectionCard } from "../components/ui/inputs";
 import { Button } from "../components/ui/Button";
@@ -119,13 +119,6 @@ export function CustomerDetailPage() {
           <>
             <button className="btn btn-glass btn-sm" onClick={() => setExportOpen(true)}>
               <FileDown size={14} /> خروجی
-            </button>
-            <button
-              className="btn btn-glass btn-sm"
-              onClick={() => navigate(`/docfill/${customer.id}`)}
-              title="پر کردن فرم ویزای PDF با دادهٔ این مشتری"
-            >
-              <Wand2 size={14} /> پر کردن فرم
             </button>
             <button
               className="btn btn-glass btn-sm"

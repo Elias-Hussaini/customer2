@@ -209,7 +209,6 @@ export interface AppPreferences {
   lastRepresentativeId?: string | null;
   lastListId?: string | null;
   /** Last mode used in the customer form: smart extraction vs manual. */
-  lastCustomerFormMode?: "smart" | "manual";
   /** Internal: default document slots have been seeded once. */
   docTypesSeeded?: boolean;
   updatedAt: number;

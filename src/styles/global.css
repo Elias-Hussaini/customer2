@@ -597,6 +597,21 @@ select.field option {
   animation: slide-up 0.24s cubic-bezier(0.25, 1, 0.4, 1) both;
 }
 
+/* AI quick-fill: one soft violet sweep over the identity grid when the
+ * extraction lands its values in the form. */
+@keyframes ai-flash-bg {
+  0% {
+    background-color: rgba(99, 102, 241, 0.18);
+  }
+  100% {
+    background-color: rgba(99, 102, 241, 0);
+  }
+}
+.ai-flash {
+  border-radius: 1rem;
+  animation: ai-flash-bg 1.1s ease-out 0.05s both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

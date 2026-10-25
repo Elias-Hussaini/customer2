@@ -4,9 +4,7 @@ import {
   ArrowUp,
   Coins,
   DatabaseBackup,
-  FileDown,
   FileImage,
-  HardDrive,
   Keyboard,
   Layers,
   Monitor,
@@ -14,18 +12,15 @@ import {
   Palette,
   Pencil,
   Plus,
-  ScanSearch,
   Settings2,
-  ShieldCheck,
   Smartphone,
   Sun,
   Tag as TagIcon,
   Trash2,
   Plane as VisaIcon,
   Wand2,
-  WifiOff,
 } from "lucide-react";
-import { useNavigate, useSearchParams, Link } from "react-router-dom";
+import { useSearchParams, Link } from "react-router-dom";
 import { PageHeader } from "../components/ui/StatCard";
 import { SectionCard, RadioSelect } from "../components/ui/inputs";
 import { Modal } from "../components/ui/Modal";
@@ -73,7 +68,6 @@ type SettingsSection =
   | "docTypes"
   | "currency"
   | "defaults"
-  | "docex"
   | "backup"
   | "data"
   | "pwa";
@@ -87,7 +81,6 @@ const SECTIONS: { key: SettingsSection; label: string; icon: typeof Palette }[] 
   { key: "docTypes", label: "مدارک و تصاویر", icon: FileImage },
   { key: "currency", label: "واحد پول", icon: Coins },
   { key: "defaults", label: "پیش‌فرض‌های فرم", icon: Wand2 },
-  { key: "docex", label: "دستیار مدارک", icon: ScanSearch },
   { key: "backup", label: "پشتیبان‌گیری", icon: DatabaseBackup },
   { key: "data", label: "مدیریت داده", icon: Settings2 },
   { key: "pwa", label: "درباره PWA", icon: Smartphone },
@@ -145,7 +138,6 @@ export function SettingsPage() {
           {section === "docTypes" && <DocTypesSection />}
           {section === "currency" && <CurrencySection />}
           {section === "defaults" && <DefaultsSection />}
-          {section === "docex" && <DocExSection />}
           {section === "backup" && <BackupSection />}
           {section === "data" && <DataSection />}
           {section === "pwa" && <PwaSection />}
@@ -1164,57 +1156,6 @@ function DataSection() {
         <p className="text-[11px] text-ink-400">
           تعداد مشتریان فعلی: {toPersianDigits(customers?.length ?? 0)}
         </p>
-      </div>
-    </SectionCard>
-  );
-}
-
-/* --------------------------------- DocEx --------------------------------- */
-
-function DocExSection() {
-  const navigate = useNavigate();
-  const rows: Array<[string, string]> = [
-    ["پاسپورت (MRZ — TD3)", "نام، نام خانوادگی، شماره، تاریخ تولد/انقضا، جنسیت، ملیت — با اعتبارسنجی رقم کنترل"],
-    ["کارت شناسایی الکترونیکی (MRZ — TD1)", "همان فیلدها + شماره ملی از داده اختیاری"],
-    ["PDF با لایه متن (مثل نامهٔ تذکره الکترونیکی)", "خواندن مستقیم متن برچسب‌ها — بدون OCR"],
-    ["اسکن / عکس پاسپورت", "OCR محلی انگلیسی + خواندن MRZ"],
-    ["تذکره کاغذی (نستعلیق/دست‌نویس)", "تلاش با OCR فارسی — معمولاً نیاز به بازبینی دستی دارد"],
-    ["فرم درخواست ویزا (PDF تعاملی)", "شناسایی فیلدها و نگاشت به دادهٔ مشتری در «پر کردن فرم»"],
-  ];
-  return (
-    <SectionCard title="دستیار خواندن مدارک">
-      <p className="mb-3 text-[11.5px] leading-5 text-ink-500 dark:text-ink-400">
-        موتور استخراج کاملاً آفلاین و بدون هوش مصنوعی ابری: MRZ طبق استاندارد ICAO 9303، خواندن متن PDF و OCR محلی (Tesseract).
-      </p>
-      <div className="flex flex-col gap-2.5">
-        {rows.map(([t, d]) => (
-          <div key={t} className="rounded-2xl border border-ink-900/8 px-3.5 py-2.5 dark:border-white/10">
-            <p className="text-[12.5px] font-bold">{t}</p>
-            <p className="mt-0.5 text-[11px] leading-5 text-ink-500 dark:text-ink-400">{d}</p>
-          </div>
-        ))}
-      </div>
-      <div className="mt-3 flex flex-col gap-2 rounded-2xl bg-emerald-500/8 px-3.5 py-3 text-[11px] leading-5 text-emerald-700 dark:text-emerald-300">
-        <p className="flex items-start gap-1.5">
-          <ShieldCheck size={14} className="mt-0.5 shrink-0" />
-          تمام پردازش داخل مرورگر شما انجام می‌شود؛ هیچ تصویر یا متنی از مدارک به هیچ سروری ارسال نمی‌شود.
-        </p>
-        <p className="flex items-start gap-1.5">
-          <HardDrive size={14} className="mt-0.5 shrink-0" />
-          فایل آپلودشده فقط اگر خودتان تیک «ذخیره در مدارک مشتری» را بزنید نگه داشته می‌شود — وگرنه بعد از پردازش دور ریخته می‌شود.
-        </p>
-        <p className="flex items-start gap-1.5">
-          <WifiOff size={14} className="mt-0.5 shrink-0" />
-          برای OCR در اولین استفاده، مدل زبانی (حدود ۲ مگابایت) یک بار از اینترنت دانلود و کش می‌شود؛ بعدش آفلاین کار می‌کند. خواندن PDF متنی و MRZ نیازی به اینترنت ندارد.
-        </p>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <button className="btn btn-primary btn-sm" onClick={() => navigate("/docfill?tab=manage")}>
-          <Wand2 size={14} /> مدیریت قالب‌های فرم ویزا
-        </button>
-        <button className="btn btn-glass btn-sm" onClick={() => navigate("/docfill")}>
-          <FileDown size={14} /> پر کردن فرم برای یک مشتری
-        </button>
       </div>
     </SectionCard>
   );

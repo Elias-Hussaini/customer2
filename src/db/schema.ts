@@ -68,6 +68,11 @@ export class VisaDB extends Dexie {
     this.version(4).stores({
       pdfTemplates: "id, updatedAt",
     });
+    // v5: the template manager UI was removed — the fill algorithm now lives
+    // entirely in code (src/lib/docex/fill.ts). Drop the stored templates.
+    this.version(5).stores({
+      pdfTemplates: null,
+    });
   }
 }
 
@@ -86,5 +91,4 @@ export const DB_TABLES = [
   "attachments",
   "docTypes",
   "preferences",
-  "pdfTemplates",
 ] as const;
