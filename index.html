@@ -2,10 +2,37 @@
 <html lang="fa" dir="rtl">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#635bff" />
-    <meta name="description" content="سامانه مدیریت مشتریان و درخواست‌های ویزا" />
-    <title>Customer | مدیریت ویزا</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#f7f8fc" />
+    <meta name="description" content="سامانه محلی مدیریت مشتریان، نمایندگان و درخواست‌های ویزا" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="۲کاستومر" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="64x64" href="/icons/favicon-64.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link
+      rel="preload"
+      href="/src/assets/fonts/Vazirmatn.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <title>۲کاستومر | مدیریت ویزا</title>
+    <script>
+      /* Apply theme before first paint to avoid a flash of the wrong theme. */
+      (function () {
+        try {
+          var t = localStorage.getItem("customer2-theme"); /* "light" | "dark" | null */
+          if (t !== "light" && t !== "dark") {
+            t = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          }
+          if (t === "dark") document.documentElement.classList.add("dark");
+          var m = document.querySelector('meta[name="theme-color"]');
+          if (m) m.setAttribute("content", t === "dark" ? "#0d0f1a" : "#f7f8fc");
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

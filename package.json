@@ -9,27 +9,29 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "dexie": "latest",
+    "dexie-react-hooks": "^4.4.0",
+    "file-saver": "latest",
+    "html2canvas": "latest",
+    "jalaali-js": "latest",
+    "jspdf": "latest",
+    "jspdf-autotable": "latest",
+    "jszip": "^3.10.2",
+    "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
     "react-router-dom": "latest",
-    "dexie": "latest",
-    "lucide-react": "latest",
-    "jalaali-js": "latest",
-    "xlsx": "latest",
-    "jspdf": "latest",
-    "jspdf-autotable": "latest",
-    "html2canvas": "latest",
-    "file-saver": "latest"
+    "xlsx": "latest"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "latest",
     "@types/file-saver": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "@vitejs/plugin-react": "latest",
+    "tailwindcss": "latest",
     "typescript": "latest",
     "vite": "latest",
-    "tailwindcss": "latest",
-    "@tailwindcss/vite": "latest",
     "vite-plugin-pwa": "latest"
   }
 }
