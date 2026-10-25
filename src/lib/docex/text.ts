@@ -17,11 +17,19 @@ import { toLatinDigits } from "../../utils/jalali";
 /* Normalization                                                       */
 /* ------------------------------------------------------------------ */
 
-/** Arabic presentation forms (ﻻ …) → base letters; OCR often emits these. */
+/** Arabic presentation forms (ﻻ …) → base letters; OCR often emits these.
+ * Also folds Arabic-script variants onto their Persian equivalents (ي→ی،
+ * ك→ک، ى→ی، أ/إ/ٱ→ا، ة→ه) — tesseract (fas) frequently outputs the Arabic
+ * codepoints, which would otherwise never match Persian labels or get
+ * stored with the wrong spelling. */
 export function normalizeUnicodeLine(line: string): string {
   return line
     .normalize("NFKC")
     .replace(/[\u064B-\u065F\u0670\u0640]/g, "") // diacritics + tatweel
+    .replace(/\u064A|\u0649/g, "\u06CC") // Arabic yeh / alif maqsura → Persian ی
+    .replace(/\u0643/g, "\u06A9") // Arabic kaf → Persian ک
+    .replace(/[\u0623\u0625\u0671]/g, "\u0627") // أ/إ/ٱ → ا
+    .replace(/\u0629/g, "\u0647") // ة → ه
     .replace(/\u200C|\u200E|\u200F|\uFEFF/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -45,6 +53,33 @@ export function normLabel(s: string): string {
     .replace(/[^A-Z0-9\u0600-\u06FF \-./]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/* ------------------------------------------------------------------ */
+/* OCR-confusion folding for label search                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 1:1 character fold of the shapes OCR most often confuses on printed
+ * documents (I↔L↔1, O↔0↔Q↔D, S↔5, B↔8, Z↔2, G↔6). Applied to BOTH the
+ * line and the label when exact matching fails — “Date of lssue” then
+ * still finds “Date of issue”. Length-preserving, so a folded hit maps
+ * back to the exact index in the original string.
+ */
+const FOLD_MAP: Record<string, string> = {
+  O: "O", "0": "O", Q: "O", D: "O",
+  I: "I", L: "I", "1": "I", "|": "I", "!": "I",
+  S: "S", "5": "S",
+  B: "B", "8": "B",
+  Z: "Z", "2": "Z",
+  G: "G", "6": "G",
+};
+
+export function foldForLabel(s: string): string {
+  if (!s) return s;
+  let out = "";
+  for (const ch of s) out += FOLD_MAP[ch] ?? ch;
+  return out;
 }
 
 /* ------------------------------------------------------------------ */
@@ -265,7 +300,11 @@ function matchRule(
     for (const label of rule.labels) {
       const target = normLabel(label);
       if (!target) continue;
-      const idx = norm.indexOf(target);
+      let idx = norm.indexOf(target);
+      if (idx === -1) {
+        // OCR-confusion fallback: “DATE OF LSSUE” / “OATE OF ISSUE” …
+        idx = foldForLabel(norm).indexOf(foldForLabel(target));
+      }
       if (idx === -1) {
         // fuzzy: whole-line label with 1 typo (OCR noise)
         if (norm.length <= target.length + 3 && levenshtein(norm, target) <= (target.length > 6 ? 2 : 1)) {
@@ -534,7 +573,33 @@ export const VISA_FORM_PROFILE: DocumentProfile = {
   ],
 };
 
-export const PROFILES: DocumentProfile[] = [PASSPORT_PROFILE, TAZKIRA_PROFILE, VISA_FORM_PROFILE];
+/**
+ * Visa stamps / annotation pages — entry date (تاریخ ورود) lives here, not on
+ * the passport bio page. Runs on visa_form pages AND on “unknown” pages (a
+ * scanned stamp rarely matches any keyword). Deliberately tiny: only the
+ * entry date, so junk pages can never pollute passport fields.
+ */
+export const VISA_STAMP_PROFILE: DocumentProfile = {
+  id: "visa-stamp",
+  title: "مهر/برگه ویزا",
+  kinds: ["visa_form", "unknown"],
+  ocrLangs: ["eng", "fas"],
+  labelRules: [
+    {
+      field: "entryDate",
+      labels: [
+        "تاریخ ورود",
+        "تاريخ ورود", // Arabic yeh — normalized, kept for safety
+        "Date of entry",
+        "Entry date",
+        "Date of arrival",
+      ],
+      isDate: true,
+    },
+  ],
+};
+
+export const PROFILES: DocumentProfile[] = [PASSPORT_PROFILE, TAZKIRA_PROFILE, VISA_FORM_PROFILE, VISA_STAMP_PROFILE];
 
 /* ------------------------------------------------------------------ */
 /* Document kind detection from text                                   */
@@ -545,9 +610,12 @@ export function detectKind(text: string, hasMrz: boolean, mrzFormat: string | nu
   const t = normalizeUnicodeLine(text);
   const up = t.toUpperCase();
   if (hasMrz) return mrzFormat === "TD3" ? "passport" : "id_card";
+  // Visa forms mention “passport” in every field name — check the stronger
+  // signal first so a visa application is never classified as a passport page.
+  if (/VISA APPLICATION|APPLICATION FOR VISA|درخواست ویزا/.test(up + t)) return "visa_form";
+  if (/گذرنامه/.test(t)) return "passport";
   if (/\bPASSPORT\b/.test(up) || /پاسپورت|پاسپوټ/.test(t)) return "passport";
   if (/تذکره|تذکریه|شناسنامه|احوال شخص|TAZKIRA|TAZKERA/.test(up + t)) return "tazkira_paper";
-  if (/VISA APPLICATION|APPLICATION FOR VISA|درخواست ویزا/.test(up + t)) return "visa_form";
   if (/REPUBLIC OF AFGHANISTAN|اسلامی افغانستان|جمهوری اسلامی افغانستان/.test(up + t)) return "id_card";
   const words = t.split(/\s+/).filter((w) => w.length > 1).length;
   if (words <= 4) return "photo";

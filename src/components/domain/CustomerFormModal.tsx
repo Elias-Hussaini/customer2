@@ -17,10 +17,13 @@ import { CustomFieldsGroup } from "../ui/CustomFields";
 import {
   runExtraction,
   validateFile,
+  warmupOcr,
+  formatDateForTemplate,
   latinNameToFa,
   type PipelineProgress,
   type CanonicalField,
   type ExtractionResult,
+  type ExtractedValue,
 } from "../../lib/docex";
 import { createCustomer, findDuplicatePassport, updateCustomer, customerFullName } from "../../db/customers";
 import { createRequest } from "../../db/requests";
@@ -107,6 +110,19 @@ function AiMark({ state }: { state?: "ok" | "review" }) {
   );
 }
 
+/**
+ * Names: keep Persian letters (or Latin A-Z) and drop OCR noise — stray
+ * dots, pipes and digits never reach the customer record.
+ */
+function safePersonName(s: string): string {
+  if (!s) return "";
+  const hasFa = /[\u0600-\u06FF]/.test(s);
+  const cleaned = hasFa
+    ? s.replace(/[^\u0600-\u06FF\s\-'\u200C]/g, "")
+    : s.toUpperCase().replace(/[^A-Z\s\-'.]/g, "");
+  return cleaned.replace(/\s+/g, " ").trim();
+}
+
 export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
   const toast = useToast();
   const customFields = useCustomFields();
@@ -155,6 +171,9 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
 
   useEffect(() => {
     if (open) {
+      // Preload the local OCR engines in the background — the first document
+      // then fills in seconds instead of paying the model-load cost.
+      void warmupOcr();
       setDupWarning(null);
       setErrors({});
       setAi({ t: "idle" });
@@ -248,8 +267,8 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
         ? value
         : "";
 
-    const firstName = latinNameToFa(v("givenNames")) || v("givenNames");
-    const lastName = latinNameToFa(v("surname")) || v("surname");
+    const firstName = safePersonName(latinNameToFa(v("givenNames")) || v("givenNames"));
+    const lastName = safePersonName(latinNameToFa(v("surname")) || v("surname"));
     const passportNo = v("documentNumber");
     const birthDate = v("dateOfBirth");
     const issueDate = v("dateOfIssue");
@@ -289,6 +308,8 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
       clean(v("nationality")) && `ملیت: ${clean(v("nationality"))}`,
       v("sex") === "M" && "جنسیت: مرد",
       v("sex") === "F" && "جنسیت: زن",
+      v("entryDate") &&
+        `تاریخ ورود: ${toPersianDigits(formatDateForTemplate(v("entryDate"), "jalali"))}`,
     ]
       .filter(Boolean)
       .join(" — ");
@@ -309,6 +330,52 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
     if (passportNo) void checkDuplicate(passportNo);
   };
 
+  /**
+   * Live progressive fill — values land in the form the moment they are read
+   * (empty slots only, so anything the operator already typed is respected).
+   * This is what makes the fill feel instant on multi-page scans: the bio
+   * page fields appear while later pages are still being read.
+   */
+  const applyPartialFields = (fields: Partial<Record<CanonicalField, ExtractedValue>>) => {
+    const v = (k: CanonicalField) => (fields[k]?.value != null ? String(fields[k].value).trim() : "");
+    const first = safePersonName(latinNameToFa(v("givenNames")) || v("givenNames"));
+    const last = safePersonName(latinNameToFa(v("surname")) || v("surname"));
+    const pno = v("documentNumber").toUpperCase();
+    const dob = v("dateOfBirth");
+    const iss = v("dateOfIssue");
+    const exp = v("dateOfExpiry");
+    setForm((prev) => {
+      const next = { ...prev };
+      let touched = false;
+      if (first && !next.firstName) { next.firstName = first; touched = true; }
+      if (last && !next.lastName) { next.lastName = last; touched = true; }
+      if (pno && !next.passportNo) { next.passportNo = pno; touched = true; }
+      if (dob && !next.birthDate) { next.birthDate = dob; touched = true; }
+      if (iss && !next.passportIssueDate) { next.passportIssueDate = iss; touched = true; }
+      if (exp && !next.passportExpiryDate) { next.passportExpiryDate = exp; touched = true; }
+      return touched ? next : prev;
+    });
+    const markOf = (k: CanonicalField): "ok" | "review" | undefined => {
+      const ex = fields[k];
+      if (!ex || ex.value == null || !String(ex.value).trim()) return undefined;
+      return ex.status === "confirmed" ? "ok" : "review";
+    };
+    setAiMarks((m) => {
+      const next = { ...m };
+      const add = (k: AiField, s: "ok" | "review" | undefined) => {
+        if (s) next[k] = s;
+      };
+      add("firstName", markOf("givenNames"));
+      add("lastName", markOf("surname"));
+      add("passportNo", markOf("documentNumber"));
+      add("birthDate", markOf("dateOfBirth"));
+      add("passportIssueDate", markOf("dateOfIssue"));
+      add("passportExpiryDate", markOf("dateOfExpiry"));
+      return next;
+    });
+    if (pno) void checkDuplicate(pno);
+  };
+
   const runAi = async (file: File) => {
     const err = validateFile(file);
     if (err) {
@@ -322,6 +389,7 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
       const res = await runExtraction(file, {
         previews: false,
         onProgress: (p) => setAi((s) => (s.t === "busy" ? { t: "busy", progress: p } : s)),
+        onFields: (fields) => applyPartialFields(fields),
       });
       applyAiResult(res, file.name);
     } catch {
@@ -442,13 +510,14 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
     }
   };
 
+  const liveFilled = Object.keys(aiMarks).length;
   const stageText =
     ai.t === "busy" && ai.progress
       ? `${AI_STAGES[ai.progress.stage] ?? "پردازش"}${
           ai.progress.totalPages
             ? ` — صفحهٔ ${toPersianDigits(ai.progress.page)} از ${toPersianDigits(ai.progress.totalPages)}`
             : ""
-        }`
+        }${liveFilled > 0 ? ` — ${toPersianDigits(liveFilled)} فیلد پر شد` : ""}`
       : "شروع…";
 
   return (

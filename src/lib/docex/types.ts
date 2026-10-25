@@ -36,6 +36,7 @@ export type CanonicalField =
   | "sex"
   | "dateOfIssue"
   | "dateOfExpiry"
+  | "entryDate"
   | "personalNumber"
   | "fatherName"
   | "nationalId"

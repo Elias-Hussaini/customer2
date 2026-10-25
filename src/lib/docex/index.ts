@@ -20,15 +20,17 @@ export {
   disambiguateIssueDate,
   detectKind,
   normalizeUnicodeLine,
+  foldForLabel,
   levenshtein,
   PASSPORT_PROFILE,
   TAZKIRA_PROFILE,
   VISA_FORM_PROFILE,
+  VISA_STAMP_PROFILE,
   PROFILES,
 } from "./text";
 export { runExtraction, validateFile, MAX_FILE_BYTES, MAX_TEXT_PAGES, MAX_OCR_PAGES } from "./pipeline";
 export type { PipelineProgress, PipelineStage, RunOptions } from "./pipeline";
-export { preprocessCanvas, releaseOcr } from "./ocr";
+export { preprocessCanvas, releaseOcr, resetWorker, warmupOcr } from "./ocr";
 export { openPdf, hasTextLayer } from "./pdfread";
 export { matchCustomers, diffWithCustomer } from "./match";
 export type { CustomerMatch, FieldDiff, MatchLevel } from "./match";

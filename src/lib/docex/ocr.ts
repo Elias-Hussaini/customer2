@@ -21,30 +21,48 @@ type TesseractWorker = {
   terminate(): Promise<unknown>;
 };
 
-let workerCache: { key: string; worker: TesseractWorker } | null = null;
+/** One persistent worker per language — eng and fas run in PARALLEL on the
+ *  same page instead of sequentially, and stay warm across uploads. */
+const workers = new Map<string, TesseractWorker>();
 
-async function getWorker(langs: string): Promise<TesseractWorker> {
-  if (workerCache && workerCache.key === langs) return workerCache.worker;
-  if (workerCache) {
-    void workerCache.worker.terminate();
-    workerCache = null;
-  }
+async function getWorker(lang: string): Promise<TesseractWorker> {
+  const cached = workers.get(lang);
+  if (cached) return cached;
   const { createWorker } = await import("tesseract.js");
-  const worker = await createWorker(langs, 1, {
+  const worker = await createWorker(lang, 1, {
     logger: () => {
       /* progress is surfaced via onProgress instead */
     },
   });
-  workerCache = { key: langs, worker: worker as unknown as TesseractWorker };
-  return workerCache.worker;
+  const w = worker as unknown as TesseractWorker;
+  workers.set(lang, w);
+  return w;
 }
 
-/** Terminate the cached worker (frees wasm memory). */
-export async function releaseOcr(): Promise<void> {
-  if (workerCache) {
-    void workerCache.worker.terminate();
-    workerCache = null;
+/** Drop a broken worker so the next call recreates it cleanly. */
+export function resetWorker(lang: string): void {
+  const w = workers.get(lang);
+  if (w) {
+    workers.delete(lang);
+    void w.terminate();
   }
+}
+
+/** Preload both OCR engines in the background (first document then fills
+ *  in a couple of seconds instead of paying the worker+model load cost). */
+export async function warmupOcr(): Promise<void> {
+  try {
+    await Promise.all([getWorker("eng"), getWorker("fas")]);
+  } catch {
+    /* offline / CDN hiccup — surfaced later by the actual run */
+  }
+}
+
+/** Terminate all cached workers (frees wasm memory). */
+export async function releaseOcr(): Promise<void> {
+  const all = [...workers.values()];
+  workers.clear();
+  await Promise.all(all.map((w) => w.terminate().catch(() => undefined)));
 }
 
 /** Grayscale + contrast stretch + optional Otsu binarization. */
@@ -137,10 +155,10 @@ function otsuThreshold(hist: Uint32Array, total: number): number {
 /** Run OCR on a preprocessed canvas. */
 export async function runOcr(
   canvas: HTMLCanvasElement,
-  langs: string,
+  lang: string,
   onProgress?: (pct: number, stage: string) => void,
 ): Promise<OcrOutcome> {
-  const worker = await getWorker(langs);
+  const worker = await getWorker(lang);
   onProgress?.(10, "بارگذاری موتور OCR");
   const result = await worker.recognize(canvas);
   onProgress?.(95, "تحلیل نتیجه");

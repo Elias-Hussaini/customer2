@@ -73,9 +73,27 @@ function jalaliToIso(jy: number, jm: number, jd: number): string | null {
  * Handles: 1997-03-10, 10/03/1997, 10.03.1997, 10 MAR 1997, 10 march 1997,
  *          ۱۰ مارچ ۱۹۹۷, ۱۳۷۵/۰۱/۰۲ (Jalali), 1375/1/2, 10-03-97 (DD-MM-YY).
  */
+/**
+ * Latin OCR digit-lookalikes inside digit runs: 2O2O → 2020, 15 → 1S, …
+ * Only rewrites letters that sit in unambiguous digit contexts.
+ */
+function fixDigitLookalikes(s: string): string {
+  return s
+    .replace(/(?<=\d)O(?=\d)/g, "0")
+    .replace(/(?<=\d)I(?=\d)/g, "1")
+    .replace(/(?<=\d)L(?=\d)/g, "1")
+    .replace(/(?<=\d)S(?=\d)/g, "5")
+    .replace(/(?<=\d)B(?=\d)/g, "8")
+    .replace(/(?<=\d)Z(?=\d)/g, "2")
+    .replace(/(?<=\d)G(?=\d)/g, "6")
+    .replace(/(?<=\d)O(?=[\s\/\-.,])/g, "0") // "1O MAR 2020" → "10 MAR 2020"
+    .replace(/O(?=\d{3})/g, "0") // "O2020…" leading letter before a digit run
+    .replace(/(?<=\d)O+$/gm, (m) => "0".repeat(m.length)); // "2O2O"→"2020"
+}
+
 export function parsePrintedDate(input: string): string | null {
   if (!input) return null;
-  const s = toLatinDigits(String(input)).replace(/\u00A0/g, " ").trim();
+  const s = fixDigitLookalikes(toLatinDigits(String(input)).replace(/\u00A0/g, " ")).trim();
   if (!s) return null;
 
   // ISO yyyy-mm-dd
@@ -87,10 +105,12 @@ export function parsePrintedDate(input: string): string | null {
     return null;
   }
 
-  // dd <month-name> yyyy (EN or FA)
-  m = s.match(/^(\d{1,2})[\s\-\/.]*(?:<[^>]*>\s*)?([A-Za-z\u0600-\u06FF]+)[\s\-\/.]+(\d{4})$/);
+  // dd <month-name> yyyy (EN or FA) — separators optional (OCR glues
+  // “15MAR2022”); month lookup tolerates a leading 0 (O→0 misreads).
+  m = s.match(/^(\d{1,2})[\s\-\/.]*(?:<[^>]*>\s*)?([A-Za-z\u0600-\u06FF]+)[\s\-\/.]*(\d{4})$/);
   if (m) {
-    const mon = EN_MONTHS[m[2].toLowerCase()] ?? FA_MONTHS[m[2]];
+    const monKey = m[2].toLowerCase();
+    const mon = EN_MONTHS[monKey] ?? EN_MONTHS[monKey.replace(/^0/, "o")] ?? FA_MONTHS[m[2]];
     if (mon) return validIso(+m[3], mon, +m[1]);
     // Jalali month with year → try Jalali
     if (/^1[23456]\d\d$/.test(m[3]) && FA_MONTHS[m[2]] && ["حمل","ثور","جوزا","سرطان","اسد","سنبله","میزان","عقرب","قوس","جدی","دلو","حوت","فروردین","اردیبهشت","خرداد","تیر","مرداد","شهریور","مهر","آبان","آذر","دی","بهمن","اسفند"].includes(m[2])) {

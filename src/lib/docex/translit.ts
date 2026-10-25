@@ -51,7 +51,7 @@ const NAME_TOKENS: Record<string, string> = {
   RAHIMI: "رحیمی", RAHIMY: "رحیمی", JANATI: "جنتی", NADERI: "نادری",
   AMIRI: "امیری", HAKIMI: "حکیمی", HAKIMY: "حکیمی", QADERI: "قادری",
   SULTANI: "سلطانی", HASHIMI: "هاشمی", HASHIMY: "هاشمی", AZIZI: "عزیزی",
-  NOORI: "نوری", NORY: "نوری", FAIZI: "فیزی", BARAKZAI: "بارکزی",
+  NOORI: "نوری", NORY: "نوری", FAIZI: "فایزی", BARAKZAI: "بارکزی",
   POPAL: "پوپل", POPALZAI: "پوپلزی", ALOKOZAI: "الکوزی", STANIKZAI: "ستانکزی",
   YOUSOFI: "یوسفی", YUSUFI: "یوسفی", SULTANZADA: "سلطان‌زاده",
   HABIBI: "حبیبی", GHAFORI: "غفوری", ZAZAI: "زازی", MOMAND: "مومند",
@@ -62,6 +62,26 @@ const NAME_TOKENS: Record<string, string> = {
   KHOSTI: "خستی", WARDAK: "وردک", HOTAK: "هوتک", ACHAKZAI: "اچکزی",
   // Generic suffixes
   ZADA: "زاده", ZADEH: "زاده", KHAIL: "خیل", BAKHSH: "بخش",
+  // — extended coverage: very common given names (IR / AF) —
+  MEHDI: "مهدی", MAHDI: "مهدی", HASSAN: "حسن", GHASEM: "قاسم", QASIM: "قاسم",
+  SULEMAN: "سلیمان", SOLEMAN: "سلیمان", YAQUB: "یعقوب", ELIAS: "الیاس",
+  EMANULLAH: "امان‌الله", IMAN: "ایمان", BASHIR: "بشیر", LATIF: "لطیف",
+  AREF: "عارف", OSMAN: "عثمان", USMAN: "عثمان", JUMA: "جمعه",
+  GHULAMHOSSEIN: "غلامحسین", MOSA: "موسی", EESA: "عیسی", AYUB: "ایوب",
+  SHAHBAZ: "شهباز", TAHIR: "طاهر", RAUF: "رؤوف", MANUCHER: "منوچهر",
+  MORTAZA: "مرتضی", MURTAZA: "مرتضی", GHOLAMREZA: "غلامرضا",
+  KHODADAD: "خداداد", NAZMUDDIN: "نظم‌الدین", SEYEDALI: "سیدعلی",
+  FATEMEH: "فاطمه", KHADIJA: "خدیجه", ROYA: "رویا", PARISA: "پریسا",
+  MAHSA: "مهسا", SHIRIN: "شیرین", MASUMEH: "معصومه",
+  GULSUM: "گلسم", SAKINA: "سکینه", ZOLEIKHA: "زلیخا",
+  // — extended coverage: common surnames (IR / AF) —
+  MUSAVI: "موسوی", MOUSAVI: "موسوی", MUSAWI: "موسوی", JAFARI: "جعفری",
+  JAFFARI: "جعفری", KAZEMI: "کاظمی", GHOLAMI: "غلامی", ABBASI: "عباسی",
+  NAJAFI: "نجافی", MAHMOUDI: "محمودی", ESMAILI: "اسماعیلی", MASHHADI: "مشهدی",
+  KHOSRAVI: "خسروی", TABATABAEI: "طباطبایی", TABATABAI: "طباطبایی",
+  KARIMZADA: "کریم‌زاده", AFGHAN: "افغان", YAQUBI: "یعقوبی",
+  SOBOUTI: "صبوتی", RAOUFI: "رئوفی", HAMDARD: "همدرد", MOHAQQEQ: "مححق",
+  JAN: "جان", AGHA: "آقا", MIRZA: "میرزا",
 };
 
 /** Letter-by-letter fallback (only for tokens not in the dictionary). */
