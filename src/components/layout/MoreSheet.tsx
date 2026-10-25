@@ -6,6 +6,7 @@ import {
   FileBarChart,
   Search,
   Settings,
+  Wand2,
   type LucideIcon,
 } from "lucide-react";
 import { BottomSheet } from "../ui/Modal";
@@ -54,6 +55,13 @@ const MORE_ITEMS: MoreItem[] = [
     description: "خروجی و بازیابی داده‌ها",
     to: "/backup",
     tint: "bg-accent/12 text-accent",
+  },
+  {
+    icon: Wand2,
+    label: "پر کردن فرم",
+    description: "فرم ویزای PDF از روی مشتری",
+    to: "/docfill",
+    tint: "bg-[#8b5cf6]/12 text-[#7c3aed] dark:text-[#a78bfa]",
   },
   {
     icon: Settings,

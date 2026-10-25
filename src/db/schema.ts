@@ -63,6 +63,11 @@ export class VisaDB extends Dexie {
       attachments: "id, customerId, paymentId, kind, createdAt",
       docTypes: "id, order, createdAt, archivedAt",
     });
+    // v4: visa-application PDF fill templates (smart document tools).
+    // Files live here, not in JSON backups (re-creatable, potentially large).
+    this.version(4).stores({
+      pdfTemplates: "id, updatedAt",
+    });
   }
 }
 
@@ -81,4 +86,5 @@ export const DB_TABLES = [
   "attachments",
   "docTypes",
   "preferences",
+  "pdfTemplates",
 ] as const;

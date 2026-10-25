@@ -6,6 +6,8 @@ import { copyFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
+/// <reference types="vitest/config" />
+
 const rootDir = fileURLToPath(new URL(".", import.meta.url));
 
 /** GitHub Pages repository name — the app is served under /customer2/. */
@@ -77,5 +79,9 @@ export default defineConfig(({ mode }) => ({
     target: "es2022",
     sourcemap: false,
     chunkSizeWarningLimit: 1200,
+  },
+  test: {
+    environment: "node",
+    include: ["src/**/*.test.ts"],
   },
 }));

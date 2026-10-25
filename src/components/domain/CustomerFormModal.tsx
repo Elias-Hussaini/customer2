@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, FilePlus2 } from "lucide-react";
+import { AlertTriangle, FilePlus2, ScanSearch, PencilLine } from "lucide-react";
 import { Modal } from "../ui/Modal";
 import { Button } from "../ui/Button";
 import { FormField, Input, Textarea, Toggle } from "../ui/fields";
@@ -8,10 +8,12 @@ import { DatePicker } from "../ui/DatePicker";
 import { SearchSelect } from "../ui/inputs";
 import { MoneyInput } from "../ui/MoneyInput";
 import { CustomFieldsGroup } from "../ui/CustomFields";
+import { SmartExtract, type SmartExtractOutcome } from "./SmartExtract";
 import { createCustomer, findDuplicatePassport, updateCustomer, customerFullName } from "../../db/customers";
 import { createRequest } from "../../db/requests";
 import { createVisaType } from "../../db/taxonomy";
 import { updatePrefs } from "../../db/prefs";
+import { saveAttachment } from "../../db/attachments";
 import { useCustomFields, useLists, usePrefs, useRepresentatives, useVisaTypes } from "../../hooks/useData";
 import { useToast } from "../../hooks/useToast";
 import { todayIso } from "../../utils/jalali";
@@ -67,6 +69,13 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
   const [dupWarning, setDupWarning] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Smart-extraction mode (create only): "smart" shows the document reader
+  // first; "manual" is the classic form. The last *chosen* mode is remembered
+  // (switching to the form view after applying extraction does not count).
+  const [mode, setMode] = useState<"smart" | "manual">("smart");
+  const [chosenMode, setChosenMode] = useState<"smart" | "manual">("smart");
+  const [smartFile, setSmartFile] = useState<File | null>(null);
+
   // Simultaneous visa-request section (create mode only).
   const [withRequest, setWithRequest] = useState(true);
   const [reqVisaType, setReqVisaType] = useState<string | null>(null);
@@ -96,6 +105,11 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
     if (open) {
       setDupWarning(null);
       setErrors({});
+      setSmartFile(null);
+      // Remember the last *chosen* mode (smart extraction vs manual entry).
+      const initial = prefsRef.current.lastCustomerFormMode ?? "smart";
+      setMode(initial);
+      setChosenMode(initial);
       if (customer) {
         setForm({
           firstName: customer.firstName ?? "",
@@ -175,6 +189,25 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
     return Object.keys(next).length === 0;
   };
 
+  const applySmart = (o: SmartExtractOutcome) => {
+    setForm((f) => ({
+      ...f,
+      firstName: o.firstName || f.firstName,
+      lastName: o.lastName || f.lastName,
+      passportNo: o.passportNo || f.passportNo,
+      birthDate: o.birthDate ?? f.birthDate,
+      passportIssueDate: o.passportIssueDate ?? f.passportIssueDate,
+      passportExpiryDate: o.passportExpiryDate ?? f.passportExpiryDate,
+      notes:
+        [o.extras.nationalId && `شماره ملی/تذکره: ${o.extras.nationalId}`, o.extras.placeOfBirth && `محل تولد: ${o.extras.placeOfBirth}`, o.extras.fatherName && `نام پدر: ${o.extras.fatherName}`, o.extras.nationality && `ملیت: ${o.extras.nationality}`, o.extras.sex && `جنسیت: ${o.extras.sex === "M" ? "مرد" : o.extras.sex === "F" ? "زن" : o.extras.sex}`]
+          .filter(Boolean)
+          .join(" — ") || f.notes,
+    }));
+    setSmartFile(o.attachFile);
+    setMode("manual");
+    void checkDuplicate(o.passportNo);
+  };
+
   const save = async () => {
     if (!validate()) return;
     setSaving(true);
@@ -199,6 +232,14 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
         onSaved?.({ ...customer, ...input });
       } else {
         const created = await createCustomer(input);
+        // Save the source document into the customer's document slots.
+        if (smartFile) {
+          try {
+            await saveAttachment(created.id, "passport", smartFile);
+          } catch {
+            toast.error("ذخیرهٔ فایل مدرک ناموفق بود (مشتری ثبت شد)");
+          }
+        }
         // Register the visa request together with the customer — same
         // representative, list and registration date. No re-asking.
         if (withRequest && reqVisaType) {
@@ -220,11 +261,13 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
         }
         onSaved?.(created);
       }
-      // Remember list & representative for the next quick entry.
+      // Remember list, representative, mode and visa type for the next entry.
       if (prefsRef.current.rememberLastSelections) {
         await updatePrefs({
           lastRepresentativeId: form.representativeId,
           lastListId: form.listId,
+          lastCustomerFormMode: chosenMode,
+          defaultVisaType: !customer && withRequest && reqVisaType ? reqVisaType : prefsRef.current.defaultVisaType,
         });
       }
       onClose();
@@ -248,17 +291,61 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
       }
       size="lg"
       footer={
-        <div className="flex items-center justify-end gap-2">
-          <button className="btn btn-ghost" onClick={onClose} disabled={saving}>
-            انصراف
-          </button>
-          <Button variant="primary" onClick={() => void save()} loading={saving}>
-            {customer ? "ذخیره تغییرات" : "ثبت مشتری"}
-          </Button>
-        </div>
+        mode === "smart" && !customer ? (
+          <div className="flex items-center justify-end">
+            <button className="btn btn-ghost" onClick={onClose}>
+              انصراف
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-end gap-2">
+            <button className="btn btn-ghost" onClick={onClose} disabled={saving}>
+              انصراف
+            </button>
+            <Button variant="primary" onClick={() => void save()} loading={saving}>
+              {customer ? "ذخیره تغییرات" : "ثبت مشتری"}
+            </Button>
+          </div>
+        )
       }
     >
       <div className="flex flex-col gap-4">
+        {/* Mode switch — create mode only. Last choice is remembered. */}
+        {!customer && (
+          <div className="grid grid-cols-2 gap-1.5 rounded-2xl bg-ink-900/5 p-1.5 dark:bg-white/8">
+            {([
+              { id: "smart", label: "دستیار هوشمند", icon: ScanSearch, hint: "از روی مدرک بخوان" },
+              { id: "manual", label: "ورود دستی", icon: PencilLine, hint: "خودم می‌نویسم" },
+            ] as const).map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => {
+                  setMode(m.id);
+                  setChosenMode(m.id);
+                }}
+                className={`flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-[12.5px] font-bold transition-all ${
+                  mode === m.id
+                    ? "bg-white text-brand-600 shadow-sm dark:bg-ink-800 dark:text-brand-300"
+                    : "text-ink-500 hover:text-ink-800 dark:text-ink-400 dark:hover:text-ink-100"
+                }`}
+              >
+                <m.icon size={15} />
+                {m.label}
+                <span className="text-[10px] font-normal opacity-70">{m.hint}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Smart extraction step (create mode, before the form fills). */}
+        {!customer && mode === "smart" ? (
+          <SmartExtract
+            onApply={applySmart}
+            onSkip={() => setMode("manual")}
+          />
+        ) : (
+          <>
         {/* List & representative — every customer MUST belong to both. */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <FormField
@@ -428,6 +515,8 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
               errors={errors}
             />
           </div>
+        )}
+          </>
         )}
       </div>
     </Modal>
