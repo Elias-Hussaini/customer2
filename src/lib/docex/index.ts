@@ -15,6 +15,9 @@ export {
 } from "./translit";
 export {
   extractByLabels,
+  extractByLayout,
+  findDateCandidates,
+  disambiguateIssueDate,
   detectKind,
   normalizeUnicodeLine,
   levenshtein,
@@ -23,7 +26,7 @@ export {
   VISA_FORM_PROFILE,
   PROFILES,
 } from "./text";
-export { runExtraction, validateFile, MAX_FILE_BYTES, MAX_PAGES } from "./pipeline";
+export { runExtraction, validateFile, MAX_FILE_BYTES, MAX_TEXT_PAGES, MAX_OCR_PAGES } from "./pipeline";
 export type { PipelineProgress, PipelineStage, RunOptions } from "./pipeline";
 export { preprocessCanvas, releaseOcr } from "./ocr";
 export { openPdf, hasTextLayer } from "./pdfread";

@@ -249,7 +249,7 @@ export function SearchBox({
     <div className={`relative ${className}`}>
       <Search size={15} className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-400" />
       <input
-        className="field !py-2 pr-9 text-[13px]"
+        className="field !py-2 pr-10 text-[13px]"
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}

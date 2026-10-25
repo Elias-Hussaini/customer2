@@ -16,6 +16,12 @@ export interface PdfPageRender {
   height: number;
 }
 
+/** A visual row of text items, kept with x positions for column-aware pairing. */
+export interface StructuredRow {
+  y: number;
+  parts: { x: number; s: string }[];
+}
+
 let pdfjsLib: typeof import("pdfjs-dist") | null = null;
 
 async function loadPdfjs() {
@@ -31,6 +37,8 @@ export interface LoadedPdf {
   numPages: number;
   /** Get text-layer text of a page ("" when the page is a scan). */
   getPageText(index1: number): Promise<string>;
+  /** Get the page's visual rows with per-part x positions (for layout pairing). */
+  getPageRows(index1: number): Promise<StructuredRow[]>;
   /** Render a page to a canvas at ~targetDpi (capped). */
   renderPage(index1: number, targetDpi?: number): Promise<PdfPageRender>;
   /** Render page 1 as a small thumbnail data URL. */
@@ -65,9 +73,9 @@ export async function openPdf(bytes: Uint8Array): Promise<LoadedPdf> {
     return entry;
   }
 
-  /** Group text items into visual lines (tolerant y-bucketing), keep order. */
-  function itemsToLines(items: { str: string; x: number; y: number }[]): string[] {
-    const rows: { y: number; parts: { x: number; s: string }[] }[] = [];
+  /** Group text items into visual rows (tolerant y-bucketing), keep order. */
+  function bucketRows(items: { str: string; x: number; y: number }[]): StructuredRow[] {
+    const rows: StructuredRow[] = [];
     for (const it of items) {
       if (!it.str.trim()) continue;
       const tol = 3.5;
@@ -79,21 +87,32 @@ export async function openPdf(bytes: Uint8Array): Promise<LoadedPdf> {
       row.parts.push({ x: it.x, s: it.str });
     }
     rows.sort((a, b) => b.y - a.y); // top of page first (PDF y grows upward)
-    return rows.map((r) =>
-      r.parts
-        .sort((a, b) => a.x - b.x)
-        .map((p) => p.s)
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim(),
-    );
+    for (const r of rows) r.parts.sort((a, b) => a.x - b.x);
+    return rows;
+  }
+
+  function rowsToText(rows: StructuredRow[]): string {
+    return rows
+      .map((r) =>
+        r.parts
+          .map((p) => p.s)
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim(),
+      )
+      .filter((l) => l.length > 0)
+      .join("\n");
   }
 
   return {
     numPages: doc.numPages,
     async getPageText(index1) {
       const { textItems } = await loadPage(index1);
-      return itemsToLines(textItems).join("\n");
+      return rowsToText(bucketRows(textItems));
+    },
+    async getPageRows(index1) {
+      const { textItems } = await loadPage(index1);
+      return bucketRows(textItems);
     },
     async renderPage(index1, targetDpi = 200) {
       const lib2 = pdfjsLib!;

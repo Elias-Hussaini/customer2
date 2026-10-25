@@ -328,6 +328,23 @@ function parseTD3(l1: string, l2: string): RawParsed | null {
       status: checks.personalNumber ? "confirmed" : "needs_review",
       method: "mrz",
     };
+    // Some issuing states put the issue date (YYMMDD) in the optional-data
+    // field. Trust it only when the optional-data check digit validates and
+    // the date sits between birth and expiry — otherwise it's a personal no.
+    if (checks.personalNumber && /^\d{6}$/.test(personal)) {
+      const issueIso = parseMrzDate(personal, "issue");
+      const dobIso = (fields.dateOfBirth?.value as string | null) ?? null;
+      const expIso = (fields.dateOfExpiry?.value as string | null) ?? null;
+      if (issueIso && (!dobIso || issueIso > dobIso) && (!expIso || issueIso < expIso)) {
+        fields.dateOfIssue = {
+          value: issueIso,
+          raw: personal,
+          status: "needs_review",
+          method: "mrz",
+          note: "تاریخ صدور از دادهٔ اختیاری MRZ خوانده شد",
+        };
+      }
+    }
   }
   // Composite check (position 44): doc+ck, dob+ck, exp+ck, optional+ck
   // (nationality at 11-13 and sex at 21 are excluded per ICAO 9303).

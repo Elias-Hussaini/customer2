@@ -80,7 +80,7 @@ export function GlobalSearch({
       <div className="relative">
         <Search size={15} className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-400" />
         <input
-          className="field !py-2 pr-9 text-[13px]"
+          className="field !py-2 pr-10 text-[13px]"
           placeholder="جستجوی سراسری… (نام، پاسپورت، شماره تماس)"
           data-global-search
           value={query}
