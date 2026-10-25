@@ -14,6 +14,9 @@ export interface CustomerInput {
   passportExpiryDate?: string;
   referrer?: string;
   notes?: string;
+  /** Required in forms: every customer sits inside a list, under a representative. */
+  representativeId?: string | null;
+  listId?: string | null;
   registrationDate: string;
   customValues?: Record<string, unknown>;
 }
@@ -49,6 +52,8 @@ export async function createCustomer(input: CustomerInput): Promise<Customer> {
     passportExpiryDate: input.passportExpiryDate || undefined,
     referrer: input.referrer?.trim() || undefined,
     notes: input.notes?.trim() || undefined,
+    representativeId: input.representativeId ?? null,
+    listId: input.listId ?? null,
     registrationDate: input.registrationDate || todayIso(),
     customValues: input.customValues ?? {},
     createdAt: now,
@@ -75,6 +80,8 @@ export async function updateCustomer(id: string, input: CustomerInput): Promise<
     passportExpiryDate: input.passportExpiryDate || undefined,
     referrer: input.referrer?.trim() || undefined,
     notes: input.notes?.trim() || undefined,
+    representativeId: input.representativeId ?? null,
+    listId: input.listId ?? null,
     registrationDate: input.registrationDate,
     customValues: input.customValues ?? {},
     updatedAt: Date.now(),

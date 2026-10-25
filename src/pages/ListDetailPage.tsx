@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { FileDown, FilePenLine, FilePlus2, FolderInput, ListChecks } from "lucide-react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { FileDown, FilePenLine, FilePlus2, FolderInput, ListChecks, Users } from "lucide-react";
 import { PageHeader } from "../components/ui/StatCard";
 import { EmptyState } from "../components/ui/EmptyState";
 import { FilterSelect, SearchBox, SectionCard } from "../components/ui/inputs";
@@ -27,6 +27,7 @@ import type { VisaRequest } from "../types";
 
 export function ListDetailPage() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const toast = useToast();
   const list = useList(id);
   const lists = useLists();
@@ -47,6 +48,17 @@ export function ListDetailPage() {
   const inList = useMemo(
     () => (requests ?? []).filter((r) => r.listId === id),
     [requests, id],
+  );
+
+  /** Customers registered inside this list (directly, or via a request). */
+  const listCustomers = useMemo(() => {
+    const ids = new Set(inList.map((r) => r.customerId));
+    return (customers ?? []).filter((c) => c.listId === id || ids.has(c.id));
+  }, [customers, inList, id]);
+
+  const repById = useMemo(
+    () => new Map((representatives ?? []).map((r) => [r.id, r])),
+    [representatives],
   );
 
   const filtered = useMemo(() => {
@@ -93,7 +105,7 @@ export function ListDetailPage() {
         subtitle={
           <>
             {list.category ? `${list.category} • ` : ""}
-            {toPersianDigits(inList.length)} درخواست • {toPersianDigits(issued)} صادر شده
+            {toPersianDigits(listCustomers.length)} مشتری • {toPersianDigits(inList.length)} درخواست • {toPersianDigits(issued)} صادر شده
             {(list.startDate || list.endDate) && (
               <span className="num">
                 {" "}
@@ -145,6 +157,39 @@ export function ListDetailPage() {
         <JalaliDatePicker value={from} onChange={setFrom} placeholder="از تاریخ" className="w-40" />
         <JalaliDatePicker value={to} onChange={setTo} placeholder="تا تاریخ" className="w-40" />
       </div>
+
+      {/* Customers registered in this list */}
+      {listCustomers.length > 0 && (
+        <SectionCard
+          title={`مشتریان این لیست (${toPersianDigits(listCustomers.length)})`}
+          icon={<Users size={15} className="text-brand-500" />}
+        >
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
+            {listCustomers.map((c) => {
+              const rep = repById.get(c.representativeId ?? "");
+              return (
+                <button
+                  key={c.id}
+                  className="glass rounded-2xl p-3.5 text-right transition-transform active:scale-95"
+                  onClick={() => navigate(`/customers/${c.id}`)}
+                >
+                  <p className="truncate text-[13px] font-bold">{customerFullName(c)}</p>
+                  {c.passportNo && (
+                    <p dir="ltr" className="num mt-1 text-[11px] text-ink-400">
+                      {c.passportNo}
+                    </p>
+                  )}
+                  {rep && (
+                    <p className="mt-1 truncate text-[10.5px] text-ink-500 dark:text-ink-400">
+                      نماینده: {rep.name}
+                    </p>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </SectionCard>
+      )}
 
       <RequestsTable
         requests={filtered}

@@ -161,7 +161,7 @@ export async function readBackupFile(file: File, password?: string): Promise<Bac
     return decryptBackup(parsed as EncryptedBackup, password);
   }
   if (obj?.format !== BACKUP_FORMAT) {
-    throw new Error("این فایل یک فایل پشتیبان ۲کاستومر نیست.");
+    throw new Error("این فایل یک فایل پشتیبان E-managment نیست.");
   }
   const backup = parsed as BackupFile;
   if (backup.version > BACKUP_VERSION) {

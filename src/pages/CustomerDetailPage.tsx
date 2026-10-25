@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Archive, FileDown, FilePenLine, FilePlus2, Trash2 } from "lucide-react";
@@ -18,23 +19,35 @@ import {
   useCustomFields,
   useCustomer,
   useLists,
+  usePrefs,
   useRepresentatives,
   useRequests,
   useTags,
 } from "../hooks/useData";
 import { useConfirm } from "../hooks/useConfirm";
 import { useToast } from "../hooks/useToast";
-import { formatJalali } from "../utils/jalali";
+import { formatJalali, formatDateByMode } from "../utils/jalali";
 import { uiActions } from "../components/layout/uiStore";
 import { toPersianDigits } from "../utils/jalali";
 
-const BASE_FIELDS: { key: keyof import("../types").Customer; label: string; date?: boolean }[] = [
+interface BaseFieldDef {
+  key: keyof import("../types").Customer;
+  label: string;
+  date?: boolean;
+  /** "passport" → follow the birth/passport calendar setting. */
+  calendar?: "passport";
+  ref?: "rep" | "list";
+}
+
+const BASE_FIELDS: BaseFieldDef[] = [
+  { key: "representativeId", label: "نماینده", ref: "rep" },
+  { key: "listId", label: "لیست", ref: "list" },
   { key: "firstName", label: "نام" },
   { key: "lastName", label: "نام خانوادگی" },
   { key: "passportNo", label: "شماره پاسپورت" },
-  { key: "birthDate", label: "تاریخ تولد", date: true },
-  { key: "passportIssueDate", label: "تاریخ صدور پاسپورت", date: true },
-  { key: "passportExpiryDate", label: "تاریخ انقضای پاسپورت", date: true },
+  { key: "birthDate", label: "تاریخ تولد", date: true, calendar: "passport" },
+  { key: "passportIssueDate", label: "تاریخ صدور پاسپورت", date: true, calendar: "passport" },
+  { key: "passportExpiryDate", label: "تاریخ انقضای پاسپورت", date: true, calendar: "passport" },
   { key: "referrer", label: "معرف" },
   { key: "registrationDate", label: "تاریخ ثبت", date: true },
 ];
@@ -52,6 +65,8 @@ export function CustomerDetailPage() {
   const tags = useTags();
   const customFields = useCustomFields();
   const activities = useActivities(15, id);
+  const prefs = usePrefs();
+  const passportCal = prefs.passportDateCalendar ?? "gregorian";
 
   const [editOpen, setEditOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -124,15 +139,51 @@ export function CustomerDetailPage() {
             <div className="grid grid-cols-1 gap-x-6 gap-y-0 sm:grid-cols-2">
               {BASE_FIELDS.map((f) => {
                 const raw = customer[f.key] as string | undefined;
+                let display: ReactNode;
+                if (f.ref === "rep") {
+                  const rep = raw ? (representatives ?? []).find((r) => r.id === raw) : undefined;
+                  display = rep ? (
+                    <Link
+                      to={`/representatives/${rep.id}`}
+                      className="font-semibold text-brand-600 hover:underline dark:text-brand-300"
+                    >
+                      {rep.name}
+                    </Link>
+                  ) : (
+                    <span className="text-ink-400">—</span>
+                  );
+                } else if (f.ref === "list") {
+                  const list = raw ? (lists ?? []).find((l) => l.id === raw) : undefined;
+                  display = list ? (
+                    <Link
+                      to={`/lists/${list.id}`}
+                      className="font-semibold text-brand-600 hover:underline dark:text-brand-300"
+                    >
+                      {list.name}
+                    </Link>
+                  ) : (
+                    <span className="text-ink-400">—</span>
+                  );
+                } else if (f.date) {
+                  display = (
+                    <span className="num">
+                      {raw
+                        ? f.calendar === "passport"
+                          ? formatDateByMode(raw, passportCal)
+                          : formatJalali(raw)
+                        : "—"}
+                    </span>
+                  );
+                } else {
+                  display = <span className="min-w-0 truncate font-semibold">{raw || "—"}</span>;
+                }
                 return (
                   <div
                     key={String(f.key)}
                     className="flex items-center justify-between gap-3 border-b border-ink-900/5 py-2.5 text-[13px] last:border-0 dark:border-white/5"
                   >
                     <span className="text-ink-500 dark:text-ink-400">{f.label}</span>
-                    <span className="num min-w-0 truncate font-semibold">
-                      {raw ? (f.date ? formatJalali(raw) : raw) : "—"}
-                    </span>
+                    <span className="min-w-0 truncate">{display}</span>
                   </div>
                 );
               })}

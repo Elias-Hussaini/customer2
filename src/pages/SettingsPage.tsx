@@ -797,7 +797,7 @@ function DefaultsSection() {
           <div>
             <p className="text-[13px] font-bold">یادآوری آخرین انتخاب‌ها</p>
             <p className="text-[11px] leading-5 text-ink-500 dark:text-ink-400">
-              آخرین نماینده و لیستی که انتخاب کردید، در فرم درخواست بعدی خودکار انتخاب می‌شود
+              آخرین نماینده و لیستی که انتخاب کردید، در فرم درخواست و فرم مشتری بعدی خودکار انتخاب می‌شود
             </p>
           </div>
           <Toggle
@@ -818,8 +818,25 @@ function DefaultsSection() {
             ))}
           </Select>
         </FormField>
+        <div className="border-t border-ink-900/5 pt-4 dark:border-white/5">
+          <FormField
+            label="تقویم تاریخ تولد و پاسپورت"
+            hint="تاریخ تولد، تاریخ صدور و انقضای پاسپورت با این تقویم وارد و نمایش داده می‌شود"
+          >
+            <RadioSelect
+              options={[
+                { value: "gregorian", label: "میلادی (2024/05/13)" },
+                { value: "jalali", label: "شمسی (۱۴۰۳/۰۲/۲۴)" },
+              ]}
+              value={prefs.passportDateCalendar ?? "gregorian"}
+              onChange={(v) =>
+                void updatePrefs({ passportDateCalendar: v as "gregorian" | "jalali" })
+              }
+            />
+          </FormField>
+        </div>
         <p className="text-[11px] leading-5 text-ink-400">
-          تاریخ ثبت درخواست و مشتری، همیشه امروزِ شمسی است و همان موقع قابل تغییر.
+          تاریخ ثبت مشتری و درخواست، همیشه امروزِ شمسی است و همان موقع قابل تغییر.
         </p>
       </div>
     </SectionCard>

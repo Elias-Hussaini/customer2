@@ -78,7 +78,7 @@ export function DashboardPage() {
         <GlassCard className="p-5">
           <EmptyState
             icon={Sparkles}
-            title="به ۲کاستومر خوش آمدید!"
+            title="به E-managment خوش آمدید!"
             description={
               <>
                 برای شروع، یک <b>نماینده</b> بسازید، سپس <b>مشتری</b> ثبت کنید و اولین{" "}

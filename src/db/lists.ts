@@ -62,10 +62,15 @@ export async function restoreList(id: string, name: string): Promise<void> {
 
 /** Permanently delete a list; its requests are detached (kept without a list). */
 export async function deleteList(id: string, name: string): Promise<void> {
-  await db.transaction("rw", db.lists, db.requests, async () => {
+  await db.transaction("rw", db.lists, db.requests, db.customers, async () => {
     const linked = await db.requests.where("listId").equals(id).toArray();
     await Promise.all(
       linked.map((r) => db.requests.update(r.id, { listId: null, updatedAt: Date.now() })),
+    );
+    // Customers registered inside this list are kept, but detached from it.
+    const linkedCustomers = await db.customers.where("listId").equals(id).toArray();
+    await Promise.all(
+      linkedCustomers.map((c) => db.customers.update(c.id, { listId: null, updatedAt: Date.now() })),
     );
     await db.lists.delete(id);
   });

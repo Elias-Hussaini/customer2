@@ -4,6 +4,7 @@ import type { AppPreferences, Currency } from "../types";
 export const DEFAULT_PREFS: AppPreferences = {
   id: "app",
   defaultCurrency: "IRT",
+  passportDateCalendar: "gregorian",
   rememberLastSelections: true,
   lastRepresentativeId: null,
   lastListId: null,

@@ -40,8 +40,8 @@ export default defineConfig(({ mode }) => ({
       registerType: "prompt",
       includeAssets: ["favicon.svg", "favicon-64.png", "apple-touch-icon.png"],
       manifest: {
-        name: "۲کاستومر — مدیریت ویزا",
-        short_name: "۲کاستومر",
+        name: "E-managment — مدیریت ویزا",
+        short_name: "E-managment",
         description: "سامانه محلی مدیریت مشتریان، نمایندگان و درخواست‌های ویزا",
         lang: "fa",
         dir: "rtl",

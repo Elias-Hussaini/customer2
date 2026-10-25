@@ -69,7 +69,7 @@ export const ExportDoc = forwardRef<
               fontSize: "15px",
             }}
           >
-            2C
+            EM
           </div>
           <div>
             <div style={{ fontSize: "16px", fontWeight: 800 }}>{title}</div>
@@ -79,7 +79,7 @@ export const ExportDoc = forwardRef<
           </div>
         </div>
         <div style={{ textAlign: "left", fontSize: "10.5px", color: MUTED }}>
-          <div>۲کاستومر — مدیریت ویزا</div>
+          <div dir="ltr">E-managment — Visa Management</div>
           <div>تاریخ گزارش: {formatJalali(todayIso(), "long")}</div>
         </div>
       </div>

@@ -80,6 +80,8 @@ export async function seedDemoData(): Promise<void> {
     passportExpiryDate: "2031-06-09",
     referrer: "آقای تهرانی",
     notes: "سفر توریستی",
+    representativeId: repAli.id,
+    listId: listDomestic.id,
     registrationDate: shiftDays(-30),
   });
   const c2 = await createCustomer({
@@ -90,6 +92,8 @@ export async function seedDemoData(): Promise<void> {
     passportIssueDate: "2020-01-15",
     passportExpiryDate: "2030-01-14",
     referrer: "مریم احمدی",
+    representativeId: repMaryam.id,
+    listId: listOctNov.id,
     registrationDate: shiftDays(-26),
   });
   const c3 = await createCustomer({
@@ -98,6 +102,8 @@ export async function seedDemoData(): Promise<void> {
     birthDate: "1998-09-25",
     passportNo: "C33445566",
     referrer: "خانم رضایی",
+    representativeId: repAli.id,
+    listId: listUrgent.id,
     registrationDate: shiftDays(-18),
   });
   const c4 = await createCustomer({
@@ -105,6 +111,8 @@ export async function seedDemoData(): Promise<void> {
     lastName: "صادقی",
     birthDate: "1990-02-11",
     passportNo: "D99887766",
+    representativeId: repHossein.id,
+    listId: listDomestic.id,
     registrationDate: shiftDays(-12),
     notes: "پاسپورت قدیمی — تا ۸ ماه دیگر منقضی می‌شود",
   });
@@ -113,6 +121,8 @@ export async function seedDemoData(): Promise<void> {
     lastName: "رحیمی",
     birthDate: "1995-07-07",
     passportNo: "E11223344",
+    representativeId: repMaryam.id,
+    listId: listOctNov.id,
     registrationDate: shiftDays(-8),
   });
   const c6 = await createCustomer({
@@ -120,6 +130,8 @@ export async function seedDemoData(): Promise<void> {
     lastName: "قاسمی",
     birthDate: "1988-03-30",
     passportNo: "F55667788",
+    representativeId: repAli.id,
+    listId: listDomestic.id,
     registrationDate: shiftDays(-3),
   });
 

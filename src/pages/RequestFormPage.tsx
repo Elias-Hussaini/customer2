@@ -172,10 +172,16 @@ export function RequestFormPage() {
       toast.error("حداقل نام یا شماره پاسپورت را وارد کنید");
       return;
     }
+    if (!form.representativeId || !form.listId) {
+      toast.error("برای ثبت مشتری، ابتدا نماینده و لیست را در فرم انتخاب کنید");
+      return;
+    }
     const created = await createCustomer({
       firstName: quickCustomer.firstName,
       lastName: quickCustomer.lastName,
       passportNo: quickCustomer.passportNo,
+      representativeId: form.representativeId,
+      listId: form.listId,
       registrationDate: todayIso(),
     });
     toast.success(`مشتری «${customerFullName(created)}» ساخته شد`);
@@ -186,6 +192,8 @@ export function RequestFormPage() {
   const save = async () => {
     const next: Record<string, string> = {};
     if (!form.customerId) next.customerId = "انتخاب مشتری الزامی است";
+    if (!form.representativeId) next.representativeId = "انتخاب نماینده الزامی است";
+    if (!form.listId) next.listId = "انتخاب لیست الزامی است";
     for (const field of fields) {
       const v = form.customValues[field.key];
       const empty = v == null || v === "" || (Array.isArray(v) && v.length === 0);
@@ -264,7 +272,7 @@ export function RequestFormPage() {
     <div className="flex flex-col gap-4">
       <PageHeader
         title={isEdit ? "ویرایش درخواست ویزا" : "درخواست ویزا جدید"}
-        subtitle="فقط مشتری الزامی است — بقیه را بعداً تکمیل کنید"
+        subtitle="مشتری، نماینده و لیست الزامی هستند — بقیه را بعداً تکمیل کنید"
         back
         actions={
           <>
@@ -294,6 +302,17 @@ export function RequestFormPage() {
               {quickCustomer.open ? (
                 <div className="glass-soft flex flex-col gap-3 rounded-2xl p-3.5">
                   <p className="text-xs font-bold">ایجاد سریع مشتری</p>
+                  {form.representativeId && form.listId ? (
+                    <p className="text-[11px] leading-5 text-ink-500 dark:text-ink-400">
+                      مشتری جدید در لیست «{(lists ?? []).find((l) => l.id === form.listId)?.name ?? "—"}» و زیر
+                      نماینده «{(representatives ?? []).find((r) => r.id === form.representativeId)?.name ?? "—"}»
+                      ثبت می‌شود
+                    </p>
+                  ) : (
+                    <p className="text-[11px] leading-5 text-[#c77d0a] dark:text-[#f5b84f]">
+                      برای ثبت مشتری، ابتدا نماینده و لیست را انتخاب کنید (هر مشتری باید در یک لیست و زیر یک نماینده ثبت شود)
+                    </p>
+                  )}
                   <div className="grid grid-cols-3 gap-2">
                     <Input
                       placeholder="نام"
@@ -350,20 +369,22 @@ export function RequestFormPage() {
                     placeholder="انتخاب یا ساخت…"
                   />
                 </FormField>
-                <FormField label="نماینده" hint="آخرین انتخاب یاد می‌آید">
+                <FormField label="نماینده" required error={errors.representativeId} hint="آخرین انتخاب یاد می‌آید">
                   <SearchSelect
                     items={(representatives ?? []).map((r) => ({ id: r.id, title: r.name, subtitle: r.phone }))}
                     value={form.representativeId}
                     onSelect={(v) => patch({ representativeId: v })}
-                    placeholder="بدون نماینده…"
+                    placeholder="انتخاب نماینده…"
+                    clearable={false}
                   />
                 </FormField>
-                <FormField label="لیست">
+                <FormField label="لیست" required error={errors.listId}>
                   <SearchSelect
                     items={(lists ?? []).map((l) => ({ id: l.id, title: l.name }))}
                     value={form.listId}
                     onSelect={(v) => patch({ listId: v })}
-                    placeholder="بدون لیست…"
+                    placeholder="انتخاب لیست…"
+                    clearable={false}
                   />
                 </FormField>
               </div>
@@ -453,8 +474,9 @@ export function RequestFormPage() {
         <div className="flex flex-col gap-4">
           <SectionCard title="راهنمای سریع" icon={<CalendarDays size={15} className="text-brand-500" />}>
             <ul className="flex flex-col gap-2 text-[12px] leading-6 text-ink-600 dark:text-ink-300">
-              <li>• فقط انتخاب مشتری برای ثبت الزامی است.</li>
+              <li>• مشتری، نماینده و لیست برای ثبت الزامی هستند.</li>
               <li>• نماینده و لیست آخرین بار انتخاب‌شده، خودکار می‌آید.</li>
+              <li>• ساخت سریع مشتری، او را در لیست و زیر نماینده همین فرم ثبت می‌کند.</li>
               <li>• تگ «فوری» برای پیگیری سریع در داشبورد استفاده می‌شود.</li>
               <li>• مبالغ دلار و تومان جداگانه جمع می‌شوند.</li>
             </ul>

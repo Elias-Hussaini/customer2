@@ -49,6 +49,12 @@ export class VisaDB extends Dexie {
       attachments: "id, customerId, kind, createdAt",
       preferences: "id",
     });
+    // v2: customers are always registered inside a list and under a
+    // representative — index both for filtering and cascade detach.
+    this.version(2).stores({
+      customers:
+        "id, firstName, lastName, passportNo, registrationDate, createdAt, archivedAt, listId, representativeId",
+    });
   }
 }
 

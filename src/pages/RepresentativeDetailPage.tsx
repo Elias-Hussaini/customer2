@@ -66,9 +66,11 @@ export function RepresentativeDetailPage() {
     [payments, id],
   );
   const repCustomers = useMemo(() => {
+    // Customers assigned directly to this representative, plus any that reached
+    // them through a visa request (covers records created before the rule).
     const ids = new Set(repRequests.map((r) => r.customerId));
-    return (customers ?? []).filter((c) => ids.has(c.id));
-  }, [customers, repRequests]);
+    return (customers ?? []).filter((c) => c.representativeId === id || ids.has(c.id));
+  }, [customers, repRequests, id]);
 
   if (!rep) {
     return (
@@ -140,7 +142,7 @@ export function RepresentativeDetailPage() {
         <StatCard icon={FilePlus2} label="کل درخواست‌ها" value={toPersianDigits(stats.total)} tone="brand" />
         <StatCard icon={CheckCircle2} label="صادر شده" value={toPersianDigits(stats.issued)} tone="success" />
         <StatCard icon={Clock3} label="در حال کار" value={toPersianDigits(stats.inProgress)} tone="warning" />
-        <StatCard icon={Users} label="مشتریان" value={toPersianDigits(stats.customers)} tone="info" />
+        <StatCard icon={Users} label="مشتریان" value={toPersianDigits(repCustomers.length)} tone="info" />
       </div>
 
       {/* Financial summary */}
@@ -219,20 +221,28 @@ export function RepresentativeDetailPage() {
               <EmptyState icon={Users} title="مشتری‌ای ندارد" compact />
             ) : (
               <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
-                {repCustomers.map((c) => (
-                  <button
-                    key={c.id}
-                    className="glass rounded-2xl p-3.5 text-right transition-transform active:scale-95"
-                    onClick={() => navigate(`/customers/${c.id}`)}
-                  >
-                    <p className="truncate text-[13px] font-bold">{customerFullName(c)}</p>
-                    {c.passportNo && (
-                      <p dir="ltr" className="num mt-1 text-[11px] text-ink-400">
-                        {c.passportNo}
-                      </p>
-                    )}
-                  </button>
-                ))}
+                {repCustomers.map((c) => {
+                  const list = (lists ?? []).find((l) => l.id === c.listId);
+                  return (
+                    <button
+                      key={c.id}
+                      className="glass rounded-2xl p-3.5 text-right transition-transform active:scale-95"
+                      onClick={() => navigate(`/customers/${c.id}`)}
+                    >
+                      <p className="truncate text-[13px] font-bold">{customerFullName(c)}</p>
+                      {c.passportNo && (
+                        <p dir="ltr" className="num mt-1 text-[11px] text-ink-400">
+                          {c.passportNo}
+                        </p>
+                      )}
+                      {list && (
+                        <p className="mt-1 truncate text-[10.5px] text-ink-500 dark:text-ink-400">
+                          لیست: {list.name}
+                        </p>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             ),
           },

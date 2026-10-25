@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { Modal } from "../ui/Modal";
 import { Button } from "../ui/Button";
 import { FormField, Input, Textarea } from "../ui/fields";
 import { JalaliDatePicker } from "../ui/JalaliDatePicker";
+import { DatePicker } from "../ui/DatePicker";
+import { SearchSelect } from "../ui/inputs";
 import { CustomFieldsGroup } from "../ui/CustomFields";
 import { createCustomer, findDuplicatePassport, updateCustomer, customerFullName } from "../../db/customers";
-import { useCustomFields } from "../../hooks/useData";
+import { updatePrefs } from "../../db/prefs";
+import { useCustomFields, useLists, usePrefs, useRepresentatives } from "../../hooks/useData";
 import { useToast } from "../../hooks/useToast";
 import { todayIso } from "../../utils/jalali";
 import type { Customer } from "../../types";
@@ -28,6 +31,8 @@ interface FormState {
   passportExpiryDate: string | null;
   referrer: string;
   notes: string;
+  representativeId: string | null;
+  listId: string | null;
   registrationDate: string | null;
   customValues: Record<string, unknown>;
 }
@@ -41,6 +46,8 @@ const EMPTY: FormState = {
   passportExpiryDate: null,
   referrer: "",
   notes: "",
+  representativeId: null,
+  listId: null,
   registrationDate: null,
   customValues: {},
 };
@@ -48,10 +55,24 @@ const EMPTY: FormState = {
 export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
   const toast = useToast();
   const customFields = useCustomFields();
+  const prefs = usePrefs();
+  const representatives = useRepresentatives();
+  const lists = useLists();
   const [form, setForm] = useState<FormState>(EMPTY);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [dupWarning, setDupWarning] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Read the latest values inside the open-effect without re-running it
+  // whenever live queries refresh (would wipe user input otherwise).
+  const prefsRef = useRef(prefs);
+  prefsRef.current = prefs;
+  const repsRef = useRef(representatives);
+  repsRef.current = representatives;
+  const listsRef = useRef(lists);
+  listsRef.current = lists;
+
+  const calMode = prefs.passportDateCalendar ?? "gregorian";
 
   const fields = useMemo(
     () =>
@@ -75,11 +96,27 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
           passportExpiryDate: customer.passportExpiryDate ?? null,
           referrer: customer.referrer ?? "",
           notes: customer.notes ?? "",
+          representativeId: customer.representativeId ?? null,
+          listId: customer.listId ?? null,
           registrationDate: customer.registrationDate,
           customValues: { ...(customer.customValues ?? {}) },
         });
       } else {
-        setForm({ ...EMPTY, registrationDate: todayIso() });
+        // Pre-fill list & representative from the remembered last selection.
+        const p = prefsRef.current;
+        const lastRep =
+          p.rememberLastSelections &&
+          p.lastRepresentativeId &&
+          (repsRef.current ?? []).some((r) => r.id === p.lastRepresentativeId)
+            ? p.lastRepresentativeId
+            : null;
+        const lastList =
+          p.rememberLastSelections &&
+          p.lastListId &&
+          (listsRef.current ?? []).some((l) => l.id === p.lastListId)
+            ? p.lastListId
+            : null;
+        setForm({ ...EMPTY, representativeId: lastRep, listId: lastList, registrationDate: todayIso() });
       }
     }
   }, [open, customer]);
@@ -97,6 +134,12 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
     const next: Record<string, string> = {};
     if (!form.firstName.trim() && !form.lastName.trim() && !form.passportNo.trim()) {
       next.firstName = "حداقل نام، نام خانوادگی یا شماره پاسپورت را وارد کنید";
+    }
+    if (!form.representativeId) {
+      next.representativeId = "هر مشتری باید زیر یک نماینده ثبت شود";
+    }
+    if (!form.listId) {
+      next.listId = "هر مشتری باید در یک لیست قرار بگیرد";
     }
     for (const field of fields) {
       const v = form.customValues[field.key];
@@ -122,6 +165,8 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
         passportExpiryDate: form.passportExpiryDate ?? undefined,
         referrer: form.referrer,
         notes: form.notes,
+        representativeId: form.representativeId,
+        listId: form.listId,
         registrationDate: form.registrationDate || todayIso(),
         customValues: form.customValues,
       };
@@ -133,6 +178,13 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
         const created = await createCustomer(input);
         toast.success(`مشتری «${customerFullName(created)}» ثبت شد`);
         onSaved?.(created);
+      }
+      // Remember list & representative for the next quick entry.
+      if (prefsRef.current.rememberLastSelections) {
+        await updatePrefs({
+          lastRepresentativeId: form.representativeId,
+          lastListId: form.listId,
+        });
       }
       onClose();
     } catch (e) {
@@ -148,7 +200,11 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
       open={open}
       onClose={onClose}
       title={customer ? "ویرایش مشتری" : "مشتری جدید"}
-      subtitle="همه فیلدها اختیاری هستند — حتی فقط با یک نام ذخیره کنید"
+      subtitle={
+        customer
+          ? undefined
+          : "لیست و نماینده الزامی است — بقیه فیلدها را می‌توانید بعداً کامل کنید"
+      }
       size="lg"
       footer={
         <div className="flex items-center justify-end gap-2">
@@ -162,6 +218,38 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
       }
     >
       <div className="flex flex-col gap-4">
+        {/* List & representative — every customer MUST belong to both. */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <FormField
+            label="نماینده"
+            required
+            error={errors.representativeId}
+            hint="مشتری زیر این نماینده ثبت می‌شود"
+          >
+            <SearchSelect
+              items={(representatives ?? []).map((r) => ({ id: r.id, title: r.name, subtitle: r.phone }))}
+              value={form.representativeId}
+              onSelect={(v) => setForm({ ...form, representativeId: v })}
+              placeholder="انتخاب نماینده…"
+              clearable={false}
+            />
+          </FormField>
+          <FormField
+            label="لیست"
+            required
+            error={errors.listId}
+            hint="مشتری در این لیست قرار می‌گیرد"
+          >
+            <SearchSelect
+              items={(lists ?? []).map((l) => ({ id: l.id, title: l.name }))}
+              value={form.listId}
+              onSelect={(v) => setForm({ ...form, listId: v })}
+              placeholder="انتخاب لیست…"
+              clearable={false}
+            />
+          </FormField>
+        </div>
+
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <FormField label="نام" error={errors.firstName}>
             <Input
@@ -194,8 +282,9 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
               placeholder="چه کسی معرفی کرده؟"
             />
           </FormField>
-          <FormField label="تاریخ تولد">
-            <JalaliDatePicker
+          <FormField label="تاریخ تولد" hint={calMode === "gregorian" ? "میلادی" : "شمسی"}>
+            <DatePicker
+              calendar={calMode}
               value={form.birthDate}
               onChange={(iso) => setForm({ ...form, birthDate: iso })}
             />
@@ -207,14 +296,16 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
               clearable={false}
             />
           </FormField>
-          <FormField label="تاریخ صدور پاسپورت">
-            <JalaliDatePicker
+          <FormField label="تاریخ صدور پاسپورت" hint={calMode === "gregorian" ? "میلادی" : "شمسی"}>
+            <DatePicker
+              calendar={calMode}
               value={form.passportIssueDate}
               onChange={(iso) => setForm({ ...form, passportIssueDate: iso })}
             />
           </FormField>
-          <FormField label="تاریخ انقضای پاسپورت">
-            <JalaliDatePicker
+          <FormField label="تاریخ انقضای پاسپورت" hint={calMode === "gregorian" ? "میلادی" : "شمسی"}>
+            <DatePicker
+              calendar={calMode}
               value={form.passportExpiryDate}
               onChange={(iso) => setForm({ ...form, passportExpiryDate: iso })}
             />

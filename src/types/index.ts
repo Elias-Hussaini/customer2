@@ -1,6 +1,9 @@
-/** Core domain types for the 2Customer visa management system. */
+/** Core domain types for the E-managment visa system. */
 
 export type Currency = "USD" | "IRT";
+
+/** Which calendar is used for birth-date / passport-date entry & display. */
+export type CalendarMode = "jalali" | "gregorian";
 
 export type FieldType =
   | "text"
@@ -29,13 +32,16 @@ export interface Customer {
   id: string;
   firstName?: string;
   lastName?: string;
-  /** ISO yyyy-mm-dd (Gregorian, stored internally, shown as Jalali). */
+  /** ISO yyyy-mm-dd (Gregorian, stored internally, shown per calendar setting). */
   birthDate?: string;
   passportNo?: string;
   passportIssueDate?: string;
   passportExpiryDate?: string;
   referrer?: string;
   notes?: string;
+  /** Every customer is registered under a representative and inside a list. */
+  representativeId?: string | null;
+  listId?: string | null;
   /** Registration date — defaults to today, editable at creation. */
   registrationDate: string;
   /** Values keyed by custom-field key. Survives field-definition edits. */
@@ -180,6 +186,8 @@ export interface AppPreferences {
   id: "app";
   defaultCurrency: Currency;
   defaultVisaType?: string;
+  /** Calendar used for birth & passport dates (picker + display). */
+  passportDateCalendar: CalendarMode;
   rememberLastSelections: boolean;
   lastRepresentativeId?: string | null;
   lastListId?: string | null;

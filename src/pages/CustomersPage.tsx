@@ -8,7 +8,7 @@ import { SearchBox, FilterSelect } from "../components/ui/inputs";
 import { Menu } from "../components/ui/Menu";
 import { CustomerFormModal } from "../components/domain/CustomerFormModal";
 import { archiveCustomer, deleteCustomer, customerFullName } from "../db/customers";
-import { useCustomers, useRepresentatives, useRequests } from "../hooks/useData";
+import { useCustomers, useLists, useRepresentatives, useRequests } from "../hooks/useData";
 import { useConfirm } from "../hooks/useConfirm";
 import { useToast } from "../hooks/useToast";
 import { formatJalali, toPersianDigits } from "../utils/jalali";
@@ -22,6 +22,7 @@ export function CustomersPage() {
   const customers = useCustomers();
   const requests = useRequests();
   const representatives = useRepresentatives();
+  const lists = useLists();
 
   const [query, setQuery] = useState("");
   const [repFilter, setRepFilter] = useState("");
@@ -40,16 +41,35 @@ export function CustomersPage() {
     return map;
   }, [requests]);
 
-  const repIdsWithCustomers = useMemo(() => {
-    const set = new Set((requests ?? []).map((r) => r.representativeId).filter(Boolean) as string[]);
-    return set;
+  /** Fallback for customers registered before the required rule: derive rep/list
+   *  from their first request when the customer record has none. */
+  const derivedRepByCustomer = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of requests ?? []) {
+      if (r.representativeId && !m.has(r.customerId)) m.set(r.customerId, r.representativeId);
+    }
+    return m;
   }, [requests]);
+
+  const derivedListByCustomer = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of requests ?? []) {
+      if (r.listId && !m.has(r.customerId)) m.set(r.customerId, r.listId);
+    }
+    return m;
+  }, [requests]);
+
+  const repById = useMemo(() => new Map((representatives ?? []).map((r) => [r.id, r])), [representatives]);
+  const listById = useMemo(() => new Map((lists ?? []).map((l) => [l.id, l])), [lists]);
+
+  const displayRepId = (c: Customer): string | null =>
+    c.representativeId ?? derivedRepByCustomer.get(c.id) ?? null;
+  const displayListId = (c: Customer): string | null => c.listId ?? derivedListByCustomer.get(c.id) ?? null;
 
   const rows = useMemo(() => {
     let list = [...(customers ?? [])];
     if (repFilter) {
-      const ids = new Set((requests ?? []).filter((r) => r.representativeId === repFilter).map((r) => r.customerId));
-      list = list.filter((c) => ids.has(c.id));
+      list = list.filter((c) => displayRepId(c) === repFilter);
     }
     if (query.trim()) {
       const q = query.trim().toLowerCase();
@@ -71,6 +91,7 @@ export function CustomersPage() {
         break;
     }
     return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customers, requests, query, repFilter, sort]);
 
   const columns: Column<Customer>[] = [
@@ -102,6 +123,48 @@ export function CustomersPage() {
         ) : (
           <span className="text-ink-400">—</span>
         ),
+    },
+    {
+      key: "representative",
+      header: "نماینده",
+      sortValue: (c) => repById.get(displayRepId(c) ?? "")?.name ?? "",
+      render: (c) => {
+        const rep = repById.get(displayRepId(c) ?? "");
+        return rep ? (
+          <button
+            className="chip-soft inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] hover:text-brand-600"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/representatives/${rep.id}`);
+            }}
+          >
+            {rep.name}
+          </button>
+        ) : (
+          <span className="text-ink-400">—</span>
+        );
+      },
+    },
+    {
+      key: "list",
+      header: "لیست",
+      sortValue: (c) => listById.get(displayListId(c) ?? "")?.name ?? "",
+      render: (c) => {
+        const l = listById.get(displayListId(c) ?? "");
+        return l ? (
+          <button
+            className="chip-soft inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] hover:text-brand-600"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/lists/${l.id}`);
+            }}
+          >
+            {l.name}
+          </button>
+        ) : (
+          <span className="text-ink-400">—</span>
+        );
+      },
     },
     {
       key: "requests",
@@ -207,7 +270,13 @@ export function CustomersPage() {
           options={[
             { value: "", label: "همه مشتریان" },
             ...(representatives ?? [])
-              .filter((r) => repIdsWithCustomers.has(r.id))
+              .filter((r) =>
+                (customers ?? []).some(
+                  (c) =>
+                    c.representativeId === r.id ||
+                    derivedRepByCustomer.get(c.id) === r.id,
+                ),
+              )
               .map((r) => ({ value: r.id, label: `مشتریان ${r.name}` })),
           ]}
         />

@@ -134,6 +134,9 @@ export function searchDataset(query: string, ds: SearchDataset, filters: SearchF
         { text: c.passportNo ?? "", weight: 4 },
         { text: c.referrer ?? "", weight: 2 },
         { text: c.notes ?? "", weight: 1 },
+        // find customers by their representative / list name too
+        { text: ds.repsById.get(c.representativeId ?? "")?.name ?? "", weight: 2 },
+        { text: ds.listsById.get(c.listId ?? "")?.name ?? "", weight: 2 },
         ...customValuesText(c, ds.searchableFields.filter((f) => f.entity === "customer")),
       ];
       let score = scoreFields(rawTokens, fields);

@@ -32,7 +32,7 @@ export function TopBar() {
   const tags = useTags() ?? [];
   const customFields = useCustomFields() ?? [];
 
-  const section = SECTION_TITLES.find((s) => s.match(location.pathname))?.title ?? "۲کاستومر";
+  const section = SECTION_TITLES.find((s) => s.match(location.pathname))?.title ?? "E-managment";
 
   const quickItems: MenuItem[] = [
     { icon: FilePlus2, label: "درخواست ویزا جدید", onClick: () => uiActions.openRequestModal() },
@@ -57,7 +57,7 @@ export function TopBar() {
             className="h-9 w-9 rounded-[11px] shadow-[0_4px_14px_-4px_rgba(99,91,255,0.5)]"
           />
           <span className="hidden text-right leading-tight sm:block">
-            <span className="block text-[13px] font-extrabold">۲کاستومر</span>
+            <span className="block text-[13px] font-extrabold" dir="ltr">E-managment</span>
             <span className="block text-[10px] text-ink-500 dark:text-ink-400">{section}</span>
           </span>
         </button>

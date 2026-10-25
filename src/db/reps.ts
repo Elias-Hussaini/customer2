@@ -80,12 +80,19 @@ export async function deleteRepresentative(id: string, name: string): Promise<{ 
       reason: `این نماینده ${paymentCount} پرداخت ثبت‌شده دارد. ابتدا پرداخت‌ها را حذف کنید یا نماینده را بایگانی کنید.`,
     };
   }
-  await db.transaction("rw", db.representatives, db.requests, async () => {
+  await db.transaction("rw", db.representatives, db.requests, db.customers, async () => {
     await db.representatives.delete(id);
     const linked = await db.requests.where("representativeId").equals(id).toArray();
     await Promise.all(
       linked.map((r) =>
         db.requests.update(r.id, { representativeId: null, updatedAt: Date.now() }),
+      ),
+    );
+    // Customers registered under this representative are kept, but detached.
+    const linkedCustomers = await db.customers.where("representativeId").equals(id).toArray();
+    await Promise.all(
+      linkedCustomers.map((c) =>
+        db.customers.update(c.id, { representativeId: null, updatedAt: Date.now() }),
       ),
     );
   });
