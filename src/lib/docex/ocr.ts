@@ -5,6 +5,10 @@
  * model (traineddata) is fetched once from a public CDN and cached by the
  * browser. Persian (fas) + English (eng) are supported.
  *
+ * Worker POOL per language: several pages of a scan are recognized in
+ * parallel (slot 0, 1, …) instead of one after another. Workers stay warm
+ * across uploads; a crashed slot is recreated on the next call.
+ *
  * Preprocessing (grayscale → contrast stretch → optional Otsu binarize)
  * is done on a canvas before recognition — deterministic, no magic.
  */
@@ -21,12 +25,16 @@ type TesseractWorker = {
   terminate(): Promise<unknown>;
 };
 
-/** One persistent worker per language — eng and fas run in PARALLEL on the
- *  same page instead of sequentially, and stay warm across uploads. */
-const workers = new Map<string, TesseractWorker>();
+export type OcrLang = "eng" | "fas";
 
-async function getWorker(lang: string): Promise<TesseractWorker> {
-  const cached = workers.get(lang);
+/** Warm slots per language — the pool the pipeline runs pages through. */
+const POOL_SIZE: Record<OcrLang, number> = { eng: 2, fas: 1 };
+
+const workers = new Map<string, TesseractWorker>(); // key: `${lang}#${slot}`
+
+async function getWorker(lang: OcrLang, slot: number): Promise<TesseractWorker> {
+  const key = `${lang}#${slot}`;
+  const cached = workers.get(key);
   if (cached) return cached;
   const { createWorker } = await import("tesseract.js");
   const worker = await createWorker(lang, 1, {
@@ -35,24 +43,39 @@ async function getWorker(lang: string): Promise<TesseractWorker> {
     },
   });
   const w = worker as unknown as TesseractWorker;
-  workers.set(lang, w);
+  workers.set(key, w);
   return w;
 }
 
-/** Drop a broken worker so the next call recreates it cleanly. */
-export function resetWorker(lang: string): void {
-  const w = workers.get(lang);
+/** Terminate one slot (index within the language pool). */
+export function resetSlot(lang: OcrLang, slot: number): void {
+  const key = `${lang}#${slot}`;
+  const w = workers.get(key);
   if (w) {
-    workers.delete(lang);
-    void w.terminate();
+    workers.delete(key);
+    void w.terminate().catch(() => undefined);
   }
 }
 
-/** Preload both OCR engines in the background (first document then fills
- *  in a couple of seconds instead of paying the worker+model load cost). */
+/** Drop broken workers of a language so the next call recreates them. */
+export function resetWorker(lang: string): void {
+  const dead = [...workers.entries()].filter(([k]) => k.startsWith(`${lang}#`));
+  for (const [k, w] of dead) {
+    workers.delete(k);
+    void w.terminate().catch(() => undefined);
+  }
+}
+
+/** Preload the OCR engines in the background (first document then fills in
+ *  a couple of seconds instead of paying the worker+model load cost).
+ *  English slots first — the passport/MRZ pass runs on them. */
 export async function warmupOcr(): Promise<void> {
   try {
-    await Promise.all([getWorker("eng"), getWorker("fas")]);
+    await Promise.all([
+      getWorker("eng", 0),
+      getWorker("eng", 1),
+      getWorker("fas", 0),
+    ]);
   } catch {
     /* offline / CDN hiccup — surfaced later by the actual run */
   }
@@ -152,13 +175,16 @@ function otsuThreshold(hist: Uint32Array, total: number): number {
   return threshold;
 }
 
-/** Run OCR on a preprocessed canvas. */
+/** Run OCR on a preprocessed canvas. `slot` picks the pool worker so several
+ *  pages can be recognized concurrently. */
 export async function runOcr(
   canvas: HTMLCanvasElement,
   lang: string,
   onProgress?: (pct: number, stage: string) => void,
+  slot = 0,
 ): Promise<OcrOutcome> {
-  const worker = await getWorker(lang);
+  const pool = POOL_SIZE[lang as OcrLang] ?? 1;
+  const worker = await getWorker(lang as OcrLang, slot % pool);
   onProgress?.(10, "بارگذاری موتور OCR");
   const result = await worker.recognize(canvas);
   onProgress?.(95, "تحلیل نتیجه");

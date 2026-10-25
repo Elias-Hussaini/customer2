@@ -163,30 +163,94 @@ function repairAgainstCheck(field: string, expected: number): string | null {
 /* Name parsing                                                        */
 /* ------------------------------------------------------------------ */
 
-export function parseMrzName(field: string): { surname: string; givenNames: string } | null {
+const VOWELS = /[AEIOU]/;
+
+/**
+ * Structural repair of an OCR'd MRZ name field (ICAO Doc 9303 layout):
+ *
+ *  1. A single consonant SANDWICHED between filler runs ("AHMADI<K<NOOR")
+ *     is a misread '<' — real MRZ separators are '<' and the OCR engine
+ *     routinely emits K/L/C for them. Vowel initials ("<A<") are kept.
+ *  2. A vowel-less letter cluster flanked by filler runs ("<<<KLKL<<<")
+ *     is filler garble — every real romanized Persian/Arabic name token
+ *     carries at least one vowel (A E I O U).
+ *
+ * Deterministic, dictionary-free. Returns the repaired field plus whether
+ * garble was dropped (used to flag the name for review).
+ */
+export function repairNameField(field: string): { field: string; dropped: boolean } {
+  // 1. consonant between fillers → filler
+  let s = field.replace(/(?<=<)([B-Z])(?=<)/g, (c) => (VOWELS.test(c) ? c : "<"));
+  // 2. vowel-less clusters adjacent to filler runs (or the field edges) → garble
+  let dropped = false;
+  const parts = s.split(/(<+)/);
+  const out: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (!p) continue;
+    if (p.startsWith("<")) {
+      out.push(p);
+      continue;
+    }
+    const leftIsFiller = out.length > 0 && out[out.length - 1].includes("<");
+    const rightIsFiller = i + 1 < parts.length && parts[i + 1].includes("<");
+    // Only PURE-LETTER vowel-less clusters are garble — tokens with digits
+    // are data (optional-data field: personal numbers, issue dates…).
+    const pureLetters = !/\d/.test(p);
+    if (pureLetters && !VOWELS.test(p) && (leftIsFiller || out.length === 0) && (rightIsFiller || i + 1 >= parts.length)) {
+      dropped = true;
+      out.push("<"); // treat the garble cluster as filler
+    } else {
+      out.push(p);
+    }
+  }
+  return { field: out.join(""), dropped };
+}
+
+export interface MrzName {
+  surname: string;
+  givenNames: string;
+  /** True when the << surname/given separator was reconstructed from
+   *  single-< tokens (OCR merged it) — flagged for review. */
+  inferredSplit?: boolean;
+}
+
+export function parseMrzName(field: string): MrzName | null {
   // field like "AHMADI<<NOOR<MOHAMMAD<<<<<<"
   const s = field.replace(/<+$/g, "");
+  if (!s) return null;
   const m = s.match(/^([A-Z]+(?:<[A-Z]+)*)<<(.*)$/);
-  if (!m) {
-    // Single-name documents (no << separator): everything is the surname.
-    if (/^[A-Z]+$/.test(s)) return { surname: dropOcrGarble(s), givenNames: "" };
-    return null;
+  if (m) {
+    const surname = dropOcrGarble(m[1].replace(/</g, " ").trim());
+    const givenNames = dropOcrGarble((m[2] || "").replace(/</g, " ").trim());
+    if (!surname && !givenNames) return null;
+    return { surname, givenNames };
   }
-  const surname = dropOcrGarble(m[1].replace(/</g, " ").trim());
-  const givenNames = dropOcrGarble((m[2] || "").replace(/</g, " ").trim());
-  return { surname, givenNames };
+  // OCR merged the << separator into single < everywhere ("AHMADI<NOOR<MOHAMMAD"):
+  // ICAO order is SURNAME first — split first token vs the rest, flagged.
+  const toks = s.split(/<+/).filter(Boolean);
+  if (toks.length >= 2) {
+    const surname = dropOcrGarble(toks[0]);
+    const givenNames = dropOcrGarble(toks.slice(1).join(" "));
+    if (!surname && !givenNames) return null;
+    return { surname, givenNames, inferredSplit: true };
+  }
+  // Single-name documents (no separator at all): everything is the surname.
+  if (/^[A-Z]+$/.test(s)) return { surname: dropOcrGarble(s), givenNames: "" };
+  return null;
 }
 
 /**
- * OCR filler-garbage removal: tesseract often misreads '<' fillers as
- * K/L/C/I clusters ("LLLCLLLLLKLKL"). Real name tokens contain vowels;
- * vowel-less letter clusters mixed into filler runs are dropped.
- * Deterministic and safe: only removes tokens when a valid one remains.
+ * OCR filler-garbage removal: vowel-less letter clusters mixed into filler
+ * runs are dropped ("LLLCLLLLLKLKL" ← misread '<' fillers). Real name tokens
+ * contain vowels. Only applied inside filler-adjacent context (the caller
+ * repairs the field first); a lone vowel-less token is kept only when it is
+ * the whole name — and then flagged downstream.
  */
 function dropOcrGarble(name: string): string {
   const tokens = name.split(/\s+/).filter(Boolean);
-  if (tokens.length <= 1) return tokens[0] ?? name;
-  const kept = tokens.filter((t) => /[AEIOU]/.test(t));
+  if (tokens.length <= 1) return tokens[0] ?? "";
+  const kept = tokens.filter((t) => VOWELS.test(t));
   return (kept.length ? kept : tokens).join(" ");
 }
 
@@ -238,15 +302,58 @@ function validateWithCheck(
   return { value, repaired: false };
 }
 
+/** Shared name-field → fields mapping with repair + honest statuses. */
+function applyMrzName(
+  fields: Partial<Record<CanonicalField, ExtractedValue>>,
+  nameFieldRaw: string,
+): void {
+  const { field: nameField, dropped } = repairNameField(nameFieldRaw);
+  const name = parseMrzName(nameField);
+  if (!name) return;
+  const clean = !dropped && !name.inferredSplit;
+  const note = name.inferredSplit
+    ? "جداکنندهٔ نام/نام خانوادگی در MRZ ناخوانا بود — بازبینی کنید"
+    : dropped
+      ? "بخش ناخوانای نام نادیده گرفته شد — بازبینی کنید"
+      : undefined;
+  if (name.surname) {
+    fields.surname = {
+      value: name.surname,
+      raw: nameFieldRaw,
+      status: clean ? "confirmed" : "needs_review",
+      method: "mrz",
+      note,
+    };
+  }
+  if (name.givenNames) {
+    fields.givenNames = {
+      value: name.givenNames,
+      raw: nameFieldRaw,
+      status: clean ? "confirmed" : "needs_review",
+      method: "mrz",
+      note,
+    };
+  }
+  const full = `${name.givenNames} ${name.surname}`.trim();
+  if (full) {
+    fields.fullName = {
+      value: full,
+      raw: nameFieldRaw,
+      status: clean ? "confirmed" : "needs_review",
+      method: "mrz",
+      note,
+    };
+  }
+}
+
 /** TD3 — passport booklet, 2 lines × 44 chars. */
 function parseTD3(l1: string, l2: string): RawParsed | null {
   const A = fit(l1, 44);
   const B = fit(l2, 44);
   if (!/^P[<A-Z]/.test(A)) return null;
   const checks: Record<string, boolean> = {};
-  const nameField = A.slice(5);
-  const name = parseMrzName(nameField);
   const fields: Partial<Record<CanonicalField, ExtractedValue>> = {};
+  applyMrzName(fields, A.slice(5));
 
   // Line 2: doc(9) ck(1) nat(3) dob(6) ck(1) sex(1) exp(6) ck(1) optional(14) ck(1)
   const docRaw = B.slice(0, 9);
@@ -280,21 +387,6 @@ function parseTD3(l1: string, l2: string): RawParsed | null {
     status: "confirmed",
     method: "mrz",
   };
-  if (name) {
-    fields.surname = { value: name.surname, raw: nameField, status: "confirmed", method: "mrz" };
-    fields.givenNames = {
-      value: name.givenNames,
-      raw: nameField,
-      status: "confirmed",
-      method: "mrz",
-    };
-    fields.fullName = {
-      value: `${name.givenNames} ${name.surname}`.trim(),
-      raw: nameField,
-      status: "confirmed",
-      method: "mrz",
-    };
-  }
   const dob = parseMrzDate(dobRaw, "birth");
   checks.dob = checkDigit(dobRaw) === charValue(dobCk);
   fields.dateOfBirth = {
@@ -319,7 +411,10 @@ function parseTD3(l1: string, l2: string): RawParsed | null {
     status: sex === "M" || sex === "F" || sex === "<" ? "confirmed" : "needs_review",
     method: "mrz",
   };
-  const personal = opt.replace(/<+$/g, "");
+  // Optional data: filler-adjacent garble letters are misread '<' — clean
+  // them out before deciding between personal number / issue date.
+  const optClean = repairNameField(opt).field;
+  const personal = optClean.replace(/<+$/g, "").replace(/</g, "").trim();
   if (personal) {
     const p = validateWithCheck(opt, optCk, "personalNumber", checks);
     fields.personalNumber = {
@@ -389,17 +484,7 @@ function parseTD1(l1: string, l2: string, l3: string): RawParsed | null {
   };
   fields.issuingCountry = { value: A.slice(2, 5), raw: A.slice(2, 5), status: "confirmed", method: "mrz" };
   fields.nationality = { value: nat, raw: nat, status: "confirmed", method: "mrz" };
-  const name = parseMrzName(C.replace(/<+$/g, ""));
-  if (name) {
-    fields.surname = { value: name.surname, raw: C, status: "confirmed", method: "mrz" };
-    fields.givenNames = { value: name.givenNames, raw: C, status: "confirmed", method: "mrz" };
-    fields.fullName = {
-      value: `${name.givenNames} ${name.surname}`.trim(),
-      raw: C,
-      status: "confirmed",
-      method: "mrz",
-    };
-  }
+  applyMrzName(fields, C);
   const dob = parseMrzDate(dobRaw, "birth");
   checks.dob = checkDigit(dobRaw) === charValue(dobCk);
   fields.dateOfBirth = {
@@ -456,7 +541,7 @@ function parseTD2(l1: string, l2: string): RawParsed | null {
   const checks: Record<string, boolean> = {};
   const fields: Partial<Record<CanonicalField, ExtractedValue>> = {};
   const nameField = A.slice(5, 36);
-  const name = parseMrzName(nameField);
+  applyMrzName(fields, nameField);
   const docRaw = B.slice(0, 9);
   const docCk = B[9];
   const nat = B.slice(10, 13);
@@ -476,16 +561,6 @@ function parseTD2(l1: string, l2: string): RawParsed | null {
   };
   fields.issuingCountry = { value: A.slice(2, 5), raw: A.slice(2, 5), status: "confirmed", method: "mrz" };
   fields.nationality = { value: nat, raw: nat, status: "confirmed", method: "mrz" };
-  if (name) {
-    fields.surname = { value: name.surname, raw: nameField, status: "confirmed", method: "mrz" };
-    fields.givenNames = { value: name.givenNames, raw: nameField, status: "confirmed", method: "mrz" };
-    fields.fullName = {
-      value: `${name.givenNames} ${name.surname}`.trim(),
-      raw: nameField,
-      status: "confirmed",
-      method: "mrz",
-    };
-  }
   const dob = parseMrzDate(dobRaw, "birth");
   checks.dob = checkDigit(dobRaw) === charValue(dobCk);
   fields.dateOfBirth = {
@@ -508,7 +583,7 @@ function parseTD2(l1: string, l2: string): RawParsed | null {
     status: "confirmed",
     method: "mrz",
   };
-  const personal = opt.replace(/<+$/g, "");
+  const personal = repairNameField(opt).field.replace(/<+$/g, "").replace(/</g, "").trim();
   if (personal) fields.personalNumber = { value: personal, raw: opt, status: "needs_review", method: "mrz" };
   return { format: "TD2", lines: [A, B], fields, checks, allValid: Object.values(checks).every(Boolean) };
 }

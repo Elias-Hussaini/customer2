@@ -40,6 +40,18 @@ export function validIso(y: number, m: number, d: number): string | null {
   return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
+/** Shift an ISO date by whole years (Feb 29 clamps to Feb 28). */
+export function shiftIsoYears(iso: string, delta: number): string | null {
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = +m[1] + delta;
+  const mo = +m[2];
+  const d = +m[3];
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCMonth() !== mo - 1) return validIso(y, mo, 28); // day left the month
+  return validIso(y, mo, d);
+}
+
 const EN_MONTHS: Record<string, number> = {
   jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4,
   may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9, sept: 9,
@@ -58,6 +70,41 @@ const FA_MONTHS: Record<string, number> = {
   "جنوری": 1, "فبروری": 2, "مارچ": 3, "اپریل": 4, "می": 5, "جون": 6,
   "جولای": 7, "اگست": 8, "سپتمبر": 9, "اکتوبر": 10, "نومبر": 11, "دسمبر": 12,
 };
+
+function levenshtein1(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const prev = new Array<number>(b.length + 1);
+  const cur = new Array<number>(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    cur[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+    }
+    for (let j = 0; j <= b.length; j++) prev[j] = cur[j];
+  }
+  return prev[b.length];
+}
+
+/** Month lookup with OCR tolerance: exact first, then a UNIQUE month at
+ *  edit distance 1 ("BAY" → MAY, "0CT" → OCT). Ambiguous → null. */
+function lookupEnMonth(token: string): number | null {
+  const t = token.toLowerCase().replace(/^0/, "o");
+  if (EN_MONTHS[t]) return EN_MONTHS[t];
+  if (token.length < 3) return null;
+  let best: number | null = null;
+  for (const [name, num] of Object.entries(EN_MONTHS)) {
+    if (Math.abs(name.length - t.length) > 1) continue;
+    if (levenshtein1(t, name) === 1) {
+      if (best != null && best !== num) return null; // two months fit → give up
+      best = num;
+    }
+  }
+  return best;
+}
 
 /** Jalali → Gregorian ISO via jalaali-js (already a project dependency). */
 import { toGregorian } from "jalaali-js";
@@ -106,11 +153,11 @@ export function parsePrintedDate(input: string): string | null {
   }
 
   // dd <month-name> yyyy (EN or FA) — separators optional (OCR glues
-  // “15MAR2022”); month lookup tolerates a leading 0 (O→0 misreads).
+  // “15MAR2022”); month lookup tolerates a leading 0 (O→0 misreads) and a
+  // single-letter OCR slip (“31 BAY 2030” → MAY).
   m = s.match(/^(\d{1,2})[\s\-\/.]*(?:<[^>]*>\s*)?([A-Za-z\u0600-\u06FF]+)[\s\-\/.]*(\d{4})$/);
   if (m) {
-    const monKey = m[2].toLowerCase();
-    const mon = EN_MONTHS[monKey] ?? EN_MONTHS[monKey.replace(/^0/, "o")] ?? FA_MONTHS[m[2]];
+    const mon = lookupEnMonth(m[2]) ?? FA_MONTHS[m[2]] ?? null;
     if (mon) return validIso(+m[3], mon, +m[1]);
     // Jalali month with year → try Jalali
     if (/^1[23456]\d\d$/.test(m[3]) && FA_MONTHS[m[2]] && ["حمل","ثور","جوزا","سرطان","اسد","سنبله","میزان","عقرب","قوس","جدی","دلو","حوت","فروردین","اردیبهشت","خرداد","تیر","مرداد","شهریور","مهر","آبان","آذر","دی","بهمن","اسفند"].includes(m[2])) {
@@ -120,7 +167,7 @@ export function parsePrintedDate(input: string): string | null {
   // yyyy <month-name> dd
   m = s.match(/^(\d{4})\s+([A-Za-z\u0600-\u06FF]+)\s+(\d{1,2})$/);
   if (m) {
-    const mon = EN_MONTHS[m[2].toLowerCase()] ?? FA_MONTHS[m[2]];
+    const mon = lookupEnMonth(m[2]) ?? FA_MONTHS[m[2]] ?? null;
     if (mon) return validIso(+m[1], mon, +m[3]);
   }
 

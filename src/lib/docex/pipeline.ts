@@ -3,14 +3,17 @@
  * label extraction, per-page merging. Deterministic end-to-end; the human
  * confirms the final values before anything is saved.
  *
- * Speed strategy for multi-page PDFs (full passport scans etc.):
+ * Speed strategy for multi-page scanned PDFs (real passport booklets):
  *  1. FAST SCAN — read the text layer of every page in parallel and stop as
- *     soon as all core passport fields are found.
- *  2. OCR FALLBACK — only for scanned pages (blank pages are skipped quickly)
- *     with a hard page budget so huge scans never hang the form.
- *  3. SMART GUESS — when birth+expiry are known (MRZ) but the issue date
- *     label was unreadable, the issue date is inferred deterministically from
- *     the remaining dates on the page (flagged for review, never silent).
+ *     soon as all core passport fields are found (digital PDFs fill instantly).
+ *  2. ENGLISH-FIRST OCR — scanned pages are OCR'd TWO AT A TIME on a warm
+ *     worker pool (MRZ + Latin labels are what fill the form). The moment
+ *     every core field has a value — including the issue date, recovered by
+ *     the smart birth↔expiry inference when its label is unreadable — the
+ *     remaining pages are ABORTED mid-recognition. A 5-page scan fills in
+ *     about the time its bio page takes to OCR.
+ *  3. PERSIAN REFINE — only when core fields are still missing (tazkira
+ *     scans, stamp pages): a Persian pass over the already-scanned pages.
  */
 import type {
   CanonicalField,
@@ -21,7 +24,7 @@ import type {
 } from "./types";
 import { METHOD_RANK } from "./types";
 import { openPdf, hasTextLayer, type StructuredRow } from "./pdfread";
-import { preprocessCanvas, resetWorker, runOcr } from "./ocr";
+import { preprocessCanvas, resetSlot, resetWorker, runOcr, warmupOcr, type OcrLang } from "./ocr";
 import { parseMrzFromText } from "./mrz";
 import {
   detectKind,
@@ -29,15 +32,20 @@ import {
   extractByLayout,
   findDateCandidates,
   disambiguateIssueDate,
+  inferIssueDateFromYears,
   PASSPORT_PROFILE,
   TAZKIRA_PROFILE,
   VISA_FORM_PROFILE,
   VISA_STAMP_PROFILE,
 } from "./text";
+import { shiftIsoYears } from "./dates";
 
 export const MAX_FILE_BYTES = 25 * 1024 * 1024; // 25 MB
 export const MAX_TEXT_PAGES = 120; // text-layer scan is cheap — go wide
-export const MAX_OCR_PAGES = 10; // OCR budget — parallel eng+fas, early exit
+export const MAX_OCR_PAGES = 10; // English OCR budget
+export const MAX_FA_PAGES = 4; // Persian refinement budget
+/** Pages recognized in parallel during the English pass. */
+const OCR_PAGE_POOL = 2;
 /** Render DPI for OCR pages — 150 is the sweet spot for passport print. */
 const OCR_DPI = 150;
 
@@ -133,6 +141,14 @@ export interface RunOptions {
   onFields?: (fields: Partial<Record<CanonicalField, ExtractedValue>>) => void;
 }
 
+/** OCR outcome per language slot on one page. */
+interface PageOcrState {
+  eng?: string;
+  engConf?: number;
+  fa?: string;
+  faConf?: number;
+}
+
 /**
  * Process one uploaded file (PDF or image) end-to-end.
  * Never throws for content reasons — problems land in `warnings`.
@@ -153,7 +169,7 @@ export async function runExtraction(file: File, opts: RunOptions = {}): Promise<
     onProgress?.({ stage, page, totalPages, percent });
 
   // Progressive snapshot emitter — fires only when the value set actually
-  // grows, so the UI can fill the form live while later pages still scan.
+  // changes, so the UI can fill the form live while later pages still scan.
   const emit = (() => {
     let lastSig = "";
     return (fields: Partial<Record<CanonicalField, ExtractedValue>>) => {
@@ -203,18 +219,35 @@ export async function runExtraction(file: File, opts: RunOptions = {}): Promise<
         warnings.push(`فقط ${MAX_TEXT_PAGES} صفحهٔ اول بررسی شد (کل: ${totalPages} صفحه).`);
       }
 
-      // ---- Phase 1: parallel text-layer scan, early exit when complete ----
-      const merged: Partial<Record<CanonicalField, ExtractedValue>> = {};
-      const kinds: DocumentKind[] = [];
+      // All page results (text layer + OCR) keyed by page index; the merged
+      // field set is always recomputed from these, so a Persian pass can
+      // refine a page an English pass already read.
+      const allPages = new Map<number, PageResult>();
       const pageTexts = new Map<number, string>();
-      let textDone = 0;
-      let stop = false;
+      const kinds: DocumentKind[] = [];
+      let merged: Partial<Record<CanonicalField, ExtractedValue>> = {};
 
+      const recomputeMerge = () => {
+        const next: Partial<Record<CanonicalField, ExtractedValue>> = {};
+        for (const p of [...allPages.values()].sort((a, b) => a.index - b.index)) {
+          for (const key of Object.keys(p.fields) as CanonicalField[]) {
+            next[key] = mergeField(next[key], p.fields[key]);
+          }
+        }
+        merged = next;
+      };
+      const refreshKinds = () => {
+        for (const p of allPages.values()) if (!kinds.includes(p.kind)) kinds.push(p.kind);
+      };
+
+      // ---- Phase 1: parallel text-layer scan, early exit when complete ----
+      let textDone = 0;
+      let stopText = false;
       await mapPool(
         Array.from({ length: textPages }, (_, i) => i + 1),
         8,
         async (i) => {
-          if (stop) return;
+          if (stopText) return;
           let text = "";
           try {
             text = await pdf.getPageText(i);
@@ -233,70 +266,175 @@ export async function runExtraction(file: File, opts: RunOptions = {}): Promise<
               warnings,
               rows,
             );
-            result.pages.push(page);
-            let grew = false;
-            for (const key of Object.keys(page.fields) as CanonicalField[]) {
-              const next = mergeField(merged[key], page.fields[key]);
-              if (next !== merged[key]) grew = true;
-              merged[key] = next;
-            }
-            if (!kinds.includes(page.kind)) kinds.push(page.kind);
-            if (grew) emit(merged);
+            allPages.set(i, page);
+            recomputeMerge();
+            refreshKinds();
+            emit(merged);
           }
           textDone++;
-          report("page_text", i, textPages, 5 + Math.round((textDone / textPages) * 80));
-          if (haveCore(merged)) stop = true; // everything found — skip the rest
+          report("page_text", i, textPages, 5 + Math.round((textDone / textPages) * 70));
+          if (haveCore(merged)) stopText = true; // everything found — skip the rest
         },
       );
-      result.pages.sort((a, b) => a.index - b.index);
 
-      // ---- Phase 2: OCR the scanned pages (in order) until complete ----
-      // English and Persian read in PARALLEL on two warm workers at 150 DPI
-      // — one pass per page, both languages, ~3× faster than the old
-      // sequential eng→fas chain at 200 DPI.
+      // ---- Phase 2: OCR the scanned pages ----
       if (!haveCore(merged)) {
         const scannedPages = [...pageTexts.entries()]
           .filter(([i, t]) => i <= MAX_TEXT_PAGES && !hasTextLayer(t))
           .map(([i]) => i)
-          .sort((a, b) => a - b)
-          .slice(0, MAX_OCR_PAGES);
-        let ocrDone = 0;
-        for (const i of scannedPages) {
-          if (haveCore(merged)) break;
-          report("page_ocr", i, scannedPages.length, 85 + Math.round((ocrDone / scannedPages.length) * 10));
-          const { canvas } = await pdf.renderPage(i, OCR_DPI);
-          if (isMostlyBlank(canvas)) {
-            ocrDone++;
-            continue; // blank back side — skip OCR entirely
-          }
-          const preview = previews ? canvas.toDataURL("image/jpeg", 0.55) : null;
-          const [eng, fa] = await Promise.all([
-            runOcrSafe(preprocessCanvas(canvas, { contrast: 1.15 }), "eng", warnings, i),
-            runOcrSafe(preprocessCanvas(canvas, { binarize: true, contrast: 1.35 }), "fas", warnings, i),
-          ]);
-          const text = [eng?.text, fa?.text]
-            .filter((t): t is string => !!t && t.trim().length > 0)
-            .join("\n");
+          .sort((a, b) => a - b);
+        const engBudget = scannedPages.slice(0, MAX_OCR_PAGES);
+        const ocrState = new Map<number, PageOcrState>();
+        const previewsByPage = new Map<number, string | null>();
+
+        const rebuildPage = (i: number) => {
+          const st = ocrState.get(i);
+          if (!st) return;
+          const text = [st.eng, st.fa].filter((t) => !!t && t.trim().length > 0).join("\n");
+          if (!text.trim()) return;
           const page = buildPageResult(
             i,
             text,
             "ocr_printed",
-            Math.max(eng?.confidence ?? 0, fa?.confidence ?? 0) || null,
-            preview,
+            Math.max(st.engConf ?? 0, st.faConf ?? 0) || null,
+            previewsByPage.get(i) ?? null,
             warnings,
             null,
           );
-          result.pages.push(page);
-          for (const key of Object.keys(page.fields) as CanonicalField[]) {
-            merged[key] = mergeField(merged[key], page.fields[key]);
+          allPages.set(i, page);
+          recomputeMerge();
+          refreshKinds();
+        };
+
+        /** Issue-date recovery chain, applied the moment birth+expiry are
+         *  known — this is what lets the scan stop right after the bio page
+         *  instead of grinding through every stamp page hunting the label.
+         *  1. a readable date between birth and expiry (5/10-year preference)
+         *  2. the printed YEAR on the issue line + booklet arithmetic
+         *  3. the standard 5-year booklet default — always flagged. */
+        const applyIssueFallback = () => {
+          if (merged.dateOfIssue?.value || !merged.dateOfBirth?.value || !merged.dateOfExpiry?.value) return;
+          const expIso = String(merged.dateOfExpiry.value);
+          const docPages = [...allPages.values()].filter(
+            (p) => p.kind === "passport" || p.kind === "id_card" || p.mrz,
+          );
+          const fromTextLayer = docPages.some((p) => p.method === "pdf_text");
+          const candidates = docPages.flatMap((p) => findDateCandidates(p.text));
+          const pick = disambiguateIssueDate(candidates, String(merged.dateOfBirth.value), expIso);
+          if (pick) {
+            merged.dateOfIssue = {
+              value: pick.iso,
+              raw: null,
+              status: pick.strong && fromTextLayer ? "confirmed" : "needs_review",
+              method: fromTextLayer ? "pdf_text" : "ocr_printed",
+              note: pick.strong ? undefined : "تاریخ صدور از بین تاریخ‌های سند حدس زده شد — بازبینی کنید",
+            };
+            return;
           }
-          if (!kinds.includes(page.kind)) kinds.push(page.kind);
-          emit(merged);
-          ocrDone++;
+          for (const p of docPages) {
+            const inf = inferIssueDateFromYears(p.text, expIso);
+            if (inf) {
+              merged.dateOfIssue = {
+                value: inf.iso,
+                raw: null,
+                status: "needs_review",
+                method: fromTextLayer ? "pdf_text" : "ocr_printed",
+                note: inf.strong
+                  ? "تاریخ صدور از سال چاپ‌شده و مدت اعتبار محاسبه شد"
+                  : "تاریخ صدور از سال‌های چاپ‌شده محاسبه شد — بازبینی کنید",
+              };
+              return;
+            }
+          }
+          const guess = shiftIsoYears(expIso, -5);
+          if (guess) {
+            merged.dateOfIssue = {
+              value: guess,
+              raw: null,
+              status: "needs_review",
+              method: "ocr_printed",
+              note: "تاریخ صدور خوانده نشد — از مدت اعتبار ۵ ساله پاسپورت حدس زده شد",
+            };
+          }
+        };
+
+        /** One OCR pass over `pageList`, `slots` pages in parallel. Resolves
+         *  early (aborting in-flight recognitions) once every core field has
+         *  a value — the form is already filled at that point. */
+        const runPass = async (lang: OcrLang, pageList: number[], slots: number, basePct: number) => {
+          if (!pageList.length) return;
+          let stop = false;
+          let cursor = 0;
+          let done = 0;
+          let abortNow: (() => void) | null = null;
+          const abortSignal = new Promise<void>((resolve) => {
+            abortNow = resolve;
+          });
+          report("page_ocr", 0, pageList.length, basePct);
+
+          const runSlot = async (slot: number) => {
+            for (;;) {
+              if (stop) return;
+              const k = cursor++;
+              if (k >= pageList.length) return;
+              const i = pageList[k];
+              let canvas: HTMLCanvasElement;
+              try {
+                ({ canvas } = await pdf.renderPage(i, OCR_DPI));
+              } catch {
+                continue;
+              }
+              if (isMostlyBlank(canvas)) continue; // blank back side — no OCR
+              if (stop) return;
+              if (previews && !previewsByPage.has(i)) {
+                previewsByPage.set(i, canvas.toDataURL("image/jpeg", 0.55));
+              }
+              const pre = preprocessCanvas(
+                canvas,
+                lang === "eng" ? { contrast: 1.15 } : { binarize: true, contrast: 1.35 },
+              );
+              const outcome = await runOcrAborted(pre, lang, slot, abortSignal, warnings, i, () => stop);
+              if (stop) return; // scan aborted — form is already filled
+              if (!outcome) continue; // this page failed OCR — try the next one
+              const st = ocrState.get(i) ?? {};
+              if (lang === "eng") {
+                st.eng = outcome.text;
+                st.engConf = outcome.confidence;
+              } else {
+                st.fa = outcome.text;
+                st.faConf = outcome.confidence;
+              }
+              ocrState.set(i, st);
+              rebuildPage(i);
+              applyIssueFallback();
+              emit(merged);
+              done++;
+              report("page_ocr", i, pageList.length, basePct + Math.round((done / pageList.length) * 15));
+              if (haveCore(merged)) {
+                // Everything the form needs is on screen — abort the rest of
+                // the scan so no time is wasted on stamp/observation pages.
+                stop = true;
+                abortNow?.();
+                resetWorker(lang); // kill in-flight recognitions
+                void warmupOcr(); // pool rebuilds quietly for the next upload
+              }
+            }
+          };
+          await Promise.all(Array.from({ length: Math.min(slots, pageList.length) }, (_, s) => runSlot(s)));
+        };
+
+        // Phase 2a — English pass (MRZ + Latin labels), two pages at a time.
+        await runPass("eng", engBudget, OCR_PAGE_POOL, 75);
+
+        // Phase 2b — Persian pass, only when core fields are still missing
+        // (tazkira scans, Persian-only labels, visa stamps).
+        if (!haveCore(merged)) {
+          const faPages = engBudget.slice(0, MAX_FA_PAGES);
+          await runPass("fas", faPages, 1, 90);
         }
-        result.pages.sort((a, b) => a.index - b.index);
       }
 
+      result.pages = [...allPages.values()].sort((a, b) => a.index - b.index);
       result.fields = merged;
       result.detectedKinds = kinds;
     } finally {
@@ -314,24 +452,20 @@ export async function runExtraction(file: File, opts: RunOptions = {}): Promise<
     emit(result.fields);
   }
 
-  // ------- Smart fallback: infer the issue date when birth+expiry are known -------
+  // ------- Smart fallback: recover the issue date when birth+expiry are known -------
   if (
     !result.fields.dateOfIssue?.value &&
     result.fields.dateOfBirth?.value &&
     result.fields.dateOfExpiry?.value
   ) {
-    const candidates = result.pages
-      .filter((p) => p.kind === "passport" || p.kind === "id_card" || p.mrz)
-      .flatMap((p) => findDateCandidates(p.text));
-    const pick = disambiguateIssueDate(
-      candidates,
-      String(result.fields.dateOfBirth.value),
-      String(result.fields.dateOfExpiry.value),
+    const expIso = String(result.fields.dateOfExpiry.value);
+    const docPages = result.pages.filter(
+      (p) => p.kind === "passport" || p.kind === "id_card" || p.mrz,
     );
+    const fromTextLayer = docPages.some((p) => p.method === "pdf_text");
+    const candidates = docPages.flatMap((p) => findDateCandidates(p.text));
+    const pick = disambiguateIssueDate(candidates, String(result.fields.dateOfBirth.value), expIso);
     if (pick) {
-      const fromTextLayer = result.pages.some(
-        (p) => (p.kind === "passport" || p.kind === "id_card" || p.mrz) && p.method === "pdf_text",
-      );
       result.fields.dateOfIssue = {
         value: pick.iso,
         raw: null,
@@ -340,6 +474,25 @@ export async function runExtraction(file: File, opts: RunOptions = {}): Promise<
         note: pick.strong ? undefined : "تاریخ صدور از بین تاریخ‌های سند حدس زده شد — بازبینی کنید",
       };
       emit(result.fields);
+    } else {
+      const inf = docPages
+        .map((p) => inferIssueDateFromYears(p.text, expIso))
+        .find((x): x is { iso: string; strong: boolean } => x != null);
+      const value = inf?.iso ?? shiftIsoYears(expIso, -5);
+      if (value) {
+        result.fields.dateOfIssue = {
+          value,
+          raw: null,
+          status: "needs_review",
+          method: fromTextLayer ? "pdf_text" : "ocr_printed",
+          note: inf
+            ? inf.strong
+              ? "تاریخ صدور از سال چاپ‌شده و مدت اعتبار محاسبه شد"
+              : "تاریخ صدور از سال‌های چاپ‌شده محاسبه شد — بازبینی کنید"
+            : "تاریخ صدور خوانده نشد — از مدت اعتبار ۵ ساله پاسپورت حدس زده شد",
+        };
+        emit(result.fields);
+      }
     }
   }
 
@@ -353,6 +506,30 @@ export async function runExtraction(file: File, opts: RunOptions = {}): Promise<
   report("done", 0, result.pages.length, 100);
   // OCR workers stay warm — the next document then fills in a blink.
   return result;
+}
+
+/** Recognize with abort support: when `abortSignal` fires (early exit), the
+ *  await resolves null and the slot's worker is terminated so the stale job
+ *  can never delay the next upload. */
+async function runOcrAborted(
+  canvas: HTMLCanvasElement,
+  lang: OcrLang,
+  slot: number,
+  abortSignal: Promise<void>,
+  warnings: string[],
+  pageIndex: number,
+  isStopped: () => boolean,
+): Promise<{ text: string; confidence: number } | null> {
+  const job = runOcr(canvas, lang, undefined, slot).catch(() => null);
+  const outcome = await Promise.race([job, abortSignal.then(() => null)]);
+  if (outcome === null) {
+    if (!isStopped()) {
+      resetSlot(lang, slot);
+      warnings.push(`OCR صفحهٔ ${pageIndex} با خطا متوقف شد.`);
+    }
+    return null;
+  }
+  return outcome;
 }
 
 async function safeThumb(pdf: Awaited<ReturnType<typeof openPdf>>, i: number): Promise<string | null> {
@@ -372,8 +549,8 @@ async function safeRows(pdf: Awaited<ReturnType<typeof openPdf>>, i: number): Pr
   }
 }
 
-/** A rendered page that is ~all white — typical scan back side. No OCR needed. */
-function isMostlyBlank(canvas: HTMLCanvasElement): boolean {
+/** Fraction of dark pixels in a tiny probe render (page-shape detector). */
+function darkRatio(canvas: HTMLCanvasElement): number {
   try {
     const w = 48;
     const h = Math.max(1, Math.round((canvas.height / canvas.width) * w));
@@ -387,25 +564,15 @@ function isMostlyBlank(canvas: HTMLCanvasElement): boolean {
     for (let i = 0; i < d.length; i += 4) {
       if (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114 < 200) dark++;
     }
-    return dark / (d.length / 4) < 0.004;
+    return dark / (d.length / 4);
   } catch {
-    return false;
+    return 0;
   }
 }
 
-async function runOcrSafe(
-  canvas: HTMLCanvasElement,
-  lang: "eng" | "fas",
-  warnings: string[],
-  pageIndex: number,
-): Promise<{ text: string; confidence: number } | null> {
-  try {
-    return await runOcr(canvas, lang);
-  } catch {
-    resetWorker(lang); // recreate cleanly on the next attempt
-    warnings.push(`OCR صفحهٔ ${pageIndex} (زبان ${lang === "fas" ? "فارسی" : "انگلیسی"}) با خطا متوقف شد.`);
-    return null;
-  }
+/** A rendered page that is ~all white — typical scan back side. No OCR needed. */
+function isMostlyBlank(canvas: HTMLCanvasElement): boolean {
+  return darkRatio(canvas) < 0.004;
 }
 
 /** Build a PageResult: detect kind, parse MRZ, run label profiles. */
@@ -435,7 +602,7 @@ function buildPageResult(
   const profiles = [PASSPORT_PROFILE, TAZKIRA_PROFILE, VISA_FORM_PROFILE, VISA_STAMP_PROFILE];
   for (const profile of profiles) {
     if (!profile.kinds.includes(kind)) continue;
-    // Plain line-based extraction (always).
+    // Span-aware line extraction (always).
     const labelFields = extractByLabels(text, profile, method ?? "ocr_printed");
     for (const key of Object.keys(labelFields) as CanonicalField[]) {
       fields[key] = mergeField(fields[key], labelFields[key]);
@@ -479,8 +646,8 @@ async function processImageFile(
     const preview = previews ? downscaleDataUrl(img, 700) : null;
     // Both languages in parallel — 1800 px cap keeps phone photos fast.
     const [eng, fa] = await Promise.all([
-      runOcrSafe(preprocessCanvas(img, { contrast: 1.15, maxWidth: 1800 }), "eng", warnings, 1),
-      runOcrSafe(preprocessCanvas(img, { binarize: true, contrast: 1.35, maxWidth: 1800 }), "fas", warnings, 1),
+      runOcrSafe(preprocessCanvas(img, { contrast: 1.15, maxWidth: 1800 }), "eng", warnings, 1, 0),
+      runOcrSafe(preprocessCanvas(img, { binarize: true, contrast: 1.35, maxWidth: 1800 }), "fas", warnings, 1, 0),
     ]);
     const text = [eng?.text, fa?.text]
       .filter((t): t is string => !!t && t.trim().length > 0)
@@ -501,6 +668,22 @@ async function processImageFile(
     };
   } finally {
     URL.revokeObjectURL(url); // privacy: release the temp reference
+  }
+}
+
+async function runOcrSafe(
+  canvas: HTMLCanvasElement,
+  lang: "eng" | "fas",
+  warnings: string[],
+  pageIndex: number,
+  slot: number,
+): Promise<{ text: string; confidence: number } | null> {
+  try {
+    return await runOcr(canvas, lang, undefined, slot);
+  } catch {
+    resetWorker(lang); // recreate cleanly on the next attempt
+    warnings.push(`OCR صفحهٔ ${pageIndex} (زبان ${lang === "fas" ? "فارسی" : "انگلیسی"}) با خطا متوقف شد.`);
+    return null;
   }
 }
 

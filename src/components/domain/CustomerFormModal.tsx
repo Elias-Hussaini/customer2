@@ -20,6 +20,7 @@ import {
   warmupOcr,
   formatDateForTemplate,
   latinNameToFa,
+  METHOD_RANK,
   type PipelineProgress,
   type CanonicalField,
   type ExtractionResult,
@@ -139,6 +140,10 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
   const [ai, setAi] = useState<AiState>({ t: "idle" });
   const [aiMarks, setAiMarks] = useState<Partial<Record<AiField, "ok" | "review">>>({});
   const [aiRun, setAiRun] = useState(0); // bump → identity grid re-mounts with the flash sweep
+  /** Extraction strength of what filled each AI-owned slot. A slot the AI
+   *  filled can be UPGRADED by a stronger source mid-scan (early label guess
+   * → check-digit-validated MRZ); a slot the operator typed is untouchable. */
+  const aiRank = useRef<Partial<Record<AiField, number>>>({});
   const [dragActive, setDragActive] = useState(false);
   const [smartFile, setSmartFile] = useState<File | null>(null); // auto-attach to the customer's documents
   const fileRef = useRef<HTMLInputElement>(null);
@@ -178,6 +183,7 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
       setErrors({});
       setAi({ t: "idle" });
       setAiMarks({});
+      aiRank.current = {};
       setAiRun(0);
       setDragActive(false);
       setSmartFile(null);
@@ -237,7 +243,8 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
 
   /**
    * Set one of the identity fields from user input — editing a value takes
-   * ownership of it, so its AI badge is dropped.
+   * ownership of it, so its AI badge is dropped and no later extraction
+   * can overwrite what the operator decided.
    */
   const touch = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((f) => ({ ...f, [key]: value }));
@@ -247,9 +254,87 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
       delete next[key as AiField];
       return next;
     });
+    if (aiRank.current[key as AiField] != null) {
+      const next = { ...aiRank.current };
+      delete next[key as AiField];
+      aiRank.current = next;
+    }
   };
 
-  /** Read the extraction, write values straight into this form. */
+  /** canonical field → form slot (the six identity fields the AI fills). */
+  const AI_FIELD_MAP: Array<{ formKey: AiField; canonical: CanonicalField }> = [
+    { formKey: "firstName", canonical: "givenNames" },
+    { formKey: "lastName", canonical: "surname" },
+    { formKey: "passportNo", canonical: "documentNumber" },
+    { formKey: "birthDate", canonical: "dateOfBirth" },
+    { formKey: "passportIssueDate", canonical: "dateOfIssue" },
+    { formKey: "passportExpiryDate", canonical: "dateOfExpiry" },
+  ];
+
+  /**
+   * Write extraction values into the form — the single path both the live
+   * progressive fill and the final result go through.
+   *  • an empty slot takes any value;
+   *  • a slot the AI filled earlier is UPGRADED in place when a stronger
+   *    source arrives (early OCR guess → check-digit-validated MRZ) — a weak
+   *    first read can never lock garbage in;
+   *  • a slot the operator typed is never touched.
+   * Returns the fields it wrote/refreshed.
+   */
+  const applyFields = (
+    fields: Partial<Record<CanonicalField, ExtractedValue>>,
+    final: boolean,
+  ): AiField[] => {
+    const written: AiField[] = [];
+    const pendingMarks: Array<{ key: AiField; mark: "ok" | "review"; rank: number }> = [];
+    setForm((prev) => {
+      const next = { ...prev };
+      let touched = false;
+      for (const { formKey, canonical } of AI_FIELD_MAP) {
+        const ex = fields[canonical];
+        if (!ex || ex.value == null) continue;
+        const rawValue = String(ex.value).trim();
+        if (!rawValue) continue;
+        const value =
+          formKey === "firstName" || formKey === "lastName"
+            ? safePersonName(latinNameToFa(rawValue) || rawValue)
+            : formKey === "passportNo"
+              ? rawValue.toUpperCase()
+              : rawValue;
+        if (!value) continue;
+        const rank =
+          METHOD_RANK[ex.method] * 10 +
+          (ex.status === "confirmed" ? 5 : ex.status === "needs_review" ? 1 : 0);
+        const current = next[formKey] as string | null;
+        const isEmpty = current == null || current === "";
+        const owned = aiRank.current[formKey];
+        if (!isEmpty) {
+          if (owned == null) continue; // operator typed this one — hands off
+          if (rank < owned) continue; // weaker source than what's in there
+          if (rank === owned && !final && value === current) continue;
+        }
+        if (value !== current) {
+          (next as Record<AiField, string | null>)[formKey] = value;
+          touched = true;
+        }
+        written.push(formKey);
+        // remember ownership + show the live trust badge
+        pendingMarks.push({ key: formKey, mark: ex.status === "confirmed" ? "ok" : "review", rank });
+      }
+      return touched ? next : prev;
+    });
+    if (pendingMarks.length) {
+      setAiMarks((m) => {
+        const next = { ...m };
+        for (const p of pendingMarks) next[p.key] = p.mark;
+        return next;
+      });
+      for (const p of pendingMarks) aiRank.current[p.key] = p.rank;
+    }
+    return written;
+  };
+
+  /** Read the final extraction, write values + extras into the form. */
   const applyAiResult = (res: ExtractionResult, fileName: string) => {
     const f = res.fields;
     const v = (k: CanonicalField) => (f[k]?.value != null ? String(f[k].value) : "");
@@ -267,34 +352,19 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
         ? value
         : "";
 
-    const firstName = safePersonName(latinNameToFa(v("givenNames")) || v("givenNames"));
-    const lastName = safePersonName(latinNameToFa(v("surname")) || v("surname"));
-    const passportNo = v("documentNumber");
-    const birthDate = v("dateOfBirth");
-    const issueDate = v("dateOfIssue");
-    const expiryDate = v("dateOfExpiry");
+    applyFields(f, true);
 
-    const marks: Partial<Record<AiField, "ok" | "review">> = {};
-    const mark = (k: AiField, s: "ok" | "review" | undefined) => {
-      if (s) marks[k] = s;
-    };
-    mark("firstName", st("givenNames"));
-    mark("lastName", st("surname"));
-    mark("passportNo", st("documentNumber"));
-    mark("birthDate", st("dateOfBirth"));
-    mark("passportIssueDate", st("dateOfIssue"));
-    mark("passportExpiryDate", st("dateOfExpiry"));
-
-    const applied = [
-      firstName,
-      lastName,
-      passportNo,
-      birthDate,
-      issueDate,
-      expiryDate,
-    ].filter((x) => x.trim().length > 0);
-    const filled = applied.length;
-    const review = Object.values(marks).filter((s) => s === "review").length;
+    const filled = [
+      v("givenNames"),
+      v("surname"),
+      v("documentNumber"),
+      v("dateOfBirth"),
+      v("dateOfIssue"),
+      v("dateOfExpiry"),
+    ].filter((x) => x.trim().length > 0).length;
+    const review = (["givenNames", "surname", "documentNumber", "dateOfBirth", "dateOfIssue", "dateOfExpiry"] as CanonicalField[])
+      .map(st)
+      .filter((s): s is "review" => s === "review").length;
 
     if (filled === 0) {
       setAi({ t: "error", message: res.warnings[0] ?? "هیچ فیلد شناخته‌شده‌ای خوانده نشد — فرم را دستی پر کنید." });
@@ -314,65 +384,30 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
       .filter(Boolean)
       .join(" — ");
 
-    setForm((prev) => ({
-      ...prev,
-      firstName: firstName || prev.firstName,
-      lastName: lastName || prev.lastName,
-      passportNo: passportNo || prev.passportNo,
-      birthDate: birthDate || prev.birthDate,
-      passportIssueDate: issueDate || prev.passportIssueDate,
-      passportExpiryDate: expiryDate || prev.passportExpiryDate,
-      notes: extrasNote || prev.notes,
-    }));
-    setAiMarks(marks);
+    if (extrasNote) {
+      setForm((prev) => ({
+        ...prev,
+        notes: !prev.notes
+          ? extrasNote
+          : prev.notes.includes(extrasNote)
+            ? prev.notes
+            : `${prev.notes} — ${extrasNote}`,
+      }));
+    }
     setAiRun((n) => n + 1);
     setAi({ t: "done", filled, review, fileName });
-    if (passportNo) void checkDuplicate(passportNo);
+    if (v("documentNumber")) void checkDuplicate(v("documentNumber").toUpperCase());
   };
 
   /**
-   * Live progressive fill — values land in the form the moment they are read
-   * (empty slots only, so anything the operator already typed is respected).
-   * This is what makes the fill feel instant on multi-page scans: the bio
-   * page fields appear while later pages are still being read.
+   * Live progressive fill — values land in the form the moment they are read.
+   * Weak early reads are upgraded in place by stronger sources (see
+   * applyFields), which is what makes the fill both instant AND correct on
+   * multi-page scans.
    */
   const applyPartialFields = (fields: Partial<Record<CanonicalField, ExtractedValue>>) => {
-    const v = (k: CanonicalField) => (fields[k]?.value != null ? String(fields[k].value).trim() : "");
-    const first = safePersonName(latinNameToFa(v("givenNames")) || v("givenNames"));
-    const last = safePersonName(latinNameToFa(v("surname")) || v("surname"));
-    const pno = v("documentNumber").toUpperCase();
-    const dob = v("dateOfBirth");
-    const iss = v("dateOfIssue");
-    const exp = v("dateOfExpiry");
-    setForm((prev) => {
-      const next = { ...prev };
-      let touched = false;
-      if (first && !next.firstName) { next.firstName = first; touched = true; }
-      if (last && !next.lastName) { next.lastName = last; touched = true; }
-      if (pno && !next.passportNo) { next.passportNo = pno; touched = true; }
-      if (dob && !next.birthDate) { next.birthDate = dob; touched = true; }
-      if (iss && !next.passportIssueDate) { next.passportIssueDate = iss; touched = true; }
-      if (exp && !next.passportExpiryDate) { next.passportExpiryDate = exp; touched = true; }
-      return touched ? next : prev;
-    });
-    const markOf = (k: CanonicalField): "ok" | "review" | undefined => {
-      const ex = fields[k];
-      if (!ex || ex.value == null || !String(ex.value).trim()) return undefined;
-      return ex.status === "confirmed" ? "ok" : "review";
-    };
-    setAiMarks((m) => {
-      const next = { ...m };
-      const add = (k: AiField, s: "ok" | "review" | undefined) => {
-        if (s) next[k] = s;
-      };
-      add("firstName", markOf("givenNames"));
-      add("lastName", markOf("surname"));
-      add("passportNo", markOf("documentNumber"));
-      add("birthDate", markOf("dateOfBirth"));
-      add("passportIssueDate", markOf("dateOfIssue"));
-      add("passportExpiryDate", markOf("dateOfExpiry"));
-      return next;
-    });
+    applyFields(fields, false);
+    const pno = fields.documentNumber?.value ? String(fields.documentNumber.value).trim().toUpperCase() : "";
     if (pno) void checkDuplicate(pno);
   };
 
@@ -384,6 +419,9 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
     }
     setAi({ t: "busy", progress: null });
     setAiMarks({});
+    // NOTE: aiRank is deliberately NOT reset here — slots the previous upload
+    // filled stay AI-owned so a re-upload can upgrade them; only the operator
+    // typing in a field releases it (touch()).
     setSmartFile(file);
     try {
       const res = await runExtraction(file, {

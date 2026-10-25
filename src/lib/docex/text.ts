@@ -10,7 +10,7 @@ import type {
   ExtractionMethod,
 } from "./types";
 import type { StructuredRow } from "./pdfread";
-import { parsePrintedDate } from "./dates";
+import { parsePrintedDate, shiftIsoYears } from "./dates";
 import { toLatinDigits } from "../../utils/jalali";
 
 /* ------------------------------------------------------------------ */
@@ -114,6 +114,7 @@ const FA_MONTH_WORD =
 
 const DATE_TOKEN_PATTERNS: RegExp[] = [
   new RegExp(`\\d{1,2}\\s+(?:${MONTH_WORD})[A-Za-z]*\\s+\\d{4}`, "g"), // 15 MAR 2022
+  new RegExp(`\\d{1,2}[\\s\\-\\/.]?[A-Z]{3,9}[\\s\\-\\/.]?\\d{4}`, "g"), // 31 BAY-2030 (loose — parsePrintedDate validates the month)
   /\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/g, // 2022-03-15
   /\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}/g, // 15/03/2022
   new RegExp(`[۰-۹0-9]{1,2}\\s+(?:${FA_MONTH_WORD})\\s+[۰-۹0-9]{2,4}`, "g"), // ۱۵ مارچ ۲۰۲۲
@@ -123,15 +124,20 @@ const DATE_TOKEN_PATTERNS: RegExp[] = [
 /** Scan free text for every date-like token that parses to a valid ISO date. */
 export function findDateCandidates(text: string): { iso: string; raw: string }[] {
   if (!text) return [];
-  const src = toLatinDigits(text);
+  const src = toLatinDigits(text).toUpperCase();
   const out: { iso: string; raw: string }[] = [];
+  const seen = new Set<string>();
   for (const re of DATE_TOKEN_PATTERNS) {
     re.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = re.exec(src)) !== null) {
       const raw = m[0].trim();
+      if (seen.has(raw)) continue;
       const iso = parsePrintedDate(raw);
-      if (iso) out.push({ iso, raw });
+      if (iso) {
+        seen.add(raw);
+        out.push({ iso, raw });
+      }
     }
   }
   return out;
@@ -170,11 +176,74 @@ export function disambiguateIssueDate(
   return { iso: sorted[sorted.length - 1], strong: false };
 }
 
+/** Folded forms of the issue-date labels (built once from the passport profile). */
+const ISSUE_LABEL_FOLDED: string[] = [
+  "DATE OF ISSUE",
+  "DATE ISSUED",
+  "ISSUE DATE",
+  "ISSUED ON",
+  "تاریخ صدور",
+].map(foldForLabel);
+
+/**
+ * Year-anchored issue-date recovery. On real scans the small date print is
+ * often OCR-mangled beyond parsing ("37°WAv. 2025") — but the printed YEAR
+ * survives ("2025", and the Jalali "1404" beside it). Together with the
+ * check-digit-validated expiry from the MRZ, the booklet arithmetic gives
+ * the issue date exactly:  expiry 2030-05-31 − (2030−2025) years → 2025-05-31.
+ * Deterministic; `strong` when every readable year agrees.
+ */
+export function inferIssueDateFromYears(
+  text: string,
+  expiryIso: string,
+): { iso: string; strong: boolean } | null {
+  const exp = expiryIso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!exp) return null;
+  const expY = +exp[1];
+  const lines = text
+    .split(/\r?\n/)
+    .map(normalizeUnicodeLine)
+    .filter((l) => l.length > 0);
+  const years: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const n = normLabel(lines[i]);
+    if (!ISSUE_LABEL_FOLDED.some((t) => t && foldForLabel(n).includes(t))) continue;
+    // window = the label line + the two following lines (stacked value rows)
+    const window = toLatinDigits(
+      [n, normLabel(lines[i + 1] ?? ""), normLabel(lines[i + 2] ?? "")].join(" "),
+    );
+    for (const m of window.matchAll(/\b(?:19|20)\d{2}\b/g)) years.push(+m[0]);
+    // Jalali years printed beside the Gregorian date (Afghan passports)
+    for (const m of window.matchAll(/\b1[34]\d{2}\b/g)) years.push(+m[0] + 621);
+  }
+  const results = new Set(
+    years
+      .map((y) => expY - y) // booklet validity in years
+      .filter((v) => v >= 1 && v <= 10)
+      .map((v) => shiftIsoYears(expiryIso, -v)),
+  );
+  results.delete(null as unknown as string);
+  const uniq = [...results] as string[];
+  if (uniq.length === 0) return null;
+  return { iso: uniq[0], strong: uniq.length === 1 };
+}
+
 /* ------------------------------------------------------------------ */
 /* Label-driven extraction                                             */
 /* ------------------------------------------------------------------ */
 
 const SEX_FA: Record<string, string> = { م: "M", مرد: "M", ذکر: "M", ز: "F", زن: "F", مؤنث: "F", مونث: "F" };
+
+/** Fields that hold person names. */
+const NAME_FIELDS = new Set<CanonicalField>(["surname", "givenNames", "fullName", "fatherName"]);
+/** Fields whose value is a single structured token (numbers). */
+const DOCNUM_FIELDS = new Set<CanonicalField>(["documentNumber", "nationalId", "personalNumber"]);
+/** Persian words that appear in labels — a NAME value containing one of these
+ *  is a mis-paired label fragment ("خانوادگی احمدی"), never a real name. */
+const PERSIAN_LABEL_WORDS = new Set([
+  "نام", "نوم", "خانوادگی", "تخلص", "پدر", "شماره", "نمبر", "تاریخ", "محل", "ولایت",
+  "جنس", "جنسیت", "ملیت", "صدور", "انقضا", "تولد", "ورود", "قریه", "زون",
+]);
 
 /** Apply one rule to a raw value string — shared by plain + layout paths. */
 function applyRuleValue(
@@ -219,7 +288,55 @@ function applyRuleValue(
   }
   let cleaned = value.replace(/[|_]+/g, " ").replace(/\s+/g, " ").trim();
   cleaned = normalizeLatinDigits(cleaned);
+
+  // Names: never contain digits; label words are mis-paired junk; tiny Latin
+  // fragments around the real name are OCR noise from the other column.
+  if (NAME_FIELDS.has(rule.field)) {
+    if (/[\d\u06F0-\u06F9\u0660-\u0669]/.test(cleaned)) return null;
+    if (/[\u0600-\u06FF]/.test(cleaned)) {
+      const words = cleaned.split(/\s+/).map((w) => w.replace(/[:؛.,!؟]/g, "")).filter(Boolean);
+      if (words.some((w) => PERSIAN_LABEL_WORDS.has(w))) return null;
+      if (words.every((w) => w.length <= 1)) return null;
+    } else {
+      const words = cleaned.split(/\s+/).filter((w) => w.replace(/[^A-Z]/g, "").length >= 3);
+      if (!words.length) return null;
+      cleaned = words.join(" ");
+    }
+  }
+
+  // Structured numbers are ONE token — a multi-word fragment is label noise;
+  // keep going so the stacked line below gets its chance.
+  if (DOCNUM_FIELDS.has(rule.field)) {
+    const tokens = cleaned.split(/\s+/);
+    if (tokens.length > 1) {
+      const ok = tokens.filter((t) => (rule.valuePattern ?? DOC_NUM_FALLBACK).test(t));
+      if (ok.length === 1) {
+        return { value: ok[0], raw: value, status: "needs_review", method, note: "بخشی از مقدار ناخوانا بود" };
+      }
+      return null;
+    }
+    if (rule.valuePattern && !rule.valuePattern.test(cleaned)) {
+      return { value: cleaned, raw: value, status: "needs_review", method, note: "الگوی مقدار معمول نیست" };
+    }
+    return {
+      value: cleaned,
+      raw: value,
+      status: method === "ocr_handwriting" ? "needs_review" : "confirmed",
+      method,
+    };
+  }
+
   if (rule.valuePattern && !rule.valuePattern.test(cleaned.replace(/\s/g, ""))) {
+    // Salvage: multi-word junk around a clean token ("J C270 Daykundi 10/03/1997")
+    // — keep the longest token that fits the pattern.
+    const tokens = cleaned
+      .split(/\s+/)
+      .filter((t) => rule.valuePattern!.test(t))
+      .sort((a, b) => b.length - a.length);
+    const best = tokens[0];
+    if (best && best.replace(/\s/g, "").length >= 4) {
+      return { value: best, raw: value, status: "needs_review", method, note: "بخشی از مقدار ناخوانا بود" };
+    }
     return { value: cleaned, raw: value, status: "needs_review", method, note: "الگوی مقدار معمول نیست" };
   }
   return {
@@ -230,12 +347,105 @@ function applyRuleValue(
   };
 }
 
+const DOC_NUM_FALLBACK = /^[A-Z0-9\-\/.]{4,20}$/;
+
+/* ------------------------------------------------------------------ */
+/* Span-aware label extraction                                         */
+/* ------------------------------------------------------------------ */
+
+interface LineLabelHit {
+  ruleIdx: number;
+  start: number;
+  end: number; // exclusive
+}
+
+const IS_WORD_CHAR = /[A-Z0-9\u0600-\u06FF]/;
+
+/** A label match must start/end on word boundaries — "نام" inside "انام" or
+ *  "Sex" inside "Sexual" is never a label. */
+function boundaryOk(norm: string, start: number, end: number): boolean {
+  if (start > 0 && IS_WORD_CHAR.test(norm[start - 1])) return false;
+  if (end < norm.length && IS_WORD_CHAR.test(norm[end])) return false;
+  return true;
+}
+
+/** Every label occurrence on a normalized line, longest-first on overlaps:
+ *  "نام خانوادگی" shadows the "نام" inside it, "Date of expiry" shadows
+ *  "Date of". This is what keeps compound labels from stealing values. */
+function findLineHits(norm: string, rules: { labels: string[]; field: CanonicalField }[]): LineLabelHit[] {
+  const hits: LineLabelHit[] = [];
+  for (let ri = 0; ri < rules.length; ri++) {
+    let exact = false;
+    for (const label of rules[ri].labels) {
+      const t = normLabel(label);
+      if (!t) continue;
+      let from = 0;
+      for (;;) {
+        const idx = norm.indexOf(t, from);
+        if (idx === -1) break;
+        if (boundaryOk(norm, idx, idx + t.length)) {
+          hits.push({ ruleIdx: ri, start: idx, end: idx + t.length });
+          exact = true;
+        }
+        from = idx + t.length;
+      }
+    }
+    if (exact) continue;
+    // OCR-confusion fallback ("DATE OF LSSUE") — fold is length-preserving,
+    // so a folded hit maps back onto the same index range.
+    const foldedLine = foldForLabel(norm);
+    for (const label of rules[ri].labels) {
+      const t = normLabel(label);
+      if (!t) continue;
+      const ft = foldForLabel(t);
+      let from = 0;
+      for (;;) {
+        const idx = foldedLine.indexOf(ft, from);
+        if (idx === -1) break;
+        if (boundaryOk(norm, idx, idx + t.length)) hits.push({ ruleIdx: ri, start: idx, end: idx + t.length });
+        from = idx + ft.length;
+      }
+    }
+  }
+  hits.sort((a, b) => a.start - b.start || b.end - b.start - (a.end - a.start));
+  const kept: LineLabelHit[] = [];
+  for (const h of hits) {
+    const last = kept[kept.length - 1];
+    if (!last || h.start >= last.end) kept.push(h);
+  }
+  return kept;
+}
+
+/** Is this rule's value good enough to stop looking at further candidates? */
+function isSatisfied(rule: { field: CanonicalField; isDate?: boolean }, val: ExtractedValue): boolean {
+  if (val.value == null || !String(val.value).trim()) return false;
+  if (rule.isDate) return true; // a parsed date
+  if (DOCNUM_FIELDS.has(rule.field)) return !val.note; // single clean token
+  if (NAME_FIELDS.has(rule.field)) return !val.note; // clean name
+  return true;
+}
+
+/** Score for keeping the better of two values of one field. */
+function valueScore(field: CanonicalField, v: ExtractedValue): number {
+  const has = v.value != null && String(v.value).trim().length > 0 ? 100 : 0;
+  const status = v.status === "confirmed" ? 2 : v.status === "needs_review" ? 1 : 0;
+  // Longer digit runs are more plausible document numbers than short salvages.
+  const digits = DOCNUM_FIELDS.has(field) ? (String(v.value ?? "").match(/\d/g) ?? []).length : 0;
+  return has + status * 10 + digits;
+}
+
 /**
  * Extract fields from plain text (PDF text layer or OCR output) using a
- * profile's label rules. Line-based: a value is taken from the remainder of
- * the label line, or the following line when the label line holds no value.
- * A remainder that is itself another known label (two-column data pages)
- * is NOT mistaken for a value.
+ * profile's label rules — SPAN-AWARE:
+ *
+ *  • every label occurrence on a line is found, overlaps resolved longest
+ *    first (compound labels never steal each other's value);
+ *  • a label's value is the text up to the next label on the same line
+ *    (two-column rows) or — when that holds nothing usable — the matching
+ *    segment of the NEXT line (stacked layouts: label row above, value row
+ *    below), paired by column order;
+ *  • date labels accept the first parseable date among candidates; name and
+ *    number labels validate their value's shape and never record garbage.
  */
 export function extractByLabels(
   text: string,
@@ -246,8 +456,9 @@ export function extractByLabels(
     .split(/\r?\n/)
     .map(normalizeUnicodeLine)
     .filter((l) => l.length > 0);
-  const out: Partial<Record<CanonicalField, ExtractedValue>> = {};
-  const allLabelNorms = profile.labelRules
+  const norms = lines.map(normLabel);
+  const rules = profile.labelRules;
+  const allLabelNorms = rules
     .flatMap((r) => r.labels.map(normLabel))
     .filter((l) => l.length > 0);
   /** A line/rest that contains a full label and no digits is a label line. */
@@ -259,70 +470,103 @@ export function extractByLabels(
     );
   };
 
-  // Per line: date rules whose label appears here, ordered left-to-right —
-  // used to pair multiple dates on the value line with their columns.
-  const dateRulesOnLine: Map<number, { rule: (typeof profile.labelRules)[number]; pos: number }[]> = new Map();
+  const lineHits: LineLabelHit[][] = norms.map((n) => (n ? findLineHits(n, rules) : []));
+
+  const out: Partial<Record<CanonicalField, ExtractedValue>> = {};
+  const keepBest = (field: CanonicalField, val: ExtractedValue) => {
+    const cur = out[field];
+    if (!cur || valueScore(field, val) > valueScore(field, cur)) out[field] = val;
+  };
+
   for (let i = 0; i < lines.length; i++) {
-    const norm = normLabel(lines[i]);
-    const hits: { rule: (typeof profile.labelRules)[number]; pos: number }[] = [];
-    for (const r of profile.labelRules) {
-      if (!r.isDate) continue;
-      let best = -1;
-      for (const label of r.labels) {
-        const t = normLabel(label);
-        if (!t) continue;
-        const idx = norm.indexOf(t);
-        if (idx !== -1 && (best === -1 || idx < best)) best = idx;
+    const kept = lineHits[i];
+    if (!kept.length) continue;
+    const norm = norms[i];
+    const nextKept = lineHits[i + 1] ?? [];
+    const nextNorm = norms[i + 1] ?? "";
+    const stripSep = (s: string) => s.replace(/^[\s:.\-–—|]+/, "").trim();
+    const dateOrdinalOf = (hi: number) =>
+      kept
+        .map((h, idx) => ({ h, idx }))
+        .filter((x) => rules[x.h.ruleIdx].isDate)
+        .sort((a, b) => a.h.start - b.h.start)
+        .findIndex((x) => x.idx === hi);
+
+    for (let hi = 0; hi < kept.length; hi++) {
+      const h = kept[hi];
+      const rule = rules[h.ruleIdx];
+      // Same-line segment: text from this label up to the next label.
+      const segEnd = hi + 1 < kept.length ? kept[hi + 1].start : norm.length;
+      const sameLine = stripSep(norm.slice(h.end, segEnd));
+
+      const candidates: { text: string; exact: boolean }[] = [];
+      if (sameLine && rule.sameLine !== false && !looksLikeLabel(sameLine)) {
+        candidates.push({ text: sameLine, exact: true });
       }
-      if (best !== -1) hits.push({ rule: r, pos: best });
+      // Stacked: the value sits on the next line in this label's column.
+      if (nextNorm && rule.sameLine !== false) {
+        if (nextKept.length === 0) {
+          if (!looksLikeLabel(nextNorm)) candidates.push({ text: nextNorm, exact: false });
+        } else {
+          const segs: string[] = [];
+          let pos = 0;
+          for (const nh of nextKept) {
+            segs.push(stripSep(nextNorm.slice(pos, nh.start)));
+            pos = nh.end;
+          }
+          segs.push(stripSep(nextNorm.slice(pos)));
+          const seg = segs[hi];
+          if (seg && !looksLikeLabel(seg)) candidates.push({ text: seg, exact: false });
+        }
+      }
+
+      // Candidate preference per field type: names → strongest word content;
+      // numbers → single tokens first. Ties keep the same-line (exact) value.
+      let ordered = candidates;
+      if (candidates.length > 1) {
+        if (NAME_FIELDS.has(rule.field)) {
+          const strength = (t: string) => t.split(/\s+/).filter((w) => w.length >= 3).length;
+          ordered = [...candidates].sort(
+            (a, b) => strength(b.text) - strength(a.text) || Number(b.exact) - Number(a.exact),
+          );
+        } else if (DOCNUM_FIELDS.has(rule.field)) {
+          const single = (t: string) => (/\s/.test(t.trim()) ? 0 : 1);
+          ordered = [...candidates].sort((a, b) => single(b.text) - single(a.text) || Number(b.exact) - Number(a.exact));
+        }
+      }
+
+      const ordinal = rule.isDate ? Math.max(0, dateOrdinalOf(hi)) : 0;
+      for (const c of ordered) {
+        const val = applyRuleValue(rule, c.text, c.exact, method, ordinal);
+        if (!val) continue;
+        keepBest(rule.field, val);
+        if (isSatisfied(rule, val)) break;
+      }
     }
-    hits.sort((a, b) => a.pos - b.pos);
-    dateRulesOnLine.set(i, hits);
   }
 
-  for (const rule of profile.labelRules) {
-    const hit = matchRule(lines, rule, looksLikeLabel);
-    if (hit == null) continue;
-    const ordinal = dateRulesOnLine.get(hit.labelLine)?.findIndex((h) => h.rule === rule) ?? -1;
-    const val = applyRuleValue(rule, hit.value, hit.exact, method, ordinal);
-    if (val) out[rule.field] = val;
-  }
-  return out;
-}
-
-function matchRule(
-  lines: string[],
-  rule: { labels: string[]; sameLine?: boolean },
-  looksLikeLabel: (s: string) => boolean,
-): { value: string; exact: boolean; labelLine: number } | null {
-  for (let i = 0; i < lines.length; i++) {
-    const norm = normLabel(lines[i]);
+  // Whole-line fuzzy fallback: a label line OCR-mangled beyond recognition
+  // ("Lationality he ny") whose value follows on the next line.
+  for (const rule of rules) {
+    if (out[rule.field]?.value) continue;
     for (const label of rule.labels) {
       const target = normLabel(label);
       if (!target) continue;
-      let idx = norm.indexOf(target);
-      if (idx === -1) {
-        // OCR-confusion fallback: “DATE OF LSSUE” / “OATE OF ISSUE” …
-        idx = foldForLabel(norm).indexOf(foldForLabel(target));
-      }
-      if (idx === -1) {
-        // fuzzy: whole-line label with 1 typo (OCR noise)
-        if (norm.length <= target.length + 3 && levenshtein(norm, target) <= (target.length > 6 ? 2 : 1)) {
-          const next = (lines[i + 1] ?? "").trim();
-          if (next) return { value: next, exact: false, labelLine: i };
+      for (let i = 0; i < lines.length; i++) {
+        if (lineHits[i].length) continue;
+        if (norms[i].length > target.length + 3) continue;
+        if (levenshtein(norms[i], target) <= (target.length > 6 ? 2 : 1)) {
+          const next = lines[i + 1] ?? "";
+          if (next && !looksLikeLabel(next)) {
+            const val = applyRuleValue(rule, next, false, method, 0);
+            if (val) keepBest(rule.field, val);
+          }
         }
-        continue;
       }
-      // Label found — value = rest of line, or next line when rest is empty
-      // or another label (two-column pages put two labels on one line).
-      const rest = norm.slice(idx + target.length).replace(/^[\s:.\-–—]+/, "").trim();
-      if (rest.length >= 1 && !looksLikeLabel(rest)) return { value: rest, exact: true, labelLine: i };
-      if (rule.sameLine === false) continue;
-      const next = (lines[i + 1] ?? "").trim();
-      if (next && !looksLikeLabel(next)) return { value: next, exact: false, labelLine: i };
     }
   }
-  return null;
+
+  return out;
 }
 
 /* ------------------------------------------------------------------ */
