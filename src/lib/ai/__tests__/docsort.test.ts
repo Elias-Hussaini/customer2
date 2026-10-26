@@ -12,8 +12,12 @@ import {
   buildDocSortSystemPrompt,
   extractJsonArray,
   parseDocSortReply,
+  resolveActions,
   sanitizeNewSlotLabel,
   type DocSlotOption,
+  type DocSortResult,
+  type SortOriginal,
+  type SortPiece,
 } from "../docsort";
 import {
   DEFAULT_GUTTER_OPTIONS,
@@ -44,6 +48,13 @@ describe("buildDocSortSystemPrompt", () => {
     expect(prompt).toContain('"other"');
   });
 
+  it("forbids a کد ملی slot and never calls the تذکره a national ID document type", () => {
+    const prompt = buildDocSortSystemPrompt(SLOTS);
+    expect(prompt).toContain("کد ملی");
+    expect(prompt).toContain("NEVER");
+    expect(prompt).not.toContain("national ID");
+  });
+
   it("handles an empty slot list without crashing", () => {
     const prompt = buildDocSortSystemPrompt([]);
     expect(prompt).toContain("(none defined)");
@@ -60,6 +71,20 @@ describe("buildDocSortMessages", () => {
     const parts = user.content as Array<{ type: string; text?: string; image_url?: { url: string } }>;
     expect(parts[0].text).toContain("numbered 1..2");
     expect(parts.filter((p) => p.type === "image_url")).toHaveLength(2);
+  });
+
+  it("tells the model which images were cut from one page", () => {
+    const msgs = buildDocSortMessages(["data:image/jpeg;base64,AAA", "data:image/jpeg;base64,BBB"], SLOTS, [
+      [2, 3],
+    ]);
+    const parts = msgs[1].content as Array<{ type: string; text?: string }>;
+    expect(parts[0].text).toContain("Images 2 and 3 were cut from ONE page");
+  });
+
+  it("no group note without groups", () => {
+    const msgs = buildDocSortMessages(["data:image/jpeg;base64,AAA"], SLOTS);
+    const parts = msgs[1].content as Array<{ type: string; text?: string }>;
+    expect(parts[0].text).not.toContain("cut from ONE page");
   });
 });
 
@@ -89,12 +114,14 @@ describe("sanitizeNewSlotLabel", () => {
     expect(sanitizeNewSlotLabel('عکس/ویزه:شنگل')).toBe("عکسویزهشنگل");
   });
 
-  it("rejects Latin-only, empty, too-long and non-string labels", () => {
+  it("rejects Latin-only, empty, too-long, non-string and کد ملی labels", () => {
     expect(sanitizeNewSlotLabel("Driving License")).toBeNull();
     expect(sanitizeNewSlotLabel("")).toBeNull();
     expect(sanitizeNewSlotLabel("ع")).toBeNull();
     expect(sanitizeNewSlotLabel("ع".repeat(40))).toBeNull();
     expect(sanitizeNewSlotLabel(42)).toBeNull();
+    expect(sanitizeNewSlotLabel("کد ملی")).toBeNull();
+    expect(sanitizeNewSlotLabel("عکس کدملی")).toBeNull();
   });
 });
 
@@ -102,14 +129,13 @@ describe("parseDocSortReply", () => {
   it("maps every index to its slot target", () => {
     const reply = JSON.stringify([
       { index: 1, slot: "passport" },
-      { index: 2, slot: "nidFront", note: "روی تذکره دست‌نویس" },
+      { index: 2, slot: "nidFront" },
       { index: 3, slot: "nidBack" },
     ]);
     const out = parseDocSortReply(reply, SLOTS, 3);
     expect(out).toHaveLength(3);
     expect(out[0].target).toEqual({ kind: "slot", slotId: "passport", label: "عکس پاسپورت" });
     expect(out[1].target).toEqual({ kind: "slot", slotId: "nidFront", label: "عکس روی تذکره" });
-    expect(out[1].note).toBe("روی تذکره دست‌نویس");
     expect(out[2].target).toEqual({ kind: "slot", slotId: "nidBack", label: "عکس پشت تذکره" });
   });
 
@@ -165,6 +191,88 @@ describe("parseDocSortReply", () => {
 
   it("throws a Persian error for unusable replies", () => {
     expect(() => parseDocSortReply("total garbage", SLOTS, 2)).toThrow(/JSON/);
+  });
+});
+
+/* ------------------------------ resolveActions ----------------------------- */
+
+const NID_BACK = { kind: "slot", slotId: "nidBack", label: "عکس پشت تذکره" } as const;
+const NID_FRONT = { kind: "slot", slotId: "nidFront", label: "عکس روی تذکره" } as const;
+
+function piecesAndOriginals() {
+  const originals: SortOriginal[] = [
+    { dataUrl: "data:,whole-tazkira-back", origin: "page-1.jpg" },
+    { dataUrl: "data:,standalone", origin: "photo.jpg" },
+  ];
+  const pieces: SortPiece[] = [
+    { dataUrl: "data:,top-half", origin: "page-1-بخش1.jpg", groupId: 0 },
+    { dataUrl: "data:,bottom-half", origin: "page-1-بخش2.jpg", groupId: 0 },
+    { dataUrl: "data:,standalone", origin: "photo.jpg", groupId: 1 },
+  ];
+  return { originals, pieces };
+}
+
+describe("resolveActions", () => {
+  it("re-joins pieces of one page that all got the same slot (the halved tazkira back)", () => {
+    const { originals, pieces } = piecesAndOriginals();
+    const results: DocSortResult[] = [
+      { index: 1, target: { ...NID_BACK } },
+      { index: 2, target: { ...NID_BACK } },
+      { index: 3, target: { kind: "photo" } },
+    ];
+    const actions = resolveActions(pieces, originals, results);
+    expect(actions).toHaveLength(2);
+    // The whole un-cut page goes to پشت تذکره once — never two halves.
+    expect(actions[0]).toEqual({ image: "data:,whole-tazkira-back", origin: "page-1.jpg", target: NID_BACK });
+    expect(actions[1].target).toEqual({ kind: "photo" });
+  });
+
+  it("keeps the cut pieces when they are truly different sides (front + back)", () => {
+    const { originals, pieces } = piecesAndOriginals();
+    const results: DocSortResult[] = [
+      { index: 1, target: { ...NID_FRONT } },
+      { index: 2, target: { ...NID_BACK } },
+      { index: 3, target: { kind: "other" } },
+    ];
+    const actions = resolveActions(pieces, originals, results);
+    expect(actions).toHaveLength(3);
+    expect(actions[0].image).toBe("data:,top-half");
+    expect(actions[0].target).toEqual(NID_FRONT);
+    expect(actions[1].image).toBe("data:,bottom-half");
+    expect(actions[1].target).toEqual(NID_BACK);
+  });
+
+  it("absorbs an unreadable piece into the whole page (slot + other collapses)", () => {
+    const { originals, pieces } = piecesAndOriginals();
+    const results: DocSortResult[] = [
+      { index: 1, target: { ...NID_BACK } },
+      { index: 2, target: { kind: "other" } },
+      { index: 3, target: { kind: "other" } },
+    ];
+    const actions = resolveActions(pieces, originals, results);
+    expect(actions).toHaveLength(2);
+    expect(actions[0].image).toBe("data:,whole-tazkira-back");
+    expect(actions[0].target).toEqual(NID_BACK);
+    expect(actions[1].target).toEqual({ kind: "other" });
+  });
+
+  it("files the whole page to سایر once when every piece is other", () => {
+    const { originals, pieces } = piecesAndOriginals();
+    const results: DocSortResult[] = [
+      { index: 1, target: { kind: "other" } },
+      { index: 2, target: { kind: "other" } },
+      { index: 3, target: { ...NID_FRONT } },
+    ];
+    const actions = resolveActions(pieces, originals, results);
+    expect(actions).toHaveLength(2);
+    expect(actions[0]).toEqual({ image: "data:,whole-tazkira-back", origin: "page-1.jpg", target: { kind: "other" } });
+  });
+
+  it("passes uncut pieces straight through", () => {
+    const originals: SortOriginal[] = [{ dataUrl: "data:,solo", origin: "s.jpg" }];
+    const pieces: SortPiece[] = [{ dataUrl: "data:,solo", origin: "s.jpg", groupId: 0 }];
+    const actions = resolveActions(pieces, originals, [{ index: 1, target: { ...NID_FRONT } }]);
+    expect(actions).toEqual([{ image: "data:,solo", origin: "s.jpg", target: NID_FRONT }]);
   });
 });
 

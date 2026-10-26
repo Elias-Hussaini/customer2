@@ -95,6 +95,46 @@ export async function stripLegacyDocHints(): Promise<void> {
   });
 }
 
+/**
+ * One-time cleanup: the AI once created a bogus «کد ملی» document slot by
+ * mis-reading the back of a تذکره (the app has no such field). Any slot
+ * whose label mentions کد ملی is removed; its files move to «پشت تذکره»
+ * (where those images came from) or, failing that, to «سایر مدارک».
+ */
+export async function purgeNationalIdDocTypes(): Promise<void> {
+  const prefs = await db.preferences.get("app");
+  if (prefs?.nidJunkPurged) return;
+  const norm = (s: string) => s.replace(/[\s\u200c]+/g, "");
+  const junk = (await db.docTypes.toArray()).filter(
+    (d) => d.id !== "nidBack" && norm(d.label).includes("کدملی"),
+  );
+  if (junk.length > 0) {
+    const backExists = (await db.docTypes.get("nidBack")) != null;
+    const fallbackKind = backExists ? "nidBack" : "other";
+    await db.transaction("rw", db.docTypes, db.attachments, async () => {
+      for (const dt of junk) {
+        const files = await db.attachments.where("kind").equals(dt.id).toArray();
+        await Promise.all(files.map((f) => db.attachments.update(f.id, { kind: fallbackKind })));
+        await db.docTypes.delete(dt.id);
+      }
+    });
+    await logActivity({
+      type: "settings",
+      entity: "settings",
+      title: `بخش «${junk.map((d) => d.label).join("، ")}» حذف شد`,
+      detail: backExists
+        ? "فایل‌های آن به «پشت تذکره» منتقل شد."
+        : "فایل‌های آن به «سایر مدارک» منتقل شد.",
+    });
+  }
+  await db.preferences.put({
+    ...(prefs ?? DEFAULT_PREFS),
+    id: "app",
+    nidJunkPurged: true,
+    updatedAt: Date.now(),
+  });
+}
+
 export async function reorderDocType(id: string, direction: -1 | 1): Promise<void> {
   const all = (await db.docTypes.toArray()).sort((a, b) => a.order - b.order);
   const idx = all.findIndex((d) => d.id === id);

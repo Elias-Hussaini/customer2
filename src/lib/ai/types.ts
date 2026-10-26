@@ -62,7 +62,6 @@ export const CORE_FIELD_LABELS: Record<string, string> = {
   issue_date: "تاریخ صدور پاسپورت",
   expiry_date: "تاریخ انقضای پاسپورت",
   nationality: "ملیت (در یادداشت)",
-  national_id: "شماره ملی/تذکره (در یادداشت)",
   sex: "جنسیت (در یادداشت)",
   place_of_birth: "محل تولد (در یادداشت)",
   document_type: "نوع مدرک (در یادداشت)",
@@ -100,7 +99,6 @@ export interface ExtractionPayload {
   /** Gregorian YYYY-MM-DD. */
   expiry_date: string | null;
   nationality: string | null;
-  national_id: string | null;
   /** "M" | "F" | null. */
   sex: string | null;
   place_of_birth: string | null;
@@ -120,7 +118,6 @@ export const CORE_FIELD_KEYS = [
   "issue_date",
   "expiry_date",
   "nationality",
-  "national_id",
   "sex",
   "place_of_birth",
   "document_type",

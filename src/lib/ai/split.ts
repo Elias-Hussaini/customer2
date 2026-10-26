@@ -263,3 +263,40 @@ export async function splitCombinedImage(dataUrl: string): Promise<SplitReport> 
     return { images: [dataUrl], cuts: 0 };
   }
 }
+
+/* ------------------------------ blank pages ------------------------------- */
+
+/** Share of clearly dark pixels below which a page counts as blank. */
+const BLANK_DARK_FRACTION = 0.0015;
+/** Contrast range below which a page is uniform (paper or closed lid). */
+const BLANK_MAX_CONTRAST = 32;
+
+/**
+ * Blank-page detector: a PDF page (or any image) with essentially no ink
+ * and no contrast. Blank pages are dropped before they ever reach the AI —
+ * they must not land in «سایر». Never throws; on failure → not blank.
+ */
+export async function isBlankImage(dataUrl: string): Promise<boolean> {
+  try {
+    const bitmap = await dataUrlToBitmap(dataUrl);
+    try {
+      const gray = drawGray(bitmap, ANALYSIS_EDGE);
+      const total = gray.data.length;
+      let min = 255;
+      let max = 0;
+      let dark = 0;
+      for (let p = 0; p < total; p++) {
+        const v = gray.data[p];
+        if (v < min) min = v;
+        if (v > max) max = v;
+        if (v < 130) dark++;
+      }
+      if (max - min <= BLANK_MAX_CONTRAST) return true; // uniform page
+      return dark / total < BLANK_DARK_FRACTION; // no real ink
+    } finally {
+      bitmap.close();
+    }
+  } catch {
+    return false;
+  }
+}

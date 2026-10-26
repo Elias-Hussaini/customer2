@@ -373,7 +373,6 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
     // Document extras → a compact note line (only the switched-on ones).
     const extrasNote = [
       fieldEnabled(toggles, "nationality") && payload.nationality && `ملیت: ${payload.nationality}`,
-      fieldEnabled(toggles, "national_id") && payload.national_id && `شماره ملی/تذکره: ${payload.national_id}`,
       fieldEnabled(toggles, "place_of_birth") && payload.place_of_birth && `محل تولد: ${payload.place_of_birth}`,
       fieldEnabled(toggles, "sex") && payload.sex === "M" && "جنسیت: مرد",
       fieldEnabled(toggles, "sex") && payload.sex === "F" && "جنسیت: زن",

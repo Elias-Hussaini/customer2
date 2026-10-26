@@ -38,12 +38,17 @@ export {
   parseDocSortReply,
   extractJsonArray,
   sanitizeNewSlotLabel,
+  resolveActions,
   type DocSlotOption,
   type DocSortResult,
   type DocSortTarget,
+  type SortPiece,
+  type SortOriginal,
+  type SortAction,
 } from "./docsort";
 export {
   splitCombinedImage,
+  isBlankImage,
   findGutterBands,
   type LineProfile,
   type GutterOptions,

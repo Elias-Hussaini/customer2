@@ -6,6 +6,10 @@
  * the user's Cloudflare AI worker with the CURRENT document slots. The model
  * must answer with a fixed JSON array saying where each image belongs:
  * one of the slots, the profile photo, a NEW custom slot, or «سایر».
+ *
+ * Pieces that were cut from ONE page all land in the same destination are
+ * re-joined: the original whole page is filed instead of the pieces
+ * (see resolveActions) — a single تذکره back page is never filed in halves.
  */
 
 import type { ChatMessage, ContentPart } from "./client";
@@ -26,8 +30,6 @@ export interface DocSortResult {
   /** 1-based position of the image inside the request batch. */
   index: number;
   target: DocSortTarget;
-  /** Optional short Persian explanation from the model. */
-  note?: string;
 }
 
 export function buildDocSortSystemPrompt(slots: DocSlotOption[]): string {
@@ -40,15 +42,20 @@ The user sends several images, numbered 1..N in the order they appear. Each imag
 AVAILABLE SLOTS — choose the slot id exactly:
 ${slotLines.length > 0 ? slotLines.join("\n") : "  (none defined)"}
 
-Slot meaning guide (labels are the agency's own names):
+SLOT MEANINGS (labels are the agency's own names):
 - Passport slot = the passport DATA page: holder photo, personal data, and the two MRZ lines at the bottom. Passport covers/stamps/other pages are NOT this slot.
-- Front-of-tazkira slot = the side of the Afghan national ID (تذکره) that carries the holder's PHOTO and personal details. This includes BOTH the electronic card AND the old paper booklet تذکره — handwritten entries count just like printed ones.
-- Back-of-tazkira slot = the other side of the تذکره (no holder photo).
+- Front-of-tazkira slot = the side of the Afghan تذکره that carries the holder's PHOTO and personal details — the electronic card OR the old paper booklet, printed or handwritten.
+- Back-of-tazkira slot = the OTHER side of the same تذکره. A paper تذکره back often contains several boxes and sections (numbers, records, stamps, renewal notes) — ALL of it together is ONE back-of-tazkira page.
+
+TAZKIRA RULES (strict):
+- The تذکره IS the Afghan identity document. The app has NO «کد ملی» slot and never needs one — NEVER choose or invent a slot for کد ملی.
+- Any part, crop or section of a تذکره (a number box, a records box, a stamp area, half a page) still belongs to the front-of-tazkira or back-of-tazkira slot — NEVER to "new".
+- Some images may be PARTS of one page that the app cut apart automatically (the app tells you which). If consecutive parts show the SAME document side, give them ALL the same slot — the app re-joins them.
 
 SPECIAL TARGETS:
 - "photo" — a personal portrait of the person him/herself (passport-style headshot or a normal personal photo) that should become the customer's profile picture. A document page is NEVER "photo".
-- "new" — a clearly distinct, useful document type that matches NONE of the slots above (examples: visa page or visa stamp inside a passport, driving license, شناسنامه, work permit, residence permit slip, vaccination card…). Then also return "label": a SHORT Persian title for the new slot, like "عکس ویزه" or "گواهی‌نامه".
-- "other" — anything else: unreadable/blurred images, screenshots, random pictures, or document pages that are too ambiguous.
+- "new" — a clearly DIFFERENT document type that matches NONE of the slots above (examples: visa page or visa stamp inside a passport, driving license, شناسنامه, work permit, residence permit slip, vaccination card…). Then also return "label": a SHORT Persian title for the new slot, like "عکس ویزه" or "گواهی‌نامه".
+- "other" — anything else: unreadable/blurred images, screenshots, random pictures, empty backgrounds, or document pages that are too ambiguous.
 
 OUTPUT RULES (strict):
 - Reply with ONLY one JSON array — no markdown fences, no commentary.
@@ -56,19 +63,32 @@ OUTPUT RULES (strict):
   [{"index":1,"slot":"passport"},{"index":2,"slot":"photo"},{"index":3,"slot":"new","label":"عکس ویزه"},{"index":4,"slot":"other"}]
 - "slot" is the exact slot id from the list above, or "photo", "new", or "other".
 - Every index from 1 to N must appear exactly once. Never invent or skip indexes.
-- Optional: add "note" — up to 6 Persian words explaining the choice.
-- A single image never fills two slots. When unsure between two slots, pick the closer one and mention it in "note".`;
+- A single image never fills two slots. When unsure between two slots, pick the closer one.`;
 }
 
-export function buildDocSortMessages(images: string[], slots: DocSlotOption[]): ChatMessage[] {
+/**
+ * Build the chat messages. `groups` lists sets of 1-based image indexes that
+ * were cut apart from ONE original page — the model is told so it can answer
+ * consistently when the parts belong to the same document side.
+ */
+export function buildDocSortMessages(
+  images: string[],
+  slots: DocSlotOption[],
+  groups?: number[][],
+): ChatMessage[] {
+  const groupNotes = (groups ?? []).filter((g) => g.length >= 2);
+  const intro =
+    images.length > 1
+      ? `These ${images.length} images are numbered 1..${images.length} in order. Sort every one of them.`
+      : "Sort this single image.";
+  const groupText = groupNotes
+    .map(
+      (g) =>
+        `Images ${g.join(" and ")} were cut from ONE page — either two sides of a combined scan (different slots), or two parts of ONE document (then give them the SAME slot).`,
+    )
+    .join(" ");
   const parts: ContentPart[] = [
-    {
-      type: "text",
-      text:
-        images.length > 1
-          ? `These ${images.length} images are numbered 1..${images.length} in order. Sort every one of them.`
-          : "Sort this single image.",
-    },
+    { type: "text", text: groupText ? `${intro} ${groupText}` : intro },
   ];
   for (const url of images) {
     parts.push({ type: "image_url", image_url: { url } });
@@ -107,14 +127,10 @@ export function sanitizeNewSlotLabel(raw: unknown): string | null {
   if (!PERSIAN_LETTER.test(s)) return null;
   // Strip characters that make no sense in a slot title.
   s = s.replace(/[\\/:*?"<>|{}[\]]/g, "").trim();
+  // A «کد ملی» slot must never be created — parts of a تذکره are not a new type.
+  if (s.replace(/[\s\u200c]+/g, "").includes("کدملی")) return null;
   if (s.length < 2) return null;
   return s;
-}
-
-function asNote(raw: unknown): string | undefined {
-  if (typeof raw !== "string") return undefined;
-  const s = raw.replace(/[\r\n\t]+/g, " ").trim().slice(0, 60);
-  return s || undefined;
 }
 
 /**
@@ -154,22 +170,21 @@ export function parseDocSortReply(
     if (!Number.isInteger(idx) || idx < 1 || idx > count) continue;
     if (out.has(idx)) continue; // first answer per index wins
     const slotRaw = typeof e.slot === "string" ? e.slot.trim() : "";
-    const note = asNote(e.note);
     if (slotById.has(slotRaw)) {
       const slot = slotById.get(slotRaw)!;
-      out.set(idx, { index: idx, target: { kind: "slot", slotId: slot.id, label: slot.label }, note });
+      out.set(idx, { index: idx, target: { kind: "slot", slotId: slot.id, label: slot.label } });
     } else if (slotRaw === "photo") {
-      out.set(idx, { index: idx, target: { kind: "photo" }, note });
+      out.set(idx, { index: idx, target: { kind: "photo" } });
     } else if (slotRaw === "new") {
       const label = sanitizeNewSlotLabel(e.label);
       out.set(
         idx,
         label
-          ? { index: idx, target: { kind: "new", label }, note }
-          : { index: idx, target: { kind: "other" }, note },
+          ? { index: idx, target: { kind: "new", label } }
+          : { index: idx, target: { kind: "other" } },
       );
     } else {
-      out.set(idx, { index: idx, target: { kind: "other" }, note });
+      out.set(idx, { index: idx, target: { kind: "other" } });
     }
   }
 
@@ -179,4 +194,90 @@ export function parseDocSortReply(
     results.push(out.get(i) ?? { index: i, target: { kind: "other" } });
   }
   return results;
+}
+
+/* ----------------------------- applying results ---------------------------- */
+
+/** One image on its way to a destination (post split/collapse). */
+export interface SortPiece {
+  dataUrl: string;
+  /** Name shown when the piece lands in «سایر». */
+  origin: string;
+  /** Index into `originals` — pieces sharing a groupId were cut from one page. */
+  groupId: number;
+}
+
+/** The un-cut page each groupId refers to. */
+export interface SortOriginal {
+  dataUrl: string;
+  origin: string;
+}
+
+/** A final filing action: one image → one destination. */
+export interface SortAction {
+  image: string;
+  origin: string;
+  target: DocSortTarget;
+}
+
+function targetKey(t: DocSortTarget): string {
+  if (t.kind === "slot") return `slot:${t.slotId}`;
+  if (t.kind === "new") return `new:${t.label}`;
+  return t.kind; // "photo" | "other"
+}
+
+/**
+ * Turn per-piece AI results into final filing actions.
+ *
+ * When every piece cut from ONE page received the same destination (or a mix
+ * of one destination + "other"), the split was wrong — e.g. a single تذکره
+ * back page whose internal white band fooled the cutter. In that case the
+ * ORIGINAL whole page is filed once to that destination instead of the
+ * pieces. Only genuinely different destinations keep the cut pieces apart.
+ */
+export function resolveActions(
+  pieces: SortPiece[],
+  originals: SortOriginal[],
+  results: DocSortResult[],
+): SortAction[] {
+  const byGroup = new Map<number, number[]>();
+  pieces.forEach((p, i) => {
+    const list = byGroup.get(p.groupId);
+    if (list) list.push(i);
+    else byGroup.set(p.groupId, [i]);
+  });
+
+  const actions: SortAction[] = [];
+  for (const idxs of byGroup.values()) {
+    if (idxs.length <= 1) {
+      const i = idxs[0];
+      const r = results[i];
+      if (r) actions.push({ image: pieces[i].dataUrl, origin: pieces[i].origin, target: r.target });
+      continue;
+    }
+    // A multi-piece group: pieces cut from one page.
+    const distinct = new Map<string, DocSortTarget>();
+    for (const i of idxs) {
+      const t = results[i]?.target;
+      if (!t || t.kind === "other") continue;
+      const key = targetKey(t);
+      if (!distinct.has(key)) distinct.set(key, t);
+    }
+    if (distinct.size >= 2) {
+      // Two different real destinations → a true combined scan, keep pieces.
+      for (const i of idxs) {
+        const r = results[i];
+        if (r) {
+          actions.push({ image: pieces[i].dataUrl, origin: pieces[i].origin, target: r.target });
+        }
+      }
+    } else {
+      // One destination (or only "other") → file the ORIGINAL whole page once.
+      const original = originals[pieces[idxs[0]].groupId] ?? pieces[idxs[0]];
+      const target: DocSortTarget =
+        distinct.size === 1 ? distinct.values().next().value! : { kind: "other" };
+      actions.push({ image: original.dataUrl, origin: original.origin, target });
+    }
+  }
+  return actions;
 }

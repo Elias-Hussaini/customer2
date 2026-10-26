@@ -20,7 +20,6 @@ const CORE_SCHEMA_JSON = `{
   "issue_date": null,
   "expiry_date": null,
   "nationality": null,
-  "national_id": null,
   "sex": null,
   "place_of_birth": null,
   "document_type": null,
@@ -41,7 +40,7 @@ export function buildSystemPrompt(ctx: ExtractionContext = {}): string {
           .join("\n")}`
       : "";
   return `You are a document-data extraction engine inside a visa agency app.
-The user sends one or more photos or scanned pages of a travel/identity document (passport, national ID / tazkira, visa, residence permit, ...).
+The user sends one or more photos or scanned pages of a travel/identity document (passport, tazkira, visa, residence permit, ...).
 
 Read every image carefully and return the person's data as JSON.
 
@@ -61,13 +60,13 @@ NAME RULES:
 - If the document prints names in Latin letters (e.g. the MRZ zone), TRANSLITERATE them into the standard Persian/Dari spelling of that name. Examples: "AHMADI" → "احمدی", "MOHAMMAD" → "محمد", "ZAHRA" → "زهرا", "ABDUL RAHMAN" → "عبدالرحمن", "NASRULLAH" → "نصرالله".
 - Never invent, guess or complete data.
 - nationality and place_of_birth must also be Persian ("AFGHANISTAN" → "افغانستان", "HERAT" → "هرات").
-- passport_number and national_id: copy letters/digits exactly as printed, without spaces (these stay in Latin/digits).
+- passport_number: copy letters/digits exactly as printed, without spaces (stays in Latin/digits).
 
 SCHEMA — always exactly these keys:
 ${CORE_SCHEMA_JSON}
 
 - "sex": "M" or "F" or null.
-- "document_type": short English type: "passport", "national_id", "visa", "residence_permit", ...
+- "document_type": short English type: "passport", "tazkira", "visa", "residence_permit", ...
 - "uncertain": array of schema keys you are NOT fully sure about (e.g. ["date_of_birth"]). Empty array when everything is clear.${customBlock}`;
 }
 
@@ -155,7 +154,6 @@ export function parseExtractionReply(text: string): ExtractionPayload {
     issue_date: asStringOrNull(raw.issue_date),
     expiry_date: asStringOrNull(raw.expiry_date),
     nationality: asStringOrNull(raw.nationality),
-    national_id: asStringOrNull(raw.national_id),
     sex: normalizeSex(raw.sex),
     place_of_birth: asStringOrNull(raw.place_of_birth),
     document_type: asStringOrNull(raw.document_type),
@@ -164,8 +162,10 @@ export function parseExtractionReply(text: string): ExtractionPayload {
       : [],
   };
 
-  // Keep any extra (custom-field) keys as trimmed strings.
+  // Keep any extra (custom-field) keys as trimmed strings. The retired
+  // `national_id` key is explicitly dropped when an old model still echoes it.
   for (const [k, v] of Object.entries(raw)) {
+    if (k === "national_id") continue;
     if ((CORE_FIELD_KEYS as readonly string[]).includes(k)) continue;
     if (typeof v === "string" || typeof v === "number") {
       out[k] = asStringOrNull(v);

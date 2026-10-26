@@ -232,6 +232,8 @@ export interface AppPreferences {
   docTypesSeeded?: boolean;
   /** Internal: legacy doc-type hints stripped once. */
   docHintsStripped?: boolean;
+  /** Internal: bogus AI-created «کد ملی» doc slots purged once. */
+  nidJunkPurged?: boolean;
   updatedAt: number;
 }
 

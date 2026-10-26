@@ -6,6 +6,8 @@
  * everything comes out as compact JPEG data URLs ready for `image_url`.
  */
 
+import { isBlankImage } from "./split";
+
 let pdfjsLib: typeof import("pdfjs-dist") | null = null;
 
 async function loadPdfjs() {
@@ -142,6 +144,8 @@ export async function prepareFilesForAi(
           truncated = true;
           break;
         }
+        // Blank pages (scanner leftovers) never reach the AI.
+        if (await isBlankImage(img)) continue;
         images.push(img);
       }
     } else {

@@ -208,6 +208,17 @@ describe("extraction messages & parsing", () => {
     expect(prompt).toContain("نام پدر");
   });
 
+  it("کد ملی is gone — the prompt never asks for it and old echoes are dropped", () => {
+    const prompt = buildSystemPrompt({});
+    expect(prompt).not.toContain("national_id");
+    expect(prompt).not.toContain("national ID");
+    expect(prompt).not.toContain("کد ملی");
+    const payload = parseExtractionReply(
+      '{"first_name":null,"last_name":null,"passport_number":null,"date_of_birth":null,"issue_date":null,"expiry_date":null,"nationality":null,"national_id":"1400-0101-12345","sex":null,"place_of_birth":null,"document_type":null,"uncertain":[]}',
+    );
+    expect("national_id" in payload).toBe(false);
+  });
+
   it("builds one user message with text + image parts", () => {
     const messages = buildExtractionMessages(["data:image/jpeg;base64,AAA", "data:image/jpeg;base64,BBB"]);
     expect(messages).toHaveLength(2);
