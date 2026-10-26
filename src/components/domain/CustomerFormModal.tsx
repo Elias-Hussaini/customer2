@@ -5,8 +5,10 @@ import {
   CheckCircle2,
   FilePlus2,
   Loader2,
+  RotateCcw,
   Settings2,
   Sparkles,
+  X,
 } from "lucide-react";
 import { Modal } from "../ui/Modal";
 import { Button } from "../ui/Button";
@@ -99,7 +101,7 @@ type AiState =
   | { t: "idle" }
   | { t: "busy"; stage: AiStageInfo | null }
   | { t: "done"; filled: number; review: number; files: string }
-  | { t: "error"; message: string; needsSetup?: boolean };
+  | { t: "error"; message: string; needsSetup?: boolean; canRetry?: boolean };
 
 /** Tiny badge on a field label: emerald = trusted value, amber = re-check. */
 function AiMark({ state }: { state?: "ok" | "review" }) {
@@ -157,6 +159,13 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
   const [smartFiles, setSmartFiles] = useState<File[]>([]); // auto-attached to the customer's documents
   const fileRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  /** Retry plumbing: last files, prepared images, cancel flag + aborter. */
+  const aiFilesRef = useRef<File[]>([]);
+  const aiPrepRef = useRef<{ images: string[]; summary: string } | null>(null);
+  const aiCancelledRef = useRef(false);
+  const aiAbortRef = useRef<AbortController | null>(null);
+  const aiStateRef = useRef<AiState>({ t: "idle" });
+  aiStateRef.current = ai;
 
   // Simultaneous visa-request section (create mode only).
   const [withRequest, setWithRequest] = useState(true);
@@ -202,6 +211,9 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
       setAiRun(0);
       setDragActive(false);
       setSmartFiles([]);
+      aiFilesRef.current = [];
+      aiPrepRef.current = null;
+      aiCancelledRef.current = false;
       if (customer) {
         setForm({
           firstName: customer.firstName ?? "",
@@ -393,6 +405,73 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
     return { filled, review, customFilled };
   };
 
+  /** Shared error formatting for the smart-fill flow. */
+  const aiErrorFrom = (e: unknown): AiState => {
+    if (e instanceof AiAllWorkersFailedError) {
+      return {
+        t: "error",
+        message:
+          e.attempts.length === 0
+            ? "هیچ ورکر فعالی تنظیم نشده است."
+            : `همه حساب‌ها ناموفق بودند:\n${e.attempts
+                .map((a) => `• ${a.label}: ${a.message}`)
+                .join("\n")}`,
+        needsSetup: e.attempts.length === 0,
+        canRetry: e.attempts.length > 0,
+      };
+    }
+    return {
+      t: "error",
+      message: e instanceof Error ? e.message : "خواندن فایل با خطا متوقف شد — دستی پر کنید.",
+      canRetry: true,
+    };
+  };
+
+  /** The AI step itself — re-runnable on the already-prepared images. */
+  const classifyAndApply = async (images: string[]): Promise<void> => {
+    const messages = buildExtractionMessages(images, {
+      customFields: fieldsRef.current
+        .filter((f) => fieldEnabled(aiSettings.fieldToggles, f.key))
+        .map((f) => ({ key: f.key, label: f.label })),
+    });
+    aiAbortRef.current = new AbortController();
+    const { text } = await aiChat(messages, {
+      maxTokens: 2048,
+      temperature: 0.1,
+      signal: aiAbortRef.current.signal,
+      onAttempt: ({ worker, index, total }) =>
+        setAi((cur) =>
+          cur.t === "busy"
+            ? {
+                t: "busy",
+                stage: {
+                  label:
+                    total > 1 && index > 0
+                      ? `حساب قبلی خطا داد — تلاش با «${worker.label}»…`
+                      : `ارسال به هوش مصنوعی (${worker.label})…`,
+                  percent: 65,
+                },
+              }
+            : cur,
+        ),
+    });
+    if (aiCancelledRef.current) return;
+    setAi((cur) => (cur.t === "busy" ? { t: "busy", stage: { label: "خواندن پاسخ…", percent: 90 } } : cur));
+    const payload = parseExtractionReply(text);
+    const { filled, review } = applyPayload(payload);
+    if (filled === 0) {
+      throw new Error("هوش مصنوعی هیچ فیلدی از این مدرک نخواند — فرم را دستی پر کنید.");
+    }
+    setAiRun((n) => n + 1);
+    setAi({
+      t: "done",
+      filled,
+      review,
+      files: aiPrepRef.current?.summary ?? "",
+    });
+    if (payload.passport_number) void checkDuplicate(payload.passport_number.toUpperCase());
+  };
+
   const runAi = async (files: File[]) => {
     if (files.length === 0) return;
     if (!hasWorker) {
@@ -410,6 +489,9 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
         return;
       }
     }
+    aiCancelledRef.current = false;
+    aiFilesRef.current = files;
+    aiPrepRef.current = null;
     setAi({ t: "busy", stage: { label: "آماده‌سازی تصاویر…", percent: 5 } });
     setAiMarks({});
     // NOTE: aiOwned is deliberately NOT reset here — slots the previous upload
@@ -420,65 +502,53 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
       const prep = await prepareFilesForAi(files, (s) =>
         setAi((cur) => (cur.t === "busy" ? { t: "busy", stage: s } : cur)),
       );
+      if (aiCancelledRef.current) return;
       if (prep.images.length === 0) {
         setAi({ t: "error", message: "از این فایل هیچ تصویری ساخته نشد — فایل دیگری امتحان کنید." });
         return;
       }
-      const messages = buildExtractionMessages(prep.images, {
-        customFields: fieldsRef.current
-          .filter((f) => fieldEnabled(aiSettings.fieldToggles, f.key))
-          .map((f) => ({ key: f.key, label: f.label })),
-      });
-      const { text } = await aiChat(messages, {
-        maxTokens: 2048,
-        temperature: 0.1,
-        onAttempt: ({ worker, index, total }) =>
-          setAi((cur) =>
-            cur.t === "busy"
-              ? {
-                  t: "busy",
-                  stage: {
-                    label:
-                      total > 1 && index > 0
-                        ? `حساب قبلی خطا داد — تلاش با «${worker.label}»…`
-                        : `ارسال به هوش مصنوعی (${worker.label})…`,
-                    percent: 65,
-                  },
-                }
-              : cur,
-          ),
-      });
-      setAi((cur) => (cur.t === "busy" ? { t: "busy", stage: { label: "خواندن پاسخ…", percent: 90 } } : cur));
-      const payload = parseExtractionReply(text);
-      const { filled, review } = applyPayload(payload);
-      if (filled === 0) {
-        setAi({ t: "error", message: "هوش مصنوعی هیچ فیلدی از این مدرک نخواند — فرم را دستی پر کنید." });
-        return;
-      }
-      setAiRun((n) => n + 1);
-      setAi({
-        t: "done",
-        filled,
-        review,
-        files: prep.summary + (prep.truncated ? " (فقط ۶ تصویر اول ارسال شد)" : ""),
-      });
-      if (payload.passport_number) void checkDuplicate(payload.passport_number.toUpperCase());
+      aiPrepRef.current = {
+        images: prep.images,
+        summary: prep.summary + (prep.truncated ? " (فقط ۶ تصویر اول ارسال شد)" : ""),
+      };
+      await classifyAndApply(prep.images);
     } catch (e) {
-      if (e instanceof AiAllWorkersFailedError) {
-        setAi({
-          t: "error",
-          message:
-            e.attempts.length === 0
-              ? "هیچ ورکر فعالی تنظیم نشده است."
-              : `همه حساب‌ها ناموفق بودند:\n${e.attempts
-                  .map((a) => `• ${a.label}: ${a.message}`)
-                  .join("\n")}`,
-          needsSetup: e.attempts.length === 0,
-        });
-      } else {
-        setAi({ t: "error", message: e instanceof Error ? e.message : "خواندن فایل با خطا متوقف شد — دستی پر کنید." });
-      }
+      if (aiCancelledRef.current) return;
+      setAi(aiErrorFrom(e));
     }
+  };
+
+  /** «تلاش دوباره» — reuses the prepared images, so the PDF conversion and
+   *  upload steps are never redone after a CORS/JSON/network error. */
+  const retryAi = async () => {
+    if (aiStateRef.current.t === "busy") return;
+    if (!hasWorker) {
+      setAi({
+        t: "error",
+        message: "هوش مصنوعی هنوز تنظیم نشده — اول ورکر Cloudflare را در تنظیمات اضافه کنید.",
+        needsSetup: true,
+      });
+      return;
+    }
+    aiCancelledRef.current = false;
+    const prep = aiPrepRef.current;
+    if (prep && prep.images.length > 0) {
+      setAi({ t: "busy", stage: { label: "تلاش دوباره…", percent: 65 } });
+      try {
+        await classifyAndApply(prep.images);
+      } catch (e) {
+        if (aiCancelledRef.current) return;
+        setAi(aiErrorFrom(e));
+      }
+    } else if (aiFilesRef.current.length > 0) {
+      await runAi(aiFilesRef.current);
+    }
+  };
+
+  const cancelAi = () => {
+    aiCancelledRef.current = true;
+    aiAbortRef.current?.abort();
+    setAi({ t: "idle" });
   };
 
   // ---- drag & drop across the whole form ----
@@ -499,6 +569,19 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
     if (files.length > 0) void runAi(files);
   };
 
+  // ---- paste images (screenshots) straight into the form ----
+  useEffect(() => {
+    if (!open) return;
+    const onPaste = (e: ClipboardEvent) => {
+      if (aiStateRef.current.t === "busy") return;
+      const files = Array.from(e.clipboardData?.files ?? []);
+      if (files.length === 0) return; // plain text paste stays untouched
+      e.preventDefault();
+      void runAi(files);
+    };
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  }, [open, runAi]);
 
   const validate = (): boolean => {
     const next: Record<string, string> = {};
@@ -663,6 +746,15 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
                   فعال‌سازی هوش مصنوعی
                 </Link>
               )}
+              {busy && (
+                <button
+                  type="button"
+                  className="btn btn-glass btn-sm shrink-0"
+                  onClick={cancelAi}
+                >
+                  <X size={13} /> لغو
+                </button>
+              )}
               <p className="hidden min-w-0 text-[11px] leading-4 text-ink-500 sm:block dark:text-ink-400">
                 {hasWorker
                   ? busy
@@ -705,11 +797,18 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
                 <AlertTriangle size={12} className="mt-0.5 shrink-0" />
                 <span className="min-w-0 whitespace-pre-line">{ai.message}</span>
               </p>
-              {ai.needsSetup && (
-                <Link to="/settings?tab=ai" className="btn btn-glass btn-sm w-fit">
-                  <Settings2 size={13} /> رفتن به تنظیمات هوش مصنوعی
-                </Link>
-              )}
+              <div className="flex flex-wrap items-center gap-2">
+                {ai.canRetry && (
+                  <button type="button" className="btn btn-glass btn-sm w-fit" onClick={() => void retryAi()}>
+                    <RotateCcw size={13} /> تلاش دوباره
+                  </button>
+                )}
+                {ai.needsSetup && (
+                  <Link to="/settings?tab=ai" className="btn btn-glass btn-sm w-fit">
+                    <Settings2 size={13} /> رفتن به تنظیمات هوش مصنوعی
+                  </Link>
+                )}
+              </div>
             </div>
           )}
           <input

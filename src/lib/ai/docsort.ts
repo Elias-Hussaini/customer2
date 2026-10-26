@@ -44,13 +44,14 @@ ${slotLines.length > 0 ? slotLines.join("\n") : "  (none defined)"}
 
 SLOT MEANINGS (labels are the agency's own names):
 - Passport slot = the passport DATA page: holder photo, personal data, and the two MRZ lines at the bottom. Passport covers/stamps/other pages are NOT this slot.
-- Front-of-tazkira slot = the side of the Afghan تذکره that carries the holder's PHOTO and personal details — the electronic card OR the old paper booklet, printed or handwritten.
-- Back-of-tazkira slot = the OTHER side of the same تذکره. A paper تذکره back often contains several boxes and sections (numbers, records, stamps, renewal notes) — ALL of it together is ONE back-of-tazkira page.
+- Front-of-tazkira slot = the side of the Afghan تذکره that identifies the PERSON: the electronic card with the holder's photo, OR the paper booklet page whose printed/handwritten fields are personal identity data (شماره تذکره، نام، تخلص، نام پدر، نام پدربزرگ، مذهب، زادگاه/ولایت، سال تولد…) usually under the state header (جمهوری اسلامی افغانستان / وزارت داخله).
+- Back-of-tazkira slot = the OTHER side of the same تذکره. The paper back carries ISSUE and RECORD content: تاریخ صدور / محل صدور، نشانی، family & household record boxes, numbers, renewal notes, stamps, signatures and seal boxes — often one or several boxed tables.
+- DECIDING RULE for paper تذکره pages: a page with record boxes / numbers / stamps / issue data and NO personal-identity fields is the BACK. A page whose content identifies the holder (name, father, birth…) is the FRONT. A whole back page — boxes, numbers, records and all — is ONE back-of-tazkira image.
 
 TAZKIRA RULES (strict):
 - The تذکره IS the Afghan identity document. The app has NO «کد ملی» slot and never needs one — NEVER choose or invent a slot for کد ملی.
 - Any part, crop or section of a تذکره (a number box, a records box, a stamp area, half a page) still belongs to the front-of-tazkira or back-of-tazkira slot — NEVER to "new".
-- Some images may be PARTS of one page that the app cut apart automatically (the app tells you which). If consecutive parts show the SAME document side, give them ALL the same slot — the app re-joins them.
+- Some images may be PARTS of one page that the app cut apart automatically (the app tells you which). If the parts show the SAME document side — e.g. the top and bottom of one page, one sliced box/table — give them ALL the SAME slot so the app re-joins them. Only give DIFFERENT slots when one part is clearly another side/document (e.g. one part has the holder's personal data, the other has record boxes).
 
 SPECIAL TARGETS:
 - "photo" — a personal portrait of the person him/herself (passport-style headshot or a normal personal photo) that should become the customer's profile picture. A document page is NEVER "photo".
@@ -82,9 +83,8 @@ export function buildDocSortMessages(
       ? `These ${images.length} images are numbered 1..${images.length} in order. Sort every one of them.`
       : "Sort this single image.";
   const groupText = groupNotes
-    .map(
-      (g) =>
-        `Images ${g.join(" and ")} were cut from ONE page — either two sides of a combined scan (different slots), or two parts of ONE document (then give them the SAME slot).`,
+    .map((g) =>
+        `Images ${g.join(" and ")} were cut from ONE page — either two different sides/documents (then give different slots), or two parts of the SAME page, e.g. the top and bottom of one document (then give them ALL the SAME slot so the app re-joins them).`,
     )
     .join(" ");
   const parts: ContentPart[] = [
@@ -117,6 +117,11 @@ export function extractJsonArray(text: string): string {
 
 const PERSIAN_LETTER = /[\u0621-\u064A\u0671-\u06D3]/;
 const LABEL_TRIM = /^[\s\-–—:،]+|[\s\-–—:،]+$/g;
+
+/** Normalize a Persian label for comparisons (space & ZWNJ insensitive). */
+function normalizeLabel(s: string): string {
+  return s.replace(/[\s\u200c]+/g, "").trim();
+}
 
 /** Keep only sane, short Persian-ish labels for AI-created slots. */
 export function sanitizeNewSlotLabel(raw: unknown): string | null {
@@ -161,6 +166,7 @@ export function parseDocSortReply(
   }
 
   const slotById = new Map(slots.map((s) => [s.id, s]));
+  const slotByNormLabel = new Map(slots.map((s) => [normalizeLabel(s.label), s]));
   const out = new Map<number, DocSortResult>();
 
   for (const entry of parsed) {
@@ -177,12 +183,23 @@ export function parseDocSortReply(
       out.set(idx, { index: idx, target: { kind: "photo" } });
     } else if (slotRaw === "new") {
       const label = sanitizeNewSlotLabel(e.label);
-      out.set(
-        idx,
-        label
-          ? { index: idx, target: { kind: "new", label } }
-          : { index: idx, target: { kind: "other" } },
-      );
+      // The model sometimes re-invents a slot that already exists (e.g.
+      // «عکس روی تذکره») — map it back onto the real slot so the re-join
+      // logic recognizes the same destination and no duplicate slot appears.
+      const twin = label ? slotByNormLabel.get(normalizeLabel(label)) : undefined;
+      if (twin) {
+        out.set(idx, {
+          index: idx,
+          target: { kind: "slot", slotId: twin.id, label: twin.label },
+        });
+      } else {
+        out.set(
+          idx,
+          label
+            ? { index: idx, target: { kind: "new", label } }
+            : { index: idx, target: { kind: "other" } },
+        );
+      }
     } else {
       out.set(idx, { index: idx, target: { kind: "other" } });
     }
@@ -197,6 +214,46 @@ export function parseDocSortReply(
 }
 
 /* ----------------------------- applying results ---------------------------- */
+
+/** Images per AI request (context/cost safety — extra images go in a 2nd batch). */
+export const DOC_SORT_CHUNK = 6;
+
+/**
+ * Split the piece list into AI request chunks. Pieces cut from ONE page
+ * (same groupId) always stay together in the same chunk, so the model sees
+ * the whole group and the re-join hint makes sense.
+ */
+export function buildChunks(expanded: SortPiece[], chunkSize = DOC_SORT_CHUNK): number[][] {
+  const chunks: number[][] = [];
+  let cur: number[] = [];
+  for (let i = 0; i < expanded.length; i++) {
+    const start = i;
+    while (i + 1 < expanded.length && expanded[i + 1].groupId === expanded[start].groupId) i++;
+    const groupRun = Array.from({ length: i - start + 1 }, (_, k) => start + k);
+    if (cur.length > 0 && cur.length + groupRun.length > chunkSize) {
+      chunks.push(cur);
+      cur = [];
+    }
+    cur.push(...groupRun);
+  }
+  if (cur.length > 0) chunks.push(cur);
+  return chunks;
+}
+
+/** Local 1-based image-index groups inside one chunk (for the model hint). */
+export function chunkLocalGroups(expanded: SortPiece[], chunk: number[]): number[][] {
+  const groups: number[][] = [];
+  for (let k = 0; k < chunk.length; k++) {
+    const gid = expanded[chunk[k]].groupId;
+    const run: number[] = [k + 1];
+    while (k + 1 < chunk.length && expanded[chunk[k + 1]].groupId === gid) {
+      k++;
+      run.push(k + 1);
+    }
+    if (run.length >= 2) groups.push(run);
+  }
+  return groups;
+}
 
 /** One image on its way to a destination (post split/collapse). */
 export interface SortPiece {
