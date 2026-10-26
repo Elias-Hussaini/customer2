@@ -237,6 +237,22 @@ export interface AppPreferences {
   updatedAt: number;
 }
 
+/**
+ * Attachment metadata without the binary payload. The ZIP full backup stores
+ * these in data/database.json while the actual bytes travel in assets/.
+ */
+export interface AttachmentMeta {
+  id: string;
+  /** Owning customer — null for payment receipt photos. */
+  customerId: string | null;
+  paymentId?: string | null;
+  kind: AttachmentKind;
+  name: string;
+  mime: string;
+  size: number;
+  createdAt: number;
+}
+
 /** JSON backup file (attachments excluded by design). */
 export interface BackupFile {
   format: "2customer-backup";
@@ -263,6 +279,14 @@ export interface BackupFile {
      *  full backups never include accounting; it has its own separate backup
      *  inside the حسابداری section. Kept optional so old files still restore. */
     acc?: import("../accounting/types").AccBackupData;
+    /** ZIP full backup only: attachment metadata (bytes live in assets/).
+     *  A legacy JSON restore refuses files carrying this field — the
+     *  complete ZIP archive must be used instead. */
+    attachments?: AttachmentMeta[];
+    /** ZIP full backup (encrypted) only: AI worker accounts. API keys are
+     *  only ever exported inside a password-encrypted archive. */
+    aiWorkers?: import("../lib/ai/types").AiWorker[];
+    aiMeta?: import("../lib/ai/types").AiSettings | null;
   };
 }
 

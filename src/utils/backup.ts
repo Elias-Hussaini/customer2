@@ -12,57 +12,65 @@ export const BACKUP_VERSION = 1;
 export const BACKUP_FORMAT = "2customer-backup";
 export const ENCRYPTED_FORMAT = "2customer-encrypted-backup";
 
-/**
- * Full JSON backup of every main-app table except attachments (by design).
- * The حسابداری (accounting) section is a completely separate world — it is
- * deliberately NOT part of this backup and has its own backup/restore inside
- * the accounting section itself.
- */
-export async function buildBackup(): Promise<BackupFile> {
-  const [
-    representatives,
-    customers,
-    requests,
-    lists,
-    payments,
-    tags,
-    visaTypes,
-    customFields,
-    docTypes,
-    activities,
-    preferences,
-  ] = await Promise.all([
-    db.representatives.toArray(),
-    db.customers.toArray(),
-    db.requests.toArray(),
-    db.lists.toArray(),
-    db.payments.toArray(),
-    db.tags.toArray(),
-    db.visaTypes.toArray(),
-    db.customFields.toArray(),
-    db.docTypes.toArray(),
-    db.activities.orderBy("ts").reverse().limit(800).toArray(),
-    db.preferences.get("app"),
-  ]);
+export interface BackupDataOptions {
+  /** Legacy JSON caps the activity log at 800 entries; the ZIP full backup keeps everything. */
+  allActivities?: boolean;
+}
 
-  return {
-    format: BACKUP_FORMAT,
-    version: BACKUP_VERSION,
-    exportedAt: Date.now(),
-    schemaVersion: db.verno,
-    counts: {
-      representatives: representatives.length,
-      customers: customers.length,
-      requests: requests.length,
-      lists: lists.length,
-      payments: payments.length,
-      tags: tags.length,
-      visaTypes: visaTypes.length,
-      customFields: customFields.length,
-      docTypes: docTypes.length,
-      activities: activities.length,
-    },
-    data: {
+/** Tables read by the main-app backup (attachments excluded by design in the legacy JSON). */
+export const MAIN_BACKUP_TABLES = [
+  db.representatives,
+  db.customers,
+  db.requests,
+  db.lists,
+  db.payments,
+  db.tags,
+  db.visaTypes,
+  db.customFields,
+  db.docTypes,
+  db.activities,
+  db.preferences,
+];
+
+/**
+ * Read every main-app record table inside a single readonly transaction, so
+ * the export is a consistent snapshot. Shared by the legacy JSON backup and
+ * the ZIP full backup (which calls this from inside its own wider snapshot
+ * transaction — Dexie reuses the parent transaction when scopes overlap).
+ */
+export async function readMainBackupData(
+  opts: BackupDataOptions = {},
+): Promise<BackupFile["data"]> {
+  return db.transaction("r", MAIN_BACKUP_TABLES, async () => {
+    const [
+      representatives,
+      customers,
+      requests,
+      lists,
+      payments,
+      tags,
+      visaTypes,
+      customFields,
+      docTypes,
+      activities,
+      preferences,
+    ] = await Promise.all([
+      db.representatives.toArray(),
+      db.customers.toArray(),
+      db.requests.toArray(),
+      db.lists.toArray(),
+      db.payments.toArray(),
+      db.tags.toArray(),
+      db.visaTypes.toArray(),
+      db.customFields.toArray(),
+      db.docTypes.toArray(),
+      opts.allActivities
+        ? db.activities.toArray()
+        : db.activities.orderBy("ts").reverse().limit(800).toArray(),
+      db.preferences.get("app"),
+    ]);
+
+    return {
       representatives,
       customers,
       requests,
@@ -74,7 +82,36 @@ export async function buildBackup(): Promise<BackupFile> {
       docTypes,
       activities,
       preferences: preferences ?? null,
+    } satisfies BackupFile["data"];
+  });
+}
+
+/**
+ * Full JSON backup of every main-app table except attachments (by design).
+ * The حسابداری (accounting) section is a completely separate world — it is
+ * deliberately NOT part of this backup and has its own backup/restore inside
+ * the accounting section itself.
+ */
+export async function buildBackup(): Promise<BackupFile> {
+  const data = await readMainBackupData();
+  return {
+    format: BACKUP_FORMAT,
+    version: BACKUP_VERSION,
+    exportedAt: Date.now(),
+    schemaVersion: db.verno,
+    counts: {
+      representatives: data.representatives.length,
+      customers: data.customers.length,
+      requests: data.requests.length,
+      lists: data.lists.length,
+      payments: data.payments.length,
+      tags: data.tags.length,
+      visaTypes: data.visaTypes.length,
+      customFields: data.customFields.length,
+      docTypes: data.docTypes?.length ?? 0,
+      activities: data.activities.length,
     },
+    data,
   };
 }
 
@@ -82,21 +119,26 @@ export async function buildBackup(): Promise<BackupFile> {
 
 const ITERATIONS = 150_000;
 
-function bufToB64(buf: ArrayBuffer | Uint8Array): string {
+export function bufToB64(buf: ArrayBuffer | Uint8Array): string {
   const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);
   return btoa(bin);
 }
 
-function b64ToBuf(b64: string): Uint8Array {
+export function b64ToBuf(b64: string): Uint8Array {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return bytes;
 }
 
-async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
+export const PBKDF2_ITERATIONS = ITERATIONS;
+
+export async function deriveAesKey(
+  password: string,
+  salt: Uint8Array,
+): Promise<CryptoKey> {
   const enc = new TextEncoder();
   const base = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, [
     "deriveKey",
@@ -108,6 +150,10 @@ async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey>
     false,
     ["encrypt", "decrypt"],
   );
+}
+
+async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
+  return deriveAesKey(password, salt);
 }
 
 export async function encryptBackup(backup: BackupFile, password: string): Promise<EncryptedBackup> {
@@ -248,6 +294,14 @@ export interface RestoreResult {
 /** Apply a backup. Merge = upsert by id (backup wins). Replace = wipe first. */
 export async function applyRestore(backup: BackupFile, mode: RestoreMode): Promise<RestoreResult> {
   const d = backup.data;
+  // A database.json extracted from a ZIP archive carries attachment metadata
+  // whose bytes are NOT in the JSON — restoring it would create broken
+  // attachment rows. Refuse and point at the ZIP restore instead.
+  if (d.attachments || d.aiWorkers) {
+    throw new Error(
+      "این فایل بخشی از یک بایگانی ZIP کامل است (بدون خود تصاویر). لطفاً فایل ZIP پشتیبان را انتخاب کنید تا همه‌چیز کامل بازیابی شود.",
+    );
+  }
   let inserted = 0;
   let updated = 0;
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
+  Archive,
   DatabaseBackup,
   FileArchive,
   FileUp,
@@ -9,6 +10,7 @@ import {
   Loader2,
   ShieldAlert,
   Trash2,
+  X,
 } from "lucide-react";
 import { PageHeader } from "../components/ui/StatCard";
 import { SectionCard } from "../components/ui/inputs";
@@ -19,21 +21,58 @@ import { FormField, Input } from "../components/ui/fields";
 import { RadioSelect } from "../components/ui/inputs";
 import { db } from "../db/schema";
 import {
-  applyRestore,
   buildAttachmentsZip,
   buildBackup,
-  buildRestorePreview,
-  encryptBackup,
   exportBackupFile,
   getStorageStats,
-  readBackupFile,
-  type RestorePreview,
-  type RestoreMode,
 } from "../utils/backup";
+import {
+  applyAnyRestore,
+  BackupCancelledError,
+  buildFullZipBackup,
+  buildUnifiedPreview,
+  readAnyBackupFile,
+  type AnyBackup,
+  type BackupProgress,
+  type RestoreMode,
+  type UnifiedPreview,
+} from "../utils/zipbackup";
 import { useToast } from "../hooks/useToast";
 import { useConfirm } from "../hooks/useConfirm";
 import { formatNumber } from "../utils/num";
 import { formatTimestamp, toPersianDigits } from "../utils/jalali";
+
+const PHASE_LABELS: Record<BackupProgress["phase"], string> = {
+  reading: "در حال خواندن داده‌ها",
+  packing: "در حال ساخت فایل ZIP",
+  encrypting: "در حال رمزنگاری",
+  validating: "در حال بررسی صحت بایگانی",
+  writing: "در حال بازنویسی داده‌ها",
+  verifying: "در حال تأیید نهایی",
+  done: "آماده",
+};
+
+function ProgressLine({ progress }: { progress: BackupProgress }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between text-[11px] text-ink-500 dark:text-ink-400">
+        <span>{PHASE_LABELS[progress.phase]}</span>
+        <span className="num font-bold">{toPersianDigits(progress.percent)}٪</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-ink-500/10">
+        <div
+          className="h-full rounded-full bg-brand-500 transition-all duration-300"
+          style={{ width: `${progress.percent}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function bytesLabel(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${formatNumber(bytes / (1024 * 1024))} مگابایت`;
+  return `${formatNumber(Math.max(1, Math.round(bytes / 1024)))} کیلوبایت`;
+}
 
 export function BackupPage() {
   const toast = useToast();
@@ -46,14 +85,17 @@ export function BackupPage() {
   const [password2, setPassword2] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [zipProgress, setZipProgress] = useState<number | null>(null);
+  const [progress, setProgress] = useState<BackupProgress | null>(null);
 
   const [restoreState, setRestoreState] = useState<{
-    preview: RestorePreview;
+    any: AnyBackup;
+    preview: UnifiedPreview;
     mode: RestoreMode;
   } | null>(null);
   const [needsPassword, setNeedsPassword] = useState<{ file: File } | null>(null);
   const [restorePassword, setRestorePassword] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cancelRef = useRef(false);
 
   const refreshStats = async () => {
     setStats(await getStorageStats());
@@ -65,6 +107,8 @@ export function BackupPage() {
     void refreshStats();
   }, []);
 
+  /* ------------------------------- backup -------------------------------- */
+
   const createBackup = async () => {
     if (useEncryption && password.length < 6) {
       toast.error("رمز عبور حداقل ۶ نویسه باشد");
@@ -74,34 +118,52 @@ export function BackupPage() {
       toast.error("تکرار رمز عبور مطابقت ندارد");
       return;
     }
+    cancelRef.current = false;
     setBusy("backup");
+    setProgress({ phase: "reading", percent: 0 });
     try {
-      const backup = await buildBackup();
-      if (useEncryption) {
-        const encrypted = await encryptBackup(backup, password);
-        const blob = new Blob([JSON.stringify(encrypted, null, 2)], {
-          type: "application/json",
-        });
-        const stamp = new Date().toISOString().slice(0, 10);
-        const { downloadBlob } = await import("../utils/export/tabular");
-        downloadBlob(blob, `customer2-backup-encrypted-${stamp}.json`);
-        localStorage.setItem("customer2-last-backup", String(Date.now()));
-      } else {
-        exportBackupFile(backup);
-      }
-      toast.success("فایل پشتیبان دانلود شد");
+      const { downloadBlob } = await import("../utils/export/tabular");
+      const built = await buildFullZipBackup({
+        password: useEncryption ? password : null,
+        onProgress: setProgress,
+        shouldCancel: () => cancelRef.current,
+      });
+      downloadBlob(built.blob, built.filename);
+      localStorage.setItem("customer2-last-backup", String(Date.now()));
+      toast.success(
+        useEncryption ? "پشتیبان کامل رمزنگاری‌شده دانلود شد" : "پشتیبان کامل دانلود شد",
+      );
       setPassword("");
       setPassword2("");
       await refreshStats();
     } catch (e) {
+      if (e instanceof BackupCancelledError) {
+        toast.info("ساخت پشتیبان لغو شد");
+      } else {
+        console.error(e);
+        toast.error(e instanceof Error ? e.message : "خطا در ساخت پشتیبان");
+      }
+    } finally {
+      setBusy(null);
+      setProgress(null);
+    }
+  };
+
+  const createLegacyJson = async () => {
+    setBusy("json");
+    try {
+      exportBackupFile(await buildBackup());
+      toast.success("پشتیبان JSON قدیمی دانلود شد");
+      await refreshStats();
+    } catch (e) {
       console.error(e);
-      toast.error("خطا در ساخت پشتیبان");
+      toast.error("خطا در ساخت پشتیبان JSON");
     } finally {
       setBusy(null);
     }
   };
 
-  const createZip = async () => {
+  const createBrowseZip = async () => {
     setBusy("zip");
     setZipProgress(0);
     try {
@@ -115,12 +177,16 @@ export function BackupPage() {
     }
   };
 
+  /* ------------------------------- restore ------------------------------- */
+
   const onPickFile = async (file: File | undefined) => {
     if (!file) return;
+    setBusy("parse");
+    setProgress({ phase: "validating", percent: 0 });
     try {
-      const backup = await readBackupFile(file);
-      const preview = await buildRestorePreview(backup);
-      setRestoreState({ preview, mode: "merge" });
+      const any = await readAnyBackupFile(file);
+      const preview = await buildUnifiedPreview(any);
+      setRestoreState({ any, preview, mode: "merge" });
     } catch (e) {
       if (e instanceof Error && e.message === "ENCRYPTED") {
         setNeedsPassword({ file });
@@ -128,54 +194,65 @@ export function BackupPage() {
         return;
       }
       toast.error(e instanceof Error ? e.message : "فایل نامعتبر است");
+    } finally {
+      setBusy(null);
+      setProgress(null);
     }
   };
 
   const decryptAndPreview = async () => {
     if (!needsPassword) return;
+    setBusy("parse");
     try {
-      const backup = await readBackupFile(needsPassword.file, restorePassword);
-      const preview = await buildRestorePreview(backup);
+      const any = await readAnyBackupFile(needsPassword.file, restorePassword);
+      const preview = await buildUnifiedPreview(any);
       setNeedsPassword(null);
-      setRestoreState({ preview, mode: "merge" });
+      setRestoreState({ any, preview, mode: "merge" });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "خطا در رمزگشایی");
+    } finally {
+      setBusy(null);
     }
   };
 
   const apply = async () => {
     if (!restoreState) return;
-    const { preview, mode } = restoreState;
+    const { any, mode } = restoreState;
     const ok = await confirm({
       title: mode === "replace" ? "جایگزینی کامل داده‌ها" : "ادغام داده‌ها",
       message:
         mode === "replace"
-          ? "همه داده‌های فعلی حذف و با محتوای فایل پشتیبان جایگزین می‌شود. توصیه می‌کنیم قبل از ادامه، یک پشتیبان از وضعیت فعلی بگیرید."
+          ? "همه داده‌های فعلی (شامل تصاویر و پیوست‌ها) حذف و با محتوای فایل پشتیبان جایگزین می‌شود. توصیه می‌کنیم قبل از ادامه، یک پشتیبان از وضعیت فعلی بگیرید."
           : "رکوردهای هم‌شناسه با نسخه پشتیبان جایگزین می‌شوند و بقیه داده‌های فعلی دست‌نخورده می‌مانند.",
       danger: mode === "replace",
       confirmLabel: mode === "replace" ? "جایگزینی قطعی" : "شروع ادغام",
     });
     if (!ok) return;
     setBusy("restore");
+    setProgress({ phase: "writing", percent: 78 });
     try {
-      const result = await applyRestore(preview.backup, mode);
+      const result = await applyAnyRestore(any, mode, setProgress);
       toast.success(
-        `بازیابی انجام شد — ${toPersianDigits(result.inserted)} رکورد جدید، ${toPersianDigits(result.updated)} به‌روزرسانی`,
+        `بازیابی انجام شد — ${toPersianDigits(result.inserted)} رکورد جدید، ${toPersianDigits(
+          result.updated,
+        )} به‌روزرسانی، ${toPersianDigits(result.attachments)} پیوست`,
       );
       setRestoreState(null);
       await refreshStats();
     } catch (e) {
       console.error(e);
-      toast.error("خطا در بازیابی — داده‌ها تغییر نکرد");
+      toast.error(e instanceof Error ? e.message : "خطا در بازیابی — داده‌ها تغییر نکرد");
     } finally {
       setBusy(null);
+      setProgress(null);
     }
   };
 
   const wipeAll = async () => {
     const ok = await confirm({
       title: "پاک کردن همه داده‌ها",
-      message: "همه مشتریان، نمایندگان، درخواست‌ها، پرداخت‌ها، لیست‌ها، تگ‌ها و تنظیمات حذف می‌شوند. قبل از ادامه حتماً پشتیبان بگیرید!",
+      message:
+        "همه مشتریان، نمایندگان، درخواست‌ها، پرداخت‌ها، لیست‌ها، تگ‌ها، مدارک، تصاویر و پیوست‌ها و تنظیمات حذف می‌شوند. قبل از ادامه حتماً پشتیبان بگیرید!",
       danger: true,
       confirmLabel: "پاک کردن همه",
     });
@@ -200,6 +277,8 @@ export function BackupPage() {
         db.customFields,
         db.activities,
         db.preferences,
+        db.docTypes,
+        db.attachments,
       ],
       async () => {
         await Promise.all([
@@ -213,12 +292,16 @@ export function BackupPage() {
           db.customFields.clear(),
           db.activities.clear(),
           db.preferences.clear(),
+          db.docTypes.clear(),
+          db.attachments.clear(),
         ]);
       },
     );
     toast.info("همه داده‌ها پاک شد");
     await refreshStats();
   };
+
+  /* -------------------------------- render ------------------------------- */
 
   return (
     <div className="flex flex-col gap-4">
@@ -265,14 +348,16 @@ export function BackupPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {/* Create backup */}
-        <SectionCard title="ایجاد پشتیبان JSON" icon={<DatabaseBackup size={15} className="text-brand-500" />}>
+        {/* Full ZIP backup */}
+        <SectionCard
+          title="پشتیبان کامل (ZIP)"
+          icon={<FileArchive size={15} className="text-brand-500" />}
+        >
           <div className="flex flex-col gap-3.5">
             <p className="text-[12px] leading-6 text-ink-500 dark:text-ink-400">
-              شامل همه مشتریان، نمایندگان، درخواست‌ها، لیست‌ها، پرداخت‌ها، تگ‌ها، فیلدهای
-              سفارشی و تنظیمات — بدون تصاویر (برای تصاویر از بایگانی ZIP استفاده کنید). بخش
-              <b> حسابداری </b>جداگانه است و در این پشتیبان نمی‌آید — پشتیبان مخصوص آن، داخل
-              خود بخش حسابداری قرار دارد.
+              <b>همه‌چیز در یک فایل:</b> مشتریان، نمایندگان، درخواست‌ها، پرداخت‌ها، لیست‌ها،
+              تنظیمات و <b>همه تصاویر و فایل‌های PDF</b> — قابل بازیابی کامل در همین برنامه.
+              بخش <b>حسابداری</b> جداگانه است و پشتیبان مخصوص خودش را داخل همان بخش دارد.
             </p>
             <div className="flex items-center justify-between rounded-2xl bg-brand-500/6 px-4 py-3">
               <div className="flex items-center gap-2 text-[13px] font-bold">
@@ -289,51 +374,93 @@ export function BackupPage() {
               />
             </div>
             {useEncryption && (
-              <div className="grid grid-cols-2 gap-3">
-                <FormField label="رمز عبور" hint="حداقل ۶ نویسه">
-                  <Input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                  />
-                </FormField>
-                <FormField label="تکرار رمز عبور">
-                  <Input
-                    type="password"
-                    value={password2}
-                    onChange={(e) => setPassword2(e.target.value)}
-                  />
-                </FormField>
-              </div>
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField label="رمز عبور" hint="حداقل ۶ نویسه">
+                    <Input
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                    />
+                  </FormField>
+                  <FormField label="تکرار رمز عبور">
+                    <Input
+                      type="password"
+                      value={password2}
+                      onChange={(e) => setPassword2(e.target.value)}
+                    />
+                  </FormField>
+                </div>
+                <p className="rounded-2xl bg-brand-500/6 px-3.5 py-2.5 text-[11px] leading-5 text-ink-500 dark:text-ink-400">
+                  در حالت رمزنگاری‌شده، تنظیمات هوش مصنوعی (آدرس و کلید اکانت‌ها) هم داخل
+                  پشتیبان قرار می‌گیرد؛ بدون رمز، کلیدها به دلایل امنیتی در فایل نمی‌آیند.
+                </p>
+              </>
             )}
-            <Button
-              variant="primary"
-              icon={HardDriveDownload}
-              loading={busy === "backup"}
-              onClick={() => void createBackup()}
-            >
-              دانلود فایل پشتیبان
-            </Button>
+            {progress && busy === "backup" && <ProgressLine progress={progress} />}
+            <div className="flex items-center gap-2">
+              <Button
+                variant="primary"
+                icon={HardDriveDownload}
+                loading={busy === "backup"}
+                disabled={busy != null}
+                onClick={() => void createBackup()}
+                className="flex-1"
+              >
+                دانلود پشتیبان کامل (ZIP)
+              </Button>
+              {busy === "backup" && (
+                <Button
+                  variant="glass"
+                  icon={X}
+                  onClick={() => {
+                    cancelRef.current = true;
+                  }}
+                >
+                  لغو
+                </Button>
+              )}
+            </div>
           </div>
         </SectionCard>
 
-        {/* Attachments zip */}
-        <SectionCard title="بایگانی تصاویر و پیوست‌ها" icon={<FileArchive size={15} className="text-brand-500" />}>
+        {/* Other options */}
+        <SectionCard
+          title="گزینه‌های دیگر"
+          icon={<Archive size={15} className="text-brand-500" />}
+        >
           <div className="flex flex-col gap-3.5">
-            <p className="text-[12px] leading-6 text-ink-500 dark:text-ink-400">
-              همه عکس‌های پاسپورت و تذکره در یک فایل ZIP، به تفکیک پوشه هر مشتری. چون حجم
-              تصاویر بالاست، در فایل JSON پشتیبان قرار نمی‌گیرند. (اسناد بخش حسابداری در
-              همین بایگانی نیست — بایگانی اسناد حسابداری داخل خود آن بخش است.)
-            </p>
-            <Button
-              variant="glass"
-              icon={FileArchive}
-              loading={busy === "zip"}
-              disabled={(stats?.attachments.count ?? 0) === 0}
-              onClick={() => void createZip()}
-            >
-              {zipProgress != null ? `در حال ساخت… ${toPersianDigits(zipProgress)}٪` : "دانلود بایگانی ZIP"}
-            </Button>
+            <div className="flex flex-col gap-2">
+              <p className="text-[12px] leading-6 text-ink-500 dark:text-ink-400">
+                بایگانی ZIP تصاویر به تفکیک پوشهٔ هر مشتری — فقط برای مرور فایل‌ها در خارج از
+                برنامه (قابل بازیابی نیست؛ برای بازیابی از پشتیبان کامل بالا استفاده کنید).
+              </p>
+              <Button
+                variant="glass"
+                icon={FileArchive}
+                loading={busy === "zip"}
+                disabled={busy != null || (stats?.attachments.count ?? 0) === 0}
+                onClick={() => void createBrowseZip()}
+              >
+                {zipProgress != null
+                  ? `در حال ساخت… ${toPersianDigits(zipProgress)}٪`
+                  : "بایگانی پوشه‌ای تصاویر (ZIP)"}
+              </Button>
+            </div>
+            <div className="border-t border-ink-500/8 pt-3.5 dark:border-white/8">
+              <p className="mb-2 text-[12px] leading-6 text-ink-500 dark:text-ink-400">
+                پشتیبان JSON قدیمی (بدون تصاویر) — فقط برای سازگاری با نسخه‌های قبلی.
+              </p>
+              <Button
+                variant="glass"
+                icon={DatabaseBackup}
+                loading={busy === "json"}
+                disabled={busy != null}
+                onClick={() => void createLegacyJson()}
+              >
+                دانلود پشتیبان JSON قدیمی
+              </Button>
+            </div>
           </div>
         </SectionCard>
       </div>
@@ -342,20 +469,30 @@ export function BackupPage() {
       <SectionCard title="بازیابی از فایل پشتیبان" icon={<FileUp size={15} className="text-brand-500" />}>
         <div className="flex flex-col gap-3">
           <p className="text-[12px] leading-6 text-ink-500 dark:text-ink-400">
-            فایل JSON پشتیبان را انتخاب کنید؛ ابتدا پیش‌نمایش می‌بینید، بعد روش بازیابی را
-            انتخاب می‌کنید. هیچ رکوردی بدون تأیید شما بازنویسی نمی‌شود.
+            فایل پشتیبان <b>ZIP کامل</b> (معمولی یا رمزنگاری‌شده) یا فایل <b>JSON قدیمی</b> را
+            انتخاب کنید. ابتدا محتوای فایل بررسی و پیش‌نمایش داده می‌شود، بعد روش بازیابی را
+            انتخاب می‌کنید — هیچ رکوردی بدون تأیید شما بازنویسی نمی‌شود.
           </p>
+          {progress && (busy === "parse" || busy === "restore") && (
+            <ProgressLine progress={progress} />
+          )}
           <input
             ref={fileInputRef}
             type="file"
-            accept=".json,application/json"
+            accept=".zip,.enc,.json,application/zip,application/json,application/octet-stream"
             className="hidden"
             onChange={(e) => {
               void onPickFile(e.target.files?.[0]);
               e.target.value = "";
             }}
           />
-          <Button variant="primary" icon={FileUp} onClick={() => fileInputRef.current?.click()}>
+          <Button
+            variant="primary"
+            icon={FileUp}
+            loading={busy === "parse"}
+            disabled={busy != null}
+            onClick={() => fileInputRef.current?.click()}
+          >
             انتخاب فایل پشتیبان
           </Button>
         </div>
@@ -367,8 +504,9 @@ export function BackupPage() {
           <ShieldAlert size={16} /> منطقه خطر
         </div>
         <p className="mb-3 text-[12px] leading-6 text-ink-500 dark:text-ink-400">
-          پاک کردن دائمی همه داده‌های برنامه. توجه: پاک کردن حافظه مرورگر یا عوض کردن پروفایل
-          مرورگر هم همین اثر را دارد — پس پشتیبان‌های دانلودشده را جای امنی نگه دارید.
+          پاک کردن دائمی همه داده‌های برنامه (شامل تصاویر و پیوست‌ها). توجه: پاک کردن حافظه
+          مرورگر یا عوض کردن پروفایل مرورگر هم همین اثر را دارد — پس پشتیبان‌های دانلودشده را
+          جای امنی نگه دارید.
         </p>
         <button className="btn btn-danger btn-sm" onClick={() => void wipeAll()}>
           <Trash2 size={14} /> پاک کردن همه داده‌ها
@@ -386,7 +524,12 @@ export function BackupPage() {
             <button className="btn btn-ghost btn-sm" onClick={() => setRestoreState(null)}>
               انصراف
             </button>
-            <Button variant="primary" loading={busy === "restore"} onClick={() => void apply()}>
+            <Button
+              variant="primary"
+              loading={busy === "restore"}
+              disabled={busy === "restore"}
+              onClick={() => void apply()}
+            >
               شروع بازیابی
             </Button>
           </div>
@@ -395,13 +538,28 @@ export function BackupPage() {
         {restoreState && (
           <div className="flex flex-col gap-4">
             <div className="grid grid-cols-2 gap-2 text-[12px] sm:grid-cols-3">
-              {Object.entries(restoreState.preview.backup.counts).map(([k, v]) => (
+              {Object.entries(restoreState.preview.counts).map(([k, v]) => (
                 <div key={k} className="glass-soft rounded-xl px-3 py-2">
                   <span className="text-ink-500 dark:text-ink-400">{TABLE_LABELS[k] ?? k}: </span>
                   <span className="num font-bold">{toPersianDigits(v)}</span>
                 </div>
               ))}
             </div>
+
+            {restoreState.preview.attachments ? (
+              <div className="rounded-2xl bg-brand-500/6 px-3.5 py-3 text-[12px] leading-5">
+                پیوست‌ها در این پشتیبان:{" "}
+                <b className="num">
+                  {toPersianDigits(restoreState.preview.attachments.count)} فایل (
+                  {bytesLabel(restoreState.preview.attachments.bytes)})
+                </b>{" "}
+                — تصاویر و PDFها همراه رکوردها کامل بازیابی می‌شوند.
+              </div>
+            ) : (
+              <div className="rounded-2xl bg-[#f59e0b]/10 px-3.5 py-3 text-xs leading-5 text-[#c77d0a]">
+                این پشتیبان JSON قدیمی است و تصاویر را شامل نمی‌شود.
+              </div>
+            )}
 
             {restoreState.preview.warnings.length > 0 && (
               <div className="flex items-start gap-2 rounded-2xl bg-[#f59e0b]/10 px-3.5 py-3 text-xs leading-5 text-[#c77d0a]">
@@ -423,19 +581,21 @@ export function BackupPage() {
                   { value: "replace", label: "جایگزینی کامل" },
                 ]}
                 value={restoreState.mode}
-                onChange={(v) => setRestoreState({ ...restoreState, mode: v as RestoreMode })}
+                onChange={(v) =>
+                  setRestoreState({ ...restoreState, mode: v as RestoreMode })
+                }
               />
             </FormField>
             <p className="text-[11px] leading-5 text-ink-500 dark:text-ink-400">
               {restoreState.mode === "merge"
                 ? "ادغام: رکوردهای موجود در فایل، روی رکوردهای هم‌شناسه فعلی نوشته می‌شوند؛ داده‌های دیگری که فقط در دستگاه فعلی وجود دارند حفظ می‌شوند."
-                : "جایگزینی کامل: همه داده‌های فعلی پاک و فقط محتوای فایل پشتیبان باقی می‌ماند."}
+                : "جایگزینی کامل: همه داده‌های فعلی (شامل تصاویر و پیوست‌ها) پاک و فقط محتوای فایل پشتیبان باقی می‌ماند."}
             </p>
           </div>
         )}
       </Modal>
 
-      {/* Password modal for encrypted backups */}
+      {/* Password modal for encrypted backups (ZIP envelope or legacy JSON) */}
       <Modal
         open={needsPassword != null}
         onClose={() => setNeedsPassword(null)}
@@ -455,7 +615,7 @@ export function BackupPage() {
             انصراف
           </button>
           <button className="btn btn-primary" onClick={() => void decryptAndPreview()}>
-            {busy === "restore" ? <Loader2 size={15} className="animate-spin" /> : null}
+            {busy === "parse" ? <Loader2 size={15} className="animate-spin" /> : null}
             رمزگشایی
           </button>
         </div>
@@ -473,6 +633,7 @@ const TABLE_LABELS: Record<string, string> = {
   tags: "تگ‌ها",
   visaTypes: "انواع ویزا",
   customFields: "فیلدهای سفارشی",
+  docTypes: "انواع مدرک",
   activities: "فعالیت‌ها",
   attachments: "پیوست‌ها",
 };
