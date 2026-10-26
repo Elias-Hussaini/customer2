@@ -31,7 +31,7 @@ import { PageHeader } from "../components/ui/StatCard";
 import { SectionCard, RadioSelect } from "../components/ui/inputs";
 import { Modal } from "../components/ui/Modal";
 import { Button, IconButton } from "../components/ui/Button";
-import { FormField, Input, Checkbox, Toggle, Select, Textarea } from "../components/ui/fields";
+import { FormField, Input, Checkbox, Toggle, Select } from "../components/ui/fields";
 import { EmptyState } from "../components/ui/EmptyState";
 import { useTheme, type Theme } from "../hooks/useTheme";
 import { useCustomFields, usePrefs, useTags, useVisaTypes, useCustomers, useDocTypes } from "../hooks/useData";
@@ -67,11 +67,14 @@ import { slugify } from "../utils/normalize";
 import {
   KNOWN_MODELS,
   DEFAULT_MODEL,
+  CORE_FIELD_LABELS,
   addAiWorker,
   deleteAiWorker,
+  fieldEnabled,
   moveAiWorker,
+  setAiFieldEnabled,
+  setAllAiFields,
   testWorker,
-  updateAiSettings,
   updateAiWorker,
   useAiSettings,
   useAiWorkers,
@@ -1121,8 +1124,8 @@ function BackupSection() {
   return (
     <SectionCard title="پشتیبان‌گیری و بازیابی" icon={<DatabaseBackup size={15} className="text-brand-500" />}>
       <p className="mb-3 text-[12px] leading-6 text-ink-500 dark:text-ink-400">
-        خروجی JSON کامل (بدون تصاویر)، بایگانی ZIP تصاویر، بازیابی با پیش‌نمایش و پشتیبان
-        رمزنگاری‌شده — همه در صفحه پشتیبان‌گیری.
+        خروجی JSON کامل (بدون تصاویر مدارک — عکس‌های پروفایل داخلش می‌مانند)، بایگانی ZIP تصاویر،
+        بازیابی با پیش‌نمایش و پشتیبان رمزنگاری‌شده — همه در صفحه پشتیبان‌گیری.
       </p>
       <Link to="/backup" className="btn btn-primary btn-sm w-fit">
         <DatabaseBackup size={14} /> رفتن به صفحه پشتیبان‌گیری
@@ -1140,6 +1143,7 @@ function AiSection() {
   const { confirm } = useConfirm();
   const workers = useAiWorkers();
   const aiSettings = useAiSettings();
+  const customFields = useCustomFields();
 
   const [addOpen, setAddOpen] = useState(false);
   const [editWorker, setEditWorker] = useState<AiWorker | null>(null);
@@ -1147,9 +1151,13 @@ function AiSection() {
   /** id → last test result (in-memory only). */
   const [testResults, setTestResults] = useState<Record<string, { ok: boolean; text: string }>>({});
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
-  const [promptDraft, setPromptDraft] = useState<string | null>(null);
 
-  const promptValue = promptDraft ?? aiSettings.systemPromptOverride ?? "";
+  /** Customer custom fields the AI can also learn (same list as the form). */
+  const aiCustomFields = (customFields ?? [])
+    .filter((f) => f.entity === "customer" && f.showInForm && !f.disabled)
+    .sort((a, b) => a.order - b.order);
+  const allFieldKeys = [...Object.keys(CORE_FIELD_LABELS), ...aiCustomFields.map((f) => f.key)];
+  const enabledCount = allFieldKeys.filter((k) => fieldEnabled(aiSettings.fieldToggles, k)).length;
 
   const runTest = async (worker: AiWorker) => {
     setTesting(worker.id);
@@ -1294,44 +1302,86 @@ function AiSection() {
           </Button>
         </div>
 
-        {/* Optional custom system prompt */}
+        {/* Which fields the AI is allowed to auto-fill */}
         <div className="border-t border-ink-900/5 pt-4 dark:border-white/5">
-          <FormField
-            label="پرامپت سفارشی استخراج (اختیاری)"
-            hint="اگر پرامپت مخصوص ورکر خود را دارید اینجا بچسبانید؛ خالی یعنی پرامپت پیش‌فرض برنامه استفاده می‌شود"
-          >
-            <Textarea
-              dir="ltr"
-              rows={5}
-              value={promptValue}
-              onChange={(e) => setPromptDraft(e.target.value)}
-              placeholder="You are a document-data extraction engine…"
-              className="num text-left text-[11.5px] leading-5"
-            />
-          </FormField>
-          {promptDraft !== null && (
-            <div className="mt-2 flex gap-2">
-              <Button
-                size="sm"
-                variant="primary"
-                onClick={async () => {
-                  await updateAiSettings({ systemPromptOverride: promptDraft.trim() || null });
-                  setPromptDraft(null);
-                  toast.success("پرامپت ذخیره شد");
-                }}
-              >
-                ذخیره پرامپت
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setPromptDraft(null)}>
-                انصراف
-              </Button>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="flex items-center gap-1.5 text-[13px] font-bold">
+                <Wand2 size={14} className="text-brand-500" />
+                فیلدهای پرکردن خودکار
+              </p>
+              <p className="mt-0.5 text-[11px] leading-5 text-ink-500 dark:text-ink-400">
+                هر فیلدی که روشن باشد، هوش مصنوعی هنگام خواندن مدرک آن را خودکار پر می‌کند؛
+                فیلد خاموش دست نخورده می‌ماند.
+              </p>
             </div>
-          )}
+            <span className="num chip-soft rounded-full px-2.5 py-1 text-[11px]">
+              {toPersianDigits(enabledCount)} از {toPersianDigits(allFieldKeys.length)} فعال
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+            {Object.entries(CORE_FIELD_LABELS).map(([key, label]) => (
+              <div
+                key={key}
+                className={`flex items-center justify-between gap-2 rounded-2xl border px-3 py-2.5 text-[12.5px] transition-colors ${
+                  fieldEnabled(aiSettings.fieldToggles, key)
+                    ? "border-ink-900/8 bg-white/40 dark:border-white/10 dark:bg-white/[0.04]"
+                    : "border-ink-900/8 bg-ink-500/[0.04] opacity-60 dark:border-white/10"
+                }`}
+              >
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 truncate text-right font-semibold"
+                  onClick={() => void setAiFieldEnabled(key, !fieldEnabled(aiSettings.fieldToggles, key))}
+                >
+                  {label}
+                </button>
+                <Toggle
+                  checked={fieldEnabled(aiSettings.fieldToggles, key)}
+                  onChange={(v) => void setAiFieldEnabled(key, v)}
+                />
+              </div>
+            ))}
+            {aiCustomFields.map((f) => (
+              <div
+                key={f.key}
+                className={`flex items-center justify-between gap-2 rounded-2xl border px-3 py-2.5 text-[12.5px] transition-colors ${
+                  fieldEnabled(aiSettings.fieldToggles, f.key)
+                    ? "border-ink-900/8 bg-white/40 dark:border-white/10 dark:bg-white/[0.04]"
+                    : "border-ink-900/8 bg-ink-500/[0.04] opacity-60 dark:border-white/10"
+                }`}
+              >
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 truncate text-right font-semibold"
+                  onClick={() => void setAiFieldEnabled(f.key, !fieldEnabled(aiSettings.fieldToggles, f.key))}
+                >
+                  {f.label}
+                  <span className="mr-1.5 text-[10px] font-normal text-ink-400">(فیلد سفارشی)</span>
+                </button>
+                <Toggle
+                  checked={fieldEnabled(aiSettings.fieldToggles, f.key)}
+                  onChange={(v) => void setAiFieldEnabled(f.key, v)}
+                />
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+            <Button size="sm" variant="glass" onClick={() => void setAllAiFields(allFieldKeys, true)}>
+              روشن‌کردن همه
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => void setAllAiFields(allFieldKeys, false)}>
+              خاموش‌کردن همه
+            </Button>
+          </div>
         </div>
 
         <p className="text-[11px] leading-5 text-ink-400">
           توجه: هنگام پرکردن خودکار، صفحات PDF ابتدا در همین مرورگر به عکس تبدیل می‌شوند و فقط
-          همین عکس‌ها (نه فایل اصلی) برای تحلیل به ورکر شما در Cloudflare ارسال می‌شود.
+          همین عکس‌ها (نه فایل اصلی) برای تحلیل به ورکر شما در Cloudflare ارسال می‌شود. نام و نام
+          خانوادگی همیشه به خط فارسی ثبت می‌شود.
         </p>
       </div>
 

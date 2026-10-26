@@ -31,6 +31,7 @@ export {
   extractJsonBlock,
   isIsoDate,
 } from "./extract";
+export { isLatinName, latinToPersianName } from "./translit";
 export {
   useAiWorkers,
   useAiSettings,
@@ -39,5 +40,7 @@ export {
   deleteAiWorker,
   moveAiWorker,
   updateAiSettings,
+  setAiFieldEnabled,
+  setAllAiFields,
   type WorkerInput,
 } from "./store";

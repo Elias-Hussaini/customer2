@@ -22,6 +22,7 @@ import {
   aiChat,
   buildExtractionMessages,
   CORE_FIELD_KEYS,
+  fieldEnabled,
   isIsoDate,
   parseExtractionReply,
   prepareFilesForAi,
@@ -320,6 +321,7 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
    */
   const applyPayload = (payload: ExtractionPayload): { filled: number; review: number; customFilled: number } => {
     const uncertain = new Set(payload.uncertain);
+    const toggles = aiSettings.fieldToggles;
     const current = formRef.current;
     const next: FormState = { ...current, customValues: { ...current.customValues } };
     const marks: Partial<Record<AiField, "ok" | "review">> = {};
@@ -327,6 +329,7 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
     let review = 0;
 
     for (const slot of FORM_SLOTS) {
+      if (!fieldEnabled(toggles, slot.key)) continue; // switched off in settings
       const raw = payload[slot.key];
       if (typeof raw !== "string" || !raw.trim()) continue;
       let value: string | null = raw.trim();
@@ -355,6 +358,7 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
     }
     let customFilled = 0;
     for (const field of fieldsRef.current) {
+      if (!fieldEnabled(toggles, field.key)) continue; // switched off in settings
       const raw = payloadByNormKey.get(norm(field.key)) ?? payloadByNormKey.get(norm(field.label));
       if (raw == null) continue;
       const existing = next.customValues[field.key];
@@ -366,14 +370,14 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
       customFilled++;
     }
 
-    // Document extras → a compact note line.
+    // Document extras → a compact note line (only the switched-on ones).
     const extrasNote = [
-      payload.nationality && `ملیت: ${payload.nationality}`,
-      payload.national_id && `شماره ملی/تذکره: ${payload.national_id}`,
-      payload.place_of_birth && `محل تولد: ${payload.place_of_birth}`,
-      payload.sex === "M" && "جنسیت: مرد",
-      payload.sex === "F" && "جنسیت: زن",
-      payload.document_type && `نوع مدرک: ${payload.document_type}`,
+      fieldEnabled(toggles, "nationality") && payload.nationality && `ملیت: ${payload.nationality}`,
+      fieldEnabled(toggles, "national_id") && payload.national_id && `شماره ملی/تذکره: ${payload.national_id}`,
+      fieldEnabled(toggles, "place_of_birth") && payload.place_of_birth && `محل تولد: ${payload.place_of_birth}`,
+      fieldEnabled(toggles, "sex") && payload.sex === "M" && "جنسیت: مرد",
+      fieldEnabled(toggles, "sex") && payload.sex === "F" && "جنسیت: زن",
+      fieldEnabled(toggles, "document_type") && payload.document_type && `نوع مدرک: ${payload.document_type}`,
     ]
       .filter(Boolean)
       .join(" — ");
@@ -422,8 +426,9 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
         return;
       }
       const messages = buildExtractionMessages(prep.images, {
-        customFields: fieldsRef.current.map((f) => ({ key: f.key, label: f.label })),
-        systemPromptOverride: aiSettings.systemPromptOverride,
+        customFields: fieldsRef.current
+          .filter((f) => fieldEnabled(aiSettings.fieldToggles, f.key))
+          .map((f) => ({ key: f.key, label: f.label })),
       });
       const { text } = await aiChat(messages, {
         maxTokens: 2048,

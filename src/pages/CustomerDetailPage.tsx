@@ -10,6 +10,7 @@ import { ActivityFeed } from "../components/ui/ActivityFeed";
 import { CustomFieldValue } from "../components/ui/CustomFields";
 import { DocumentSlots } from "../components/ui/DocumentSlots";
 import { CustomerFormModal } from "../components/domain/CustomerFormModal";
+import { ProfilePhotoCard } from "../components/domain/ProfilePhotoCard";
 import { RequestsTable } from "../components/domain/RequestsTable";
 import { ExportDialog } from "../components/exports/ExportDialog";
 import { EmptyState } from "../components/ui/EmptyState";
@@ -135,6 +136,14 @@ export function CustomerDetailPage() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="flex flex-col gap-4 lg:col-span-2">
+          {/* Profile photo — big round, right side of the page; click to add/edit */}
+          <ProfilePhotoCard
+            kind="customer"
+            id={customer.id}
+            photo={customer.photo}
+            name={name}
+            subtitle={customer.passportNo ? `شماره پاسپورت: ${customer.passportNo}` : "بدون شماره پاسپورت"}
+          />
           <SectionCard title="مشخصات" icon={<FilePenLine size={15} className="text-brand-500" />}>
             <div className="grid grid-cols-1 gap-x-6 gap-y-0 sm:grid-cols-2">
               {BASE_FIELDS.map((f) => {

@@ -20,6 +20,8 @@ import { Tabs } from "../components/ui/Tabs";
 import { ActivityFeed } from "../components/ui/ActivityFeed";
 import { RequestsTable } from "../components/domain/RequestsTable";
 import { RepresentativeFormModal } from "../components/domain/RepresentativeFormModal";
+import { ProfilePhotoCard } from "../components/domain/ProfilePhotoCard";
+import { Avatar } from "../components/ui/Avatar";
 import { PaymentFormModal } from "../components/domain/PaymentFormModal";
 import { AttachmentPreview } from "../components/ui/AttachmentPreview";
 import { ExportDialog } from "../components/exports/ExportDialog";
@@ -207,6 +209,15 @@ export function RepresentativeDetailPage() {
         }
       />
 
+      {/* Profile photo — big round, top of the page; click to add/edit */}
+      <ProfilePhotoCard
+        kind="rep"
+        id={rep.id}
+        photo={rep.photo}
+        name={rep.name}
+        subtitle={rep.phone ? `تماس: ${rep.phone}` : "بدون شماره تماس"}
+      />
+
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard icon={FilePlus2} label="کل درخواست‌ها" value={toPersianDigits(stats.total)} tone="brand" />
         <StatCard icon={CheckCircle2} label="صادر شده" value={toPersianDigits(stats.issued)} tone="success" />
@@ -295,20 +306,23 @@ export function RepresentativeDetailPage() {
                   return (
                     <button
                       key={c.id}
-                      className="glass rounded-2xl p-3.5 text-right transition-transform active:scale-95"
+                      className="glass flex items-center gap-2.5 rounded-2xl p-3 text-right transition-transform active:scale-95"
                       onClick={() => navigate(`/customers/${c.id}`)}
                     >
-                      <p className="truncate text-[13px] font-bold">{customerFullName(c)}</p>
-                      {c.passportNo && (
-                        <p dir="ltr" className="num mt-1 text-[11px] text-ink-400">
-                          {c.passportNo}
-                        </p>
-                      )}
-                      {list && (
-                        <p className="mt-1 truncate text-[10.5px] text-ink-500 dark:text-ink-400">
-                          لیست: {list.name}
-                        </p>
-                      )}
+                      <Avatar photo={c.photo} name={customerFullName(c)} />
+                      <span className="min-w-0 flex-1">
+                        <p className="truncate text-[13px] font-bold">{customerFullName(c)}</p>
+                        {c.passportNo && (
+                          <p dir="ltr" className="num mt-1 text-[11px] text-ink-400">
+                            {c.passportNo}
+                          </p>
+                        )}
+                        {list && (
+                          <p className="mt-1 truncate text-[10.5px] text-ink-500 dark:text-ink-400">
+                            لیست: {list.name}
+                          </p>
+                        )}
+                      </span>
                     </button>
                   );
                 })}

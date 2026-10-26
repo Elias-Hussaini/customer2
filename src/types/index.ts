@@ -23,6 +23,8 @@ export interface Representative {
   phone?: string;
   contactInfo?: string;
   notes?: string;
+  /** Round profile photo — JPEG data URL, square-cropped and downscaled. */
+  photo?: string | null;
   createdAt: number;
   updatedAt: number;
   archivedAt?: number | null;
@@ -32,6 +34,8 @@ export interface Customer {
   id: string;
   firstName?: string;
   lastName?: string;
+  /** Round profile photo — JPEG data URL, square-cropped and downscaled. */
+  photo?: string | null;
   /** ISO yyyy-mm-dd (Gregorian, stored internally, shown per calendar setting). */
   birthDate?: string;
   passportNo?: string;

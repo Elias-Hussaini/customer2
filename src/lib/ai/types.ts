@@ -28,15 +28,44 @@ export interface AiWorker {
 /** Singleton settings record for the AI section (id: "ai"). */
 export interface AiSettings {
   id: "ai";
-  /** Optional user-supplied system prompt for document extraction. */
-  systemPromptOverride?: string | null;
+  /**
+   * Which extraction keys the AI is allowed to auto-fill.
+   * Missing key = enabled; `false` = the AI must skip that field.
+   */
+  fieldToggles?: Record<string, boolean>;
   updatedAt: number;
 }
 
 export const DEFAULT_AI_SETTINGS: AiSettings = {
   id: "ai",
-  systemPromptOverride: null,
+  fieldToggles: {},
   updatedAt: 0,
+};
+
+/** A key is enabled unless it is explicitly switched off. */
+export function fieldEnabled(
+  toggles: Record<string, boolean> | undefined,
+  key: string,
+): boolean {
+  return toggles?.[key] !== false;
+}
+
+/**
+ * Core extraction keys in settings-UI order, with Persian labels.
+ * The first six fill the form directly; the rest land in the notes line.
+ */
+export const CORE_FIELD_LABELS: Record<string, string> = {
+  first_name: "نام",
+  last_name: "نام خانوادگی",
+  passport_number: "شماره پاسپورت",
+  date_of_birth: "تاریخ تولد",
+  issue_date: "تاریخ صدور پاسپورت",
+  expiry_date: "تاریخ انقضای پاسپورت",
+  nationality: "ملیت (در یادداشت)",
+  national_id: "شماره ملی/تذکره (در یادداشت)",
+  sex: "جنسیت (در یادداشت)",
+  place_of_birth: "محل تولد (در یادداشت)",
+  document_type: "نوع مدرک (در یادداشت)",
 };
 
 /** Quick-pick model ids known to work on Cloudflare-style workers. */

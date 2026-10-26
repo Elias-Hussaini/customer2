@@ -106,3 +106,31 @@ export async function updateAiSettings(patch: Partial<Omit<AiSettings, "id">>): 
   };
   await db.aiMeta.put(next);
 }
+
+/** Switch one extraction field on/off (whether the AI may auto-fill it). */
+export async function setAiFieldEnabled(key: string, enabled: boolean): Promise<void> {
+  const existing = await db.aiMeta.get("ai");
+  const next: AiSettings = {
+    ...DEFAULT_AI_SETTINGS,
+    ...existing,
+    fieldToggles: { ...(existing?.fieldToggles ?? {}), [key]: enabled },
+    id: "ai",
+    updatedAt: Date.now(),
+  };
+  await db.aiMeta.put(next);
+}
+
+/** Switch every listed extraction field on/off at once. */
+export async function setAllAiFields(keys: string[], enabled: boolean): Promise<void> {
+  const existing = await db.aiMeta.get("ai");
+  const toggles = { ...(existing?.fieldToggles ?? {}) };
+  for (const key of keys) toggles[key] = enabled;
+  const next: AiSettings = {
+    ...DEFAULT_AI_SETTINGS,
+    ...existing,
+    fieldToggles: toggles,
+    id: "ai",
+    updatedAt: Date.now(),
+  };
+  await db.aiMeta.put(next);
+}

@@ -13,8 +13,9 @@ import {
   testWorker,
 } from "../client";
 import { buildExtractionMessages, buildSystemPrompt, isIsoDate, parseExtractionReply } from "../extract";
-import { addAiWorker, moveAiWorker, updateAiSettings } from "../store";
-import { DEFAULT_AI_SETTINGS } from "../types";
+import { isLatinName, latinToPersianName } from "../translit";
+import { addAiWorker, moveAiWorker, setAiFieldEnabled, setAllAiFields } from "../store";
+import { DEFAULT_AI_SETTINGS, fieldEnabled } from "../types";
 import type { AiWorker } from "../types";
 
 function worker(over: Partial<AiWorker> = {}): AiWorker {
@@ -192,16 +193,19 @@ describe("extraction messages & parsing", () => {
     expect(prompt).toContain('"uncertain"');
   });
 
+  it("names must come back in Persian script — the prompt demands it", () => {
+    const prompt = buildSystemPrompt({});
+    expect(prompt).toContain("NEVER in Latin letters");
+    expect(prompt).toContain("TRANSLITERATE");
+    expect(prompt).toContain("احمدی");
+  });
+
   it("custom fields are injected into the prompt dynamically", () => {
     const prompt = buildSystemPrompt({
       customFields: [{ key: "father_name", label: "نام پدر" }],
     });
     expect(prompt).toContain('"father_name"');
     expect(prompt).toContain("نام پدر");
-  });
-
-  it("system prompt override replaces the built-in one", () => {
-    expect(buildSystemPrompt({ systemPromptOverride: "  CUSTOM  " })).toBe("CUSTOM");
   });
 
   it("builds one user message with text + image parts", () => {
@@ -218,7 +222,8 @@ describe("extraction messages & parsing", () => {
     const payload = parseExtractionReply(
       '{"first_name":"ZAHRA","last_name":"MOUSAVI","passport_number":"A12345678","date_of_birth":"1997-05-12","issue_date":null,"expiry_date":"2027-05-11","nationality":"AFG","national_id":null,"sex":"F","place_of_birth":null,"document_type":"passport","uncertain":["expiry_date"]}',
     );
-    expect(payload.first_name).toBe("ZAHRA");
+    expect(payload.first_name).toBe("زهرا");
+    expect(payload.last_name).toBe("موسوی");
     expect(payload.passport_number).toBe("A12345678");
     expect(payload.date_of_birth).toBe("1997-05-12");
     expect(payload.issue_date).toBeNull();
@@ -230,7 +235,7 @@ describe("extraction messages & parsing", () => {
     const payload = parseExtractionReply(
       'Here is the result:\n```json\n{"first_name":"ALI","last_name":null,"passport_number":"B2",\n"date_of_birth":null,"issue_date":null,"expiry_date":null,"nationality":null,"national_id":null,"sex":"M","place_of_birth":null,"document_type":null,"uncertain":[],}\n```\nHope this helps!',
     );
-    expect(payload.first_name).toBe("ALI");
+    expect(payload.first_name).toBe("علی");
     expect(payload.passport_number).toBe("B2");
   });
 
@@ -278,10 +283,66 @@ describe("worker storage", () => {
     expect(sorted.map((w) => w.label)).toEqual(["b", "a"]);
   });
 
-  it("AI settings prompt round-trips and defaults stay local-only", async () => {
-    expect(DEFAULT_AI_SETTINGS.systemPromptOverride).toBeNull();
-    await updateAiSettings({ systemPromptOverride: "MY PROMPT" });
-    const saved = await db.aiMeta.get("ai");
-    expect(saved?.systemPromptOverride).toBe("MY PROMPT");
+  it("AI field toggles round-trip and default to enabled", async () => {
+    expect(fieldEnabled(DEFAULT_AI_SETTINGS.fieldToggles, "first_name")).toBe(true);
+    expect(fieldEnabled({ passport_number: false }, "passport_number")).toBe(false);
+    await setAiFieldEnabled("last_name", false);
+    await setAiFieldEnabled("issue_date", true);
+    let saved = await db.aiMeta.get("ai");
+    expect(saved?.fieldToggles?.last_name).toBe(false);
+    expect(saved?.fieldToggles?.issue_date).toBe(true);
+    await setAllAiFields(["last_name", "issue_date"], false);
+    saved = await db.aiMeta.get("ai");
+    expect(saved?.fieldToggles?.last_name).toBe(false);
+    expect(saved?.fieldToggles?.issue_date).toBe(false);
+  });
+});
+
+describe("Latin → Persian name transliteration (local fallback)", () => {
+  it("detects Latin-only names", () => {
+    expect(isLatinName("AHMADI")).toBe(true);
+    expect(isLatinName("احمدی")).toBe(false);
+    expect(isLatinName("Zahra موسوی")).toBe(false);
+  });
+
+  it("dictionary names transliterate exactly", () => {
+    expect(latinToPersianName("AHMADI")).toBe("احمدی");
+    expect(latinToPersianName("ZAHRA")).toBe("زهرا");
+    expect(latinToPersianName("MOUSAVI")).toBe("موسوی");
+    expect(latinToPersianName("ABDUL RAHMAN")).toBe("عبدالرحمن");
+    expect(latinToPersianName("GUL MOHAMMAD")).toBe("گل‌محمد");
+  });
+
+  it("unknown names fall back to phonetic transliteration", () => {
+    expect(latinToPersianName("KHAN")).toBe("خان");
+    expect(latinToPersianName("JAN")).toBe("جان");
+    expect(latinToPersianName("AHMADULLAH")).toBe("احمدالله");
+  });
+
+  it("leaves Persian names and MRZ garbage untouched/split", () => {
+    expect(latinToPersianName("زهرا")).toBe("زهرا");
+    expect(latinToPersianName("AHMADI<<ZAHRA")).toBe("احمدی زهرا");
+  });
+
+  it("parseExtractionReply converts Latin names to Persian", () => {
+    const payload = parseExtractionReply(
+      JSON.stringify({
+        first_name: "ZAHRA",
+        last_name: "MOUSAVI",
+        passport_number: "PA1234567",
+        date_of_birth: "1997-05-12",
+        issue_date: null,
+        expiry_date: null,
+        nationality: null,
+        national_id: null,
+        sex: null,
+        place_of_birth: null,
+        document_type: null,
+        uncertain: [],
+      }),
+    );
+    expect(payload.first_name).toBe("زهرا");
+    expect(payload.last_name).toBe("موسوی");
+    expect(payload.passport_number).toBe("PA1234567");
   });
 });

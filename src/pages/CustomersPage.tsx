@@ -7,6 +7,7 @@ import { EmptyState } from "../components/ui/EmptyState";
 import { SearchBox, FilterSelect } from "../components/ui/inputs";
 import { Menu } from "../components/ui/Menu";
 import { CustomerFormModal } from "../components/domain/CustomerFormModal";
+import { Avatar } from "../components/ui/Avatar";
 import { archiveCustomer, deleteCustomer, customerFullName } from "../db/customers";
 import { useCustomers, useLists, useRepresentatives, useRequests } from "../hooks/useData";
 import { useConfirm } from "../hooks/useConfirm";
@@ -101,9 +102,7 @@ export function CustomersPage() {
       sortValue: (c) => customerFullName(c),
       render: (c) => (
         <div className="flex items-center gap-2.5">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-500/12 text-[13px] font-bold text-brand-600 dark:text-brand-300">
-            {(c.firstName ?? c.lastName ?? "؟").slice(0, 1)}
-          </span>
+          <Avatar photo={c.photo} name={customerFullName(c)} />
           <div className="min-w-0">
             <span className="block truncate font-semibold">{customerFullName(c)}</span>
             {c.referrer && <span className="block text-[11px] text-ink-400">معرف: {c.referrer}</span>}

@@ -6,6 +6,7 @@ import { EmptyState } from "../components/ui/EmptyState";
 import { SearchBox } from "../components/ui/inputs";
 import { Menu } from "../components/ui/Menu";
 import { RepresentativeFormModal } from "../components/domain/RepresentativeFormModal";
+import { Avatar } from "../components/ui/Avatar";
 import { archiveRepresentative, deleteRepresentative } from "../db/reps";
 import { useCustomers, useRepresentatives, useRequests, usePayments, useTags } from "../hooks/useData";
 import { useConfirm } from "../hooks/useConfirm";
@@ -113,9 +114,7 @@ export function RepresentativesPage() {
               >
                 <div className="mb-3 flex items-start justify-between gap-2">
                   <button className="flex min-w-0 flex-1 items-center gap-3 text-right" onClick={() => navigate(`/representatives/${rep.id}`)}>
-                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-brand-500/12 text-[15px] font-extrabold text-brand-600 dark:text-brand-300">
-                      {rep.name.slice(0, 1)}
-                    </span>
+                    <Avatar photo={rep.photo} name={rep.name} size="md" />
                     <span className="min-w-0">
                       <span className="block truncate text-[14px] font-extrabold group-hover:text-brand-600 dark:group-hover:text-brand-300">
                         {rep.name}

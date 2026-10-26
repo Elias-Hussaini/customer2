@@ -10,6 +10,7 @@
 
 import type { ChatMessage, ContentPart } from "./client";
 import { CORE_FIELD_KEYS, type ExtractionPayload } from "./types";
+import { isLatinName, latinToPersianName } from "./translit";
 
 const CORE_SCHEMA_JSON = `{
   "first_name": null,
@@ -29,14 +30,9 @@ const CORE_SCHEMA_JSON = `{
 export interface ExtractionContext {
   /** Custom customer fields (key + Persian label) to try to fill too. */
   customFields?: { key: string; label: string }[];
-  /** User-supplied system prompt from settings — replaces the built-in one. */
-  systemPromptOverride?: string | null;
 }
 
 export function buildSystemPrompt(ctx: ExtractionContext = {}): string {
-  if (ctx.systemPromptOverride && ctx.systemPromptOverride.trim()) {
-    return ctx.systemPromptOverride.trim();
-  }
   const custom = (ctx.customFields ?? []).filter((f) => f.key && f.label);
   const customBlock =
     custom.length > 0
@@ -60,8 +56,12 @@ DATE RULES:
 - Dates written in the Solar Hijri (Jalali/Shamsi) calendar must be converted to Gregorian.
 
 NAME RULES:
-- first_name = given names, last_name = surname, exactly as printed in the document (Latin letters when the document is Latin). Do not translate, transliterate or reorder.
-- passport_number and national_id: copy letters/digits exactly, without spaces.
+- first_name = given names, last_name = surname, in the same order as printed on the document.
+- ALL names MUST be written in Persian/Dari script — NEVER in Latin letters.
+- If the document prints names in Latin letters (e.g. the MRZ zone), TRANSLITERATE them into the standard Persian/Dari spelling of that name. Examples: "AHMADI" → "احمدی", "MOHAMMAD" → "محمد", "ZAHRA" → "زهرا", "ABDUL RAHMAN" → "عبدالرحمن", "NASRULLAH" → "نصرالله".
+- Never invent, guess or complete data.
+- nationality and place_of_birth must also be Persian ("AFGHANISTAN" → "افغانستان", "HERAT" → "هرات").
+- passport_number and national_id: copy letters/digits exactly as printed, without spaces (these stay in Latin/digits).
 
 SCHEMA — always exactly these keys:
 ${CORE_SCHEMA_JSON}
@@ -113,6 +113,13 @@ function asStringOrNull(v: unknown): string | null {
   return s === "" || s.toLowerCase() === "null" ? null : s;
 }
 
+/** Names must land in Persian script — transliterate Latin leftovers locally. */
+function asPersianName(v: unknown): string | null {
+  const s = asStringOrNull(v);
+  if (s == null) return s;
+  return isLatinName(s) ? latinToPersianName(s) : s;
+}
+
 /** Normalize/uppercase a 2-digit sex value. */
 function normalizeSex(v: unknown): string | null {
   const s = asStringOrNull(v);
@@ -141,8 +148,8 @@ export function parseExtractionReply(text: string): ExtractionPayload {
   }
 
   const out: ExtractionPayload = {
-    first_name: asStringOrNull(raw.first_name),
-    last_name: asStringOrNull(raw.last_name),
+    first_name: asPersianName(raw.first_name),
+    last_name: asPersianName(raw.last_name),
     passport_number: asStringOrNull(raw.passport_number),
     date_of_birth: asStringOrNull(raw.date_of_birth),
     issue_date: asStringOrNull(raw.issue_date),
