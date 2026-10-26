@@ -21,6 +21,7 @@ import type {
   FinTransaction,
   OutstandingItem,
 } from "../accounting/types";
+import type { AiSettings, AiWorker } from "../lib/ai/types";
 
 /**
  * Local IndexedDB database. All application data lives here — in the user's
@@ -49,6 +50,10 @@ export class VisaDB extends Dexie {
   accOutstanding!: Table<OutstandingItem, string>;
   accDocs!: Table<AccDoc, string>;
   accMeta!: Table<AccSettings, string>;
+  // AI worker accounts (Cloudflare) + AI settings. Local-only on purpose:
+  // API keys are NOT exported with the customer JSON backup.
+  aiWorkers!: Table<AiWorker, string>;
+  aiMeta!: Table<AiSettings, string>;
 
   constructor() {
     super("customer2-visa");
@@ -83,8 +88,8 @@ export class VisaDB extends Dexie {
     this.version(4).stores({
       pdfTemplates: "id, updatedAt",
     });
-    // v5: the template manager UI was removed — the fill algorithm now lives
-    // entirely in code (src/lib/docex/fill.ts). Drop the stored templates.
+    // v5: the template manager UI was removed — document templates are no
+    // longer stored in the database. Drop the stored templates.
     this.version(5).stores({
       pdfTemplates: null,
     });
@@ -99,6 +104,12 @@ export class VisaDB extends Dexie {
       accOutstanding: "id, partyId, kind, status, dueDate, currency, createdAt",
       accDocs: "id, partyId, transactionId, accountId, createdAt",
       accMeta: "id",
+    });
+    // v7: AI section (هوش مصنوعی) — the user's own Cloudflare worker
+    // accounts (url + key + model, with failover order) and AI settings.
+    this.version(7).stores({
+      aiWorkers: "id, priority, createdAt",
+      aiMeta: "id",
     });
   }
 }

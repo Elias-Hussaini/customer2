@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   AlertTriangle,
   CheckCircle2,
   FilePlus2,
   Loader2,
+  Settings2,
   Sparkles,
 } from "lucide-react";
 import { Modal } from "../ui/Modal";
@@ -15,18 +17,19 @@ import { SearchSelect } from "../ui/inputs";
 import { MoneyInput } from "../ui/MoneyInput";
 import { CustomFieldsGroup } from "../ui/CustomFields";
 import {
-  runExtraction,
-  validateFile,
-  warmupOcr,
-  formatDateForTemplate,
-  latinNameToFa,
-  filterNameTokens,
-  METHOD_RANK,
-  type PipelineProgress,
-  type CanonicalField,
-  type ExtractionResult,
-  type ExtractedValue,
-} from "../../lib/docex";
+  ACCEPTED_MIME,
+  AiAllWorkersFailedError,
+  aiChat,
+  buildExtractionMessages,
+  CORE_FIELD_KEYS,
+  isIsoDate,
+  parseExtractionReply,
+  prepareFilesForAi,
+  validateAiFile,
+  useAiSettings,
+  useAiWorkers,
+  type ExtractionPayload,
+} from "../../lib/ai";
 import { createCustomer, findDuplicatePassport, updateCustomer, customerFullName } from "../../db/customers";
 import { createRequest } from "../../db/requests";
 import { createVisaType } from "../../db/taxonomy";
@@ -35,7 +38,7 @@ import { saveAttachment } from "../../db/attachments";
 import { useCustomFields, useLists, usePrefs, useRepresentatives, useVisaTypes } from "../../hooks/useData";
 import { useToast } from "../../hooks/useToast";
 import { todayIso, toPersianDigits } from "../../utils/jalali";
-import type { Currency, Customer } from "../../types";
+import type { Currency, CustomFieldDef, Customer } from "../../types";
 
 interface Props {
   open: boolean;
@@ -76,23 +79,26 @@ const EMPTY: FormState = {
 };
 
 /** Identity fields the AI can fill — used for the per-field badges. */
-type AiField = "firstName" | "lastName" | "passportNo" | "birthDate" | "passportIssueDate" | "passportExpiryDate";
+type AiField =
+  | "firstName"
+  | "lastName"
+  | "passportNo"
+  | "birthDate"
+  | "passportIssueDate"
+  | "passportExpiryDate";
 
-/** Quick-fill engine state. */
+/** Live progress of the AI request pipeline. */
+interface AiStageInfo {
+  label: string;
+  percent: number;
+}
+
+/** Smart-fill engine state (Cloudflare AI workers). */
 type AiState =
   | { t: "idle" }
-  | { t: "busy"; progress: PipelineProgress | null }
-  | { t: "done"; filled: number; review: number; fileName: string }
-  | { t: "error"; message: string };
-
-const AI_STAGES: Partial<Record<PipelineProgress["stage"], string>> = {
-  validating: "بررسی فایل",
-  opening: "باز کردن PDF",
-  page_text: "خواندن متن",
-  page_ocr: "خواندن OCR",
-  merging: "ادغام نتایج",
-  done: "پایان",
-};
+  | { t: "busy"; stage: AiStageInfo | null }
+  | { t: "done"; filled: number; review: number; files: string }
+  | { t: "error"; message: string; needsSetup?: boolean };
 
 /** Tiny badge on a field label: emerald = trusted value, amber = re-check. */
 function AiMark({ state }: { state?: "ok" | "review" }) {
@@ -113,9 +119,9 @@ function AiMark({ state }: { state?: "ok" | "review" }) {
 }
 
 /**
- * Names: keep Persian letters (or Latin A-Z) and drop OCR noise — stray
- * dots, pipes, digits and low-entropy garbage ("کلکللل") never reach the
- * customer record.
+ * Light name sanitizer — Persian letters (or Latin A-Z) survive, stray
+ * symbols and doubled spaces don't. The AI returns clean names; this is
+ * just belt-and-braces before anything lands in the customer record.
  */
 function safePersonName(s: string): string {
   if (!s) return "";
@@ -123,10 +129,7 @@ function safePersonName(s: string): string {
   const cleaned = hasFa
     ? s.replace(/[^\u0600-\u06FF\s\-'\u200C]/g, "")
     : s.toUpperCase().replace(/[^A-Z\s\-'.]/g, "");
-  const collapsed = cleaned.replace(/\s+/g, " ").trim();
-  // Structural garbage guard (dictionary-free): a name made only of a
-  // repeated letter is OCR noise — leave the field empty for the operator.
-  return filterNameTokens(collapsed) ?? "";
+  return cleaned.replace(/\s+/g, " ").trim();
 }
 
 export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
@@ -136,21 +139,21 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
   const representatives = useRepresentatives();
   const lists = useLists();
   const visaTypes = useVisaTypes();
+  const workers = useAiWorkers();
+  const aiSettings = useAiSettings();
   const [form, setForm] = useState<FormState>(EMPTY);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [dupWarning, setDupWarning] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // ---- AI quick-fill (extraction runs locally, values land straight in the form) ----
+  // ---- AI quick-fill (user's Cloudflare workers → fixed JSON → this form) ----
   const [ai, setAi] = useState<AiState>({ t: "idle" });
   const [aiMarks, setAiMarks] = useState<Partial<Record<AiField, "ok" | "review">>>({});
   const [aiRun, setAiRun] = useState(0); // bump → identity grid re-mounts with the flash sweep
-  /** Extraction strength of what filled each AI-owned slot. A slot the AI
-   *  filled can be UPGRADED by a stronger source mid-scan (early label guess
-   * → check-digit-validated MRZ); a slot the operator typed is untouchable. */
-  const aiRank = useRef<Partial<Record<AiField, number>>>({});
+  /** Fields currently owned by the AI (the operator typing releases a slot). */
+  const aiOwned = useRef<Set<AiField>>(new Set());
   const [dragActive, setDragActive] = useState(false);
-  const [smartFile, setSmartFile] = useState<File | null>(null); // auto-attach to the customer's documents
+  const [smartFiles, setSmartFiles] = useState<File[]>([]); // auto-attached to the customer's documents
   const fileRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -179,19 +182,25 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
     [customFields],
   );
 
+  // Mirror the latest form/fields so the async AI response always merges
+  // into fresh state (the operator may keep typing while the model runs).
+  const formRef = useRef(form);
+  formRef.current = form;
+  const fieldsRef = useRef(fields);
+  fieldsRef.current = fields;
+
+  const hasWorker = (workers ?? []).some((w) => w.enabled && w.url.trim() && w.key.trim());
+
   useEffect(() => {
     if (open) {
-      // Preload the local OCR engines in the background — the first document
-      // then fills in seconds instead of paying the model-load cost.
-      void warmupOcr();
       setDupWarning(null);
       setErrors({});
       setAi({ t: "idle" });
       setAiMarks({});
-      aiRank.current = {};
+      aiOwned.current = new Set();
       setAiRun(0);
       setDragActive(false);
-      setSmartFile(null);
+      setSmartFiles([]);
       if (customer) {
         setForm({
           firstName: customer.firstName ?? "",
@@ -259,184 +268,212 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
       delete next[key as AiField];
       return next;
     });
-    if (aiRank.current[key as AiField] != null) {
-      const next = { ...aiRank.current };
-      delete next[key as AiField];
-      aiRank.current = next;
-    }
+    aiOwned.current.delete(key as AiField);
   };
 
-  /** canonical field → form slot (the six identity fields the AI fills). */
-  const AI_FIELD_MAP: Array<{ formKey: AiField; canonical: CanonicalField }> = [
-    { formKey: "firstName", canonical: "givenNames" },
-    { formKey: "lastName", canonical: "surname" },
-    { formKey: "passportNo", canonical: "documentNumber" },
-    { formKey: "birthDate", canonical: "dateOfBirth" },
-    { formKey: "passportIssueDate", canonical: "dateOfIssue" },
-    { formKey: "passportExpiryDate", canonical: "dateOfExpiry" },
+  /** Fixed payload key → form slot (the six identity fields the AI fills). */
+  const FORM_SLOTS: Array<{
+    key: string;
+    field: AiField;
+    kind: "name" | "passport" | "date";
+  }> = [
+    { key: "first_name", field: "firstName", kind: "name" },
+    { key: "last_name", field: "lastName", kind: "name" },
+    { key: "passport_number", field: "passportNo", kind: "passport" },
+    { key: "date_of_birth", field: "birthDate", kind: "date" },
+    { key: "issue_date", field: "passportIssueDate", kind: "date" },
+    { key: "expiry_date", field: "passportExpiryDate", kind: "date" },
   ];
 
-  /**
-   * Write extraction values into the form — the single path both the live
-   * progressive fill and the final result go through.
-   *  • an empty slot takes any value;
-   *  • a slot the AI filled earlier is UPGRADED in place when a stronger
-   *    source arrives (early OCR guess → check-digit-validated MRZ) — a weak
-   *    first read can never lock garbage in;
-   *  • a slot the operator typed is never touched.
-   * Returns the fields it wrote/refreshed.
-   */
-  const applyFields = (
-    fields: Partial<Record<CanonicalField, ExtractedValue>>,
-    final: boolean,
-  ): AiField[] => {
-    const written: AiField[] = [];
-    const pendingMarks: Array<{ key: AiField; mark: "ok" | "review"; rank: number }> = [];
-    setForm((prev) => {
-      const next = { ...prev };
-      let touched = false;
-      for (const { formKey, canonical } of AI_FIELD_MAP) {
-        const ex = fields[canonical];
-        if (!ex || ex.value == null) continue;
-        const rawValue = String(ex.value).trim();
-        if (!rawValue) continue;
-        const value =
-          formKey === "firstName" || formKey === "lastName"
-            ? safePersonName(latinNameToFa(rawValue) || rawValue)
-            : formKey === "passportNo"
-              ? rawValue.toUpperCase()
-              : rawValue;
-        if (!value) continue;
-        const rank =
-          METHOD_RANK[ex.method] * 10 +
-          (ex.status === "confirmed" ? 5 : ex.status === "needs_review" ? 1 : 0);
-        const current = next[formKey] as string | null;
-        const isEmpty = current == null || current === "";
-        const owned = aiRank.current[formKey];
-        if (!isEmpty) {
-          if (owned == null) continue; // operator typed this one — hands off
-          if (rank < owned) continue; // weaker source than what's in there
-          if (rank === owned && !final && value === current) continue;
-        }
-        if (value !== current) {
-          (next as Record<AiField, string | null>)[formKey] = value;
-          touched = true;
-        }
-        written.push(formKey);
-        // remember ownership + show the live trust badge
-        pendingMarks.push({ key: formKey, mark: ex.status === "confirmed" ? "ok" : "review", rank });
-      }
-      return touched ? next : prev;
-    });
-    if (pendingMarks.length) {
-      setAiMarks((m) => {
-        const next = { ...m };
-        for (const p of pendingMarks) next[p.key] = p.mark;
-        return next;
-      });
-      for (const p of pendingMarks) aiRank.current[p.key] = p.rank;
+  /** Coerce a custom-field value the AI returned, or null when it doesn't
+   *  fit the field type (never force garbage into a typed slot). */
+  const customFieldValue = (
+    field: CustomFieldDef,
+    raw: unknown,
+  ): string | number | null => {
+    if (typeof raw !== "string") return null;
+    const v = raw.trim();
+    if (!v) return null;
+    switch (field.type) {
+      case "number":
+        return /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : null;
+      case "date":
+        return isIsoDate(v) ? v : null;
+      case "select":
+        return (field.options ?? []).includes(v) ? v : null;
+      case "text":
+      case "textarea":
+      case "url":
+        return v.slice(0, 300);
+      default:
+        return null;
     }
-    return written;
   };
 
-  /** Read the final extraction, write values + extras into the form. */
-  const applyAiResult = (res: ExtractionResult, fileName: string) => {
-    const f = res.fields;
-    const v = (k: CanonicalField) => (f[k]?.value != null ? String(f[k].value) : "");
-    const st = (k: CanonicalField): "ok" | "review" | undefined => {
-      const ex = f[k];
-      if (!ex || ex.value == null || !String(ex.value).trim()) return undefined;
-      return ex.status === "confirmed" ? "ok" : "review";
-    };
-    // OCR garbage stays out of the notes — only clean-looking extras go in.
-    const clean = (value: string, allowDigits = false) =>
-      (allowDigits
-        ? /^[A-Za-z0-9\u0600-\u06FF][A-Za-z0-9\u0600-\u06FF\s\-'.]*$/
-        : /^[A-Za-z\u0600-\u06FF][A-Za-z\u0600-\u06FF\s\-'.]*$/
-      ).test(value)
-        ? value
-        : "";
+  /**
+   * Write the fixed-schema payload into the form.
+   *  • an empty slot takes any value;
+   *  • a slot the AI filled earlier is refreshed by the new answer;
+   *  • a slot the operator typed is never touched (aiOwned tracks this).
+   * Custom fields (including ones added later) are filled the same way,
+   * and document extras land in the notes.
+   */
+  const applyPayload = (payload: ExtractionPayload): { filled: number; review: number; customFilled: number } => {
+    const uncertain = new Set(payload.uncertain);
+    const current = formRef.current;
+    const next: FormState = { ...current, customValues: { ...current.customValues } };
+    const marks: Partial<Record<AiField, "ok" | "review">> = {};
+    let filled = 0;
+    let review = 0;
 
-    applyFields(f, true);
-
-    const filled = [
-      v("givenNames"),
-      v("surname"),
-      v("documentNumber"),
-      v("dateOfBirth"),
-      v("dateOfIssue"),
-      v("dateOfExpiry"),
-    ].filter((x) => x.trim().length > 0).length;
-    const review = (["givenNames", "surname", "documentNumber", "dateOfBirth", "dateOfIssue", "dateOfExpiry"] as CanonicalField[])
-      .map(st)
-      .filter((s): s is "review" => s === "review").length;
-
-    if (filled === 0) {
-      setAi({ t: "error", message: res.warnings[0] ?? "هیچ فیلد شناخته‌شده‌ای خوانده نشد — فرم را دستی پر کنید." });
-      return;
+    for (const slot of FORM_SLOTS) {
+      const raw = payload[slot.key];
+      if (typeof raw !== "string" || !raw.trim()) continue;
+      let value: string | null = raw.trim();
+      if (slot.kind === "name") value = safePersonName(raw);
+      else if (slot.kind === "passport") value = raw.trim().toUpperCase().replace(/\s+/g, "");
+      else if (slot.kind === "date" && !isIsoDate(raw)) continue; // skip malformed dates
+      if (!value) continue;
+      const existing = next[slot.field] as string | null;
+      const isEmpty = existing == null || existing === "";
+      if (!isEmpty && !aiOwned.current.has(slot.field)) continue; // operator typed — hands off
+      (next as Record<AiField, string | null>)[slot.field] = value;
+      aiOwned.current.add(slot.field);
+      filled++;
+      marks[slot.field] = uncertain.has(slot.key) ? "review" : "ok";
+      if (uncertain.has(slot.key)) review++;
     }
 
+    // Custom fields — filled only when empty, never over the operator.
+    // Matching is tolerant: the model may mangle keys ("father_name" vs
+    // "fathername") or echo the Persian label — normalize and match anyway.
+    const norm = (s: string) => s.replace(/[\s_\-.]/g, "").toLowerCase();
+    const payloadByNormKey = new Map<string, unknown>();
+    for (const [k, v] of Object.entries(payload)) {
+      if ((CORE_FIELD_KEYS as readonly string[]).includes(k)) continue;
+      payloadByNormKey.set(norm(k), v);
+    }
+    let customFilled = 0;
+    for (const field of fieldsRef.current) {
+      const raw = payloadByNormKey.get(norm(field.key)) ?? payloadByNormKey.get(norm(field.label));
+      if (raw == null) continue;
+      const existing = next.customValues[field.key];
+      const isEmpty = existing == null || existing === "" || (Array.isArray(existing) && existing.length === 0);
+      if (!isEmpty) continue;
+      const value = customFieldValue(field, raw);
+      if (value == null) continue;
+      next.customValues[field.key] = value;
+      customFilled++;
+    }
+
+    // Document extras → a compact note line.
     const extrasNote = [
-      clean(v("nationalId"), true) && `شماره ملی/تذکره: ${clean(v("nationalId"), true)}`,
-      clean(v("placeOfBirth")) && `محل تولد: ${clean(v("placeOfBirth"))}`,
-      clean(v("fatherName")) && `نام پدر: ${clean(v("fatherName"))}`,
-      clean(v("nationality")) && `ملیت: ${clean(v("nationality"))}`,
-      v("sex") === "M" && "جنسیت: مرد",
-      v("sex") === "F" && "جنسیت: زن",
-      v("entryDate") &&
-        `تاریخ ورود: ${toPersianDigits(formatDateForTemplate(v("entryDate"), "jalali"))}`,
+      payload.nationality && `ملیت: ${payload.nationality}`,
+      payload.national_id && `شماره ملی/تذکره: ${payload.national_id}`,
+      payload.place_of_birth && `محل تولد: ${payload.place_of_birth}`,
+      payload.sex === "M" && "جنسیت: مرد",
+      payload.sex === "F" && "جنسیت: زن",
+      payload.document_type && `نوع مدرک: ${payload.document_type}`,
     ]
       .filter(Boolean)
       .join(" — ");
-
     if (extrasNote) {
-      setForm((prev) => ({
-        ...prev,
-        notes: !prev.notes
-          ? extrasNote
-          : prev.notes.includes(extrasNote)
-            ? prev.notes
-            : `${prev.notes} — ${extrasNote}`,
-      }));
+      next.notes = !next.notes
+        ? extrasNote
+        : next.notes.includes(extrasNote)
+          ? next.notes
+          : `${next.notes} — ${extrasNote}`;
     }
-    setAiRun((n) => n + 1);
-    setAi({ t: "done", filled, review, fileName });
-    if (v("documentNumber")) void checkDuplicate(v("documentNumber").toUpperCase());
+
+    setForm(next);
+    if (Object.keys(marks).length > 0) setAiMarks(marks);
+    return { filled, review, customFilled };
   };
 
-  /**
-   * Live progressive fill — values land in the form the moment they are read.
-   * Weak early reads are upgraded in place by stronger sources (see
-   * applyFields), which is what makes the fill both instant AND correct on
-   * multi-page scans.
-   */
-  const applyPartialFields = (fields: Partial<Record<CanonicalField, ExtractedValue>>) => {
-    applyFields(fields, false);
-    const pno = fields.documentNumber?.value ? String(fields.documentNumber.value).trim().toUpperCase() : "";
-    if (pno) void checkDuplicate(pno);
-  };
-
-  const runAi = async (file: File) => {
-    const err = validateFile(file);
-    if (err) {
-      setAi({ t: "error", message: err });
+  const runAi = async (files: File[]) => {
+    if (files.length === 0) return;
+    if (!hasWorker) {
+      setAi({
+        t: "error",
+        message: "هوش مصنوعی هنوز تنظیم نشده — اول ورکر Cloudflare را در تنظیمات اضافه کنید.",
+        needsSetup: true,
+      });
       return;
     }
-    setAi({ t: "busy", progress: null });
+    for (const f of files) {
+      const err = validateAiFile(f);
+      if (err) {
+        setAi({ t: "error", message: err });
+        return;
+      }
+    }
+    setAi({ t: "busy", stage: { label: "آماده‌سازی تصاویر…", percent: 5 } });
     setAiMarks({});
-    // NOTE: aiRank is deliberately NOT reset here — slots the previous upload
-    // filled stay AI-owned so a re-upload can upgrade them; only the operator
+    // NOTE: aiOwned is deliberately NOT reset here — slots the previous upload
+    // filled stay AI-owned so a re-upload can refresh them; only the operator
     // typing in a field releases it (touch()).
-    setSmartFile(file);
+    setSmartFiles(files);
     try {
-      const res = await runExtraction(file, {
-        previews: false,
-        onProgress: (p) => setAi((s) => (s.t === "busy" ? { t: "busy", progress: p } : s)),
-        onFields: (fields) => applyPartialFields(fields),
+      const prep = await prepareFilesForAi(files, (s) =>
+        setAi((cur) => (cur.t === "busy" ? { t: "busy", stage: s } : cur)),
+      );
+      if (prep.images.length === 0) {
+        setAi({ t: "error", message: "از این فایل هیچ تصویری ساخته نشد — فایل دیگری امتحان کنید." });
+        return;
+      }
+      const messages = buildExtractionMessages(prep.images, {
+        customFields: fieldsRef.current.map((f) => ({ key: f.key, label: f.label })),
+        systemPromptOverride: aiSettings.systemPromptOverride,
       });
-      applyAiResult(res, file.name);
-    } catch {
-      setAi({ t: "error", message: "خواندن فایل با خطا متوقف شد — دستی پر کنید." });
+      const { text } = await aiChat(messages, {
+        maxTokens: 2048,
+        temperature: 0.1,
+        onAttempt: ({ worker, index, total }) =>
+          setAi((cur) =>
+            cur.t === "busy"
+              ? {
+                  t: "busy",
+                  stage: {
+                    label:
+                      total > 1 && index > 0
+                        ? `حساب قبلی خطا داد — تلاش با «${worker.label}»…`
+                        : `ارسال به هوش مصنوعی (${worker.label})…`,
+                    percent: 65,
+                  },
+                }
+              : cur,
+          ),
+      });
+      setAi((cur) => (cur.t === "busy" ? { t: "busy", stage: { label: "خواندن پاسخ…", percent: 90 } } : cur));
+      const payload = parseExtractionReply(text);
+      const { filled, review } = applyPayload(payload);
+      if (filled === 0) {
+        setAi({ t: "error", message: "هوش مصنوعی هیچ فیلدی از این مدرک نخواند — فرم را دستی پر کنید." });
+        return;
+      }
+      setAiRun((n) => n + 1);
+      setAi({
+        t: "done",
+        filled,
+        review,
+        files: prep.summary + (prep.truncated ? " (فقط ۶ تصویر اول ارسال شد)" : ""),
+      });
+      if (payload.passport_number) void checkDuplicate(payload.passport_number.toUpperCase());
+    } catch (e) {
+      if (e instanceof AiAllWorkersFailedError) {
+        setAi({
+          t: "error",
+          message:
+            e.attempts.length === 0
+              ? "هیچ ورکر فعالی تنظیم نشده است."
+              : `همه حساب‌ها ناموفق بودند:\n${e.attempts
+                  .map((a) => `• ${a.label}: ${a.message}`)
+                  .join("\n")}`,
+          needsSetup: e.attempts.length === 0,
+        });
+      } else {
+        setAi({ t: "error", message: e instanceof Error ? e.message : "خواندن فایل با خطا متوقف شد — دستی پر کنید." });
+      }
     }
   };
 
@@ -454,9 +491,10 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
     e.preventDefault();
     setDragActive(false);
     if (busy) return;
-    const f = e.dataTransfer.files?.[0];
-    if (f) void runAi(f);
+    const files = Array.from(e.dataTransfer.files ?? []);
+    if (files.length > 0) void runAi(files);
   };
+
 
   const validate = (): boolean => {
     const next: Record<string, string> = {};
@@ -507,13 +545,17 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
         onSaved?.({ ...customer, ...input });
       } else {
         const created = await createCustomer(input);
-        // Save the source document into the customer's document slots.
-        if (smartFile) {
-          try {
-            await saveAttachment(created.id, "passport", smartFile);
-          } catch {
-            toast.error("ذخیرهٔ فایل مدرک ناموفق بود (مشتری ثبت شد)");
+        // Save the source documents into the customer's document slots.
+        if (smartFiles.length > 0) {
+          let failed = 0;
+          for (const file of smartFiles) {
+            try {
+              await saveAttachment(created.id, "passport", file);
+            } catch {
+              failed++;
+            }
           }
+          if (failed > 0) toast.error("ذخیرهٔ بعضی مدارک ناموفق بود (مشتری ثبت شد)");
         }
         // Register the visa request together with the customer — same
         // representative, list and registration date. No re-asking.
@@ -555,12 +597,8 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
 
   const liveFilled = Object.keys(aiMarks).length;
   const stageText =
-    ai.t === "busy" && ai.progress
-      ? `${AI_STAGES[ai.progress.stage] ?? "پردازش"}${
-          ai.progress.totalPages
-            ? ` — صفحهٔ ${toPersianDigits(ai.progress.page)} از ${toPersianDigits(ai.progress.totalPages)}`
-            : ""
-        }${liveFilled > 0 ? ` — ${toPersianDigits(liveFilled)} فیلد پر شد` : ""}`
+    ai.t === "busy" && ai.stage
+      ? `${ai.stage.label}${liveFilled > 0 ? ` — ${toPersianDigits(liveFilled)} فیلد پر شد` : ""}`
       : "شروع…";
 
   return (
@@ -598,21 +636,35 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
           <div className="pointer-events-none absolute -top-12 left-1/4 size-32 rounded-full bg-[#8b5cf6]/25 blur-2xl" aria-hidden />
           <div className="relative flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             <div className="flex min-w-0 items-center gap-2.5">
-              <button
-                type="button"
-                onClick={() => fileRef.current?.click()}
-                disabled={busy}
-                className="group inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gradient-to-l from-[#6366f1] via-[#8b5cf6] to-[#d946ef] px-3.5 py-1.5 text-[12.5px] font-bold text-white shadow-lg shadow-[#6366f1]/35 transition-all hover:shadow-[#6366f1]/55 hover:brightness-110 active:scale-95 disabled:cursor-wait disabled:opacity-70"
-              >
-                {busy ? (
-                  <Loader2 size={15} className="animate-spin" />
-                ) : (
-                  <Sparkles size={15} className="transition-transform duration-300 group-hover:rotate-12" />
-                )}
-                {busy ? "در حال خواندن…" : "پرکردن با AI"}
-              </button>
+              {hasWorker ? (
+                <button
+                  type="button"
+                  onClick={() => fileRef.current?.click()}
+                  disabled={busy}
+                  className="group inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gradient-to-l from-[#6366f1] via-[#8b5cf6] to-[#d946ef] px-3.5 py-1.5 text-[12.5px] font-bold text-white shadow-lg shadow-[#6366f1]/35 transition-all hover:shadow-[#6366f1]/55 hover:brightness-110 active:scale-95 disabled:cursor-wait disabled:opacity-70"
+                >
+                  {busy ? (
+                    <Loader2 size={15} className="animate-spin" />
+                  ) : (
+                    <Sparkles size={15} className="transition-transform duration-300 group-hover:rotate-12" />
+                  )}
+                  {busy ? "در حال خواندن…" : "پرکردن با AI"}
+                </button>
+              ) : (
+                <Link
+                  to="/settings?tab=ai"
+                  className="group inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gradient-to-l from-[#6366f1] via-[#8b5cf6] to-[#d946ef] px-3.5 py-1.5 text-[12.5px] font-bold text-white shadow-lg shadow-[#6366f1]/35 transition-all hover:shadow-[#6366f1]/55 hover:brightness-110 active:scale-95"
+                >
+                  <Settings2 size={15} />
+                  فعال‌سازی هوش مصنوعی
+                </Link>
+              )}
               <p className="hidden min-w-0 text-[11px] leading-4 text-ink-500 sm:block dark:text-ink-400">
-                {busy ? stageText : "عکس یا PDF مدرک را بدهید — همین فرم خودکار پر می‌شود"}
+                {hasWorker
+                  ? busy
+                    ? stageText
+                    : "چند عکس یا PDF مدرک را همزمان بدهید — همین فرم خودکار پر می‌شود"
+                  : "اول ورکر Cloudflare خود را در تنظیمات اضافه کنید"}
               </p>
             </div>
             {ai.t === "done" && (
@@ -634,30 +686,38 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
             <div className="relative mt-2.5 h-1 overflow-hidden rounded-full bg-[#6366f1]/15">
               <div
                 className="h-full rounded-full bg-gradient-to-l from-[#6366f1] via-[#8b5cf6] to-[#d946ef] transition-all duration-300"
-                style={{ width: `${Math.max(5, (ai as { progress: PipelineProgress | null }).progress?.percent ?? 5)}%` }}
+                style={{ width: `${Math.max(5, (ai as { stage: AiStageInfo | null }).stage?.percent ?? 5)}%` }}
               />
             </div>
           )}
           {!busy && ai.t === "done" && (
             <p className="relative mt-2 truncate text-[10.5px] leading-4 text-ink-500 dark:text-ink-400">
-              از «{ai.fileName}» — نشان‌ها را سریع چک کنید و نماینده/لیست/نوع ویزا را انتخاب کنید
+              از {ai.files} — نشان‌ها را سریع چک کنید و نماینده/لیست/نوع ویزا را انتخاب کنید
             </p>
           )}
           {!busy && ai.t === "error" && (
-            <p className="relative mt-2 flex items-center gap-1.5 text-[11px] leading-4 text-rose-600 dark:text-rose-400">
-              <AlertTriangle size={12} className="shrink-0" />
-              {ai.message}
-            </p>
+            <div className="relative mt-2 flex flex-col gap-1.5">
+              <p className="flex items-start gap-1.5 text-[11px] leading-5 text-rose-600 dark:text-rose-400">
+                <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                <span className="min-w-0 whitespace-pre-line">{ai.message}</span>
+              </p>
+              {ai.needsSetup && (
+                <Link to="/settings?tab=ai" className="btn btn-glass btn-sm w-fit">
+                  <Settings2 size={13} /> رفتن به تنظیمات هوش مصنوعی
+                </Link>
+              )}
+            </div>
           )}
           <input
             ref={fileRef}
             type="file"
-            accept="application/pdf,image/jpeg,image/png,image/webp,image/bmp,.pdf,.jpg,.jpeg,.png,.webp,.bmp"
+            multiple
+            accept={ACCEPTED_MIME}
             className="hidden"
             onChange={(e) => {
-              const f = e.target.files?.[0];
+              const files = Array.from(e.target.files ?? []);
               e.target.value = "";
-              if (f) void runAi(f);
+              if (files.length > 0) void runAi(files);
             }}
           />
         </div>
@@ -880,7 +940,9 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
           <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-[#6366f1] bg-white/85 backdrop-blur-[2px] dark:bg-ink-900/85">
             <Sparkles size={34} className="text-[#6366f1]" />
             <p className="text-[13px] font-bold">رها کنید تا با AI پر شود</p>
-            <p className="text-[11px] text-ink-500 dark:text-ink-400">PDF یا عکس پاسپورت / تذکره / کارت شناسایی</p>
+            <p className="text-[11px] text-ink-500 dark:text-ink-400">
+              یک یا چند فایل — عکس یا PDF پاسپورت / تذکره / کارت شناسایی
+            </p>
           </div>
         )}
       </div>

@@ -2,8 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
+  Bot,
+  CheckCircle2,
   Coins,
   DatabaseBackup,
+  Eye,
+  EyeOff,
   FileImage,
   Keyboard,
   Layers,
@@ -13,19 +17,21 @@ import {
   Pencil,
   Plus,
   Settings2,
+  Signal,
   Smartphone,
   Sun,
   Tag as TagIcon,
   Trash2,
   Plane as VisaIcon,
   Wand2,
+  XCircle,
 } from "lucide-react";
 import { useSearchParams, Link } from "react-router-dom";
 import { PageHeader } from "../components/ui/StatCard";
 import { SectionCard, RadioSelect } from "../components/ui/inputs";
 import { Modal } from "../components/ui/Modal";
-import { Button } from "../components/ui/Button";
-import { FormField, Input, Checkbox, Toggle, Select } from "../components/ui/fields";
+import { Button, IconButton } from "../components/ui/Button";
+import { FormField, Input, Checkbox, Toggle, Select, Textarea } from "../components/ui/fields";
 import { EmptyState } from "../components/ui/EmptyState";
 import { useTheme, type Theme } from "../hooks/useTheme";
 import { useCustomFields, usePrefs, useTags, useVisaTypes, useCustomers, useDocTypes } from "../hooks/useData";
@@ -58,6 +64,19 @@ import { useConfirm } from "../hooks/useConfirm";
 import { FIELD_TYPE_LABELS, type CustomFieldDef, type FieldEntity, type FieldType, type Tag } from "../types";
 import { toPersianDigits } from "../utils/jalali";
 import { slugify } from "../utils/normalize";
+import {
+  KNOWN_MODELS,
+  DEFAULT_MODEL,
+  addAiWorker,
+  deleteAiWorker,
+  moveAiWorker,
+  testWorker,
+  updateAiSettings,
+  updateAiWorker,
+  useAiSettings,
+  useAiWorkers,
+  type AiWorker,
+} from "../lib/ai";
 
 type SettingsSection =
   | "appearance"
@@ -68,6 +87,7 @@ type SettingsSection =
   | "docTypes"
   | "currency"
   | "defaults"
+  | "ai"
   | "backup"
   | "data"
   | "pwa";
@@ -81,6 +101,7 @@ const SECTIONS: { key: SettingsSection; label: string; icon: typeof Palette }[] 
   { key: "docTypes", label: "مدارک و تصاویر", icon: FileImage },
   { key: "currency", label: "واحد پول", icon: Coins },
   { key: "defaults", label: "پیش‌فرض‌های فرم", icon: Wand2 },
+  { key: "ai", label: "هوش مصنوعی", icon: Bot },
   { key: "backup", label: "پشتیبان‌گیری", icon: DatabaseBackup },
   { key: "data", label: "مدیریت داده", icon: Settings2 },
   { key: "pwa", label: "درباره PWA", icon: Smartphone },
@@ -138,6 +159,7 @@ export function SettingsPage() {
           {section === "docTypes" && <DocTypesSection />}
           {section === "currency" && <CurrencySection />}
           {section === "defaults" && <DefaultsSection />}
+          {section === "ai" && <AiSection />}
           {section === "backup" && <BackupSection />}
           {section === "data" && <DataSection />}
           {section === "pwa" && <PwaSection />}
@@ -1106,6 +1128,310 @@ function BackupSection() {
         <DatabaseBackup size={14} /> رفتن به صفحه پشتیبان‌گیری
       </Link>
     </SectionCard>
+  );
+}
+
+/* ------------------------------ AI workers ------------------------------- */
+
+const MODEL_OPTIONS = [...KNOWN_MODELS];
+
+function AiSection() {
+  const toast = useToast();
+  const { confirm } = useConfirm();
+  const workers = useAiWorkers();
+  const aiSettings = useAiSettings();
+
+  const [addOpen, setAddOpen] = useState(false);
+  const [editWorker, setEditWorker] = useState<AiWorker | null>(null);
+  const [testing, setTesting] = useState<string | null>(null);
+  /** id → last test result (in-memory only). */
+  const [testResults, setTestResults] = useState<Record<string, { ok: boolean; text: string }>>({});
+  const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
+  const [promptDraft, setPromptDraft] = useState<string | null>(null);
+
+  const promptValue = promptDraft ?? aiSettings.systemPromptOverride ?? "";
+
+  const runTest = async (worker: AiWorker) => {
+    setTesting(worker.id);
+    setTestResults((r) => ({ ...r, [worker.id]: { ok: true, text: "در حال آزمایش…" } }));
+    const result = await testWorker(worker);
+    setTestResults((r) => ({
+      ...r,
+      [worker.id]: result.ok
+        ? { ok: true, text: `کار می‌کند — ${(result.ms / 1000).toLocaleString("fa-IR")} ثانیه` }
+        : { ok: false, text: result.error },
+    }));
+    setTesting(null);
+  };
+
+  const removeWorker = async (worker: AiWorker) => {
+    const ok = await confirm({
+      title: `حذف ورکر «${worker.label}»`,
+      message: "این حساب هوش مصنوعی از لیست حذف می‌شود.",
+      danger: true,
+      confirmLabel: "حذف",
+    });
+    if (!ok) return;
+    await deleteAiWorker(worker.id);
+    toast.success("ورکر حذف شد");
+  };
+
+  return (
+    <SectionCard title="هوش مصنوعی (ورکرهای Cloudflare)" icon={<Bot size={15} className="text-brand-500" />}>
+      <div className="flex flex-col gap-4">
+        <p className="text-[12px] leading-6 text-ink-500 dark:text-ink-400">
+          آدرس و کلید ورکرهای هوش مصنوعی خود را اینجا اضافه کنید. می‌توانید از چند اکانت کلید ثبت
+          کنید؛ هنگام پرکردن خودکار فرم، حساب‌ها به ترتیب همین لیست امتحان می‌شوند و اگر یکی به
+          محدودیت نرخ بخورد یا خطا بدهد، خودکار حساب بعدی استفاده می‌شود. کلیدها فقط روی همین
+          دستگاه ذخیره می‌شوند و در فایل پشتیبان قرار نمی‌گیرند.
+        </p>
+
+        {/* Worker accounts */}
+        {!workers ? (
+          <div className="h-16 animate-pulse rounded-2xl bg-brand-500/6" />
+        ) : workers.length === 0 ? (
+          <div className="flex flex-col items-start gap-2 rounded-2xl border border-dashed border-ink-300/70 p-4 dark:border-ink-700">
+            <p className="text-[13px] font-bold">هنوز ورکری اضافه نشده است</p>
+            <p className="text-[11.5px] leading-5 text-ink-500 dark:text-ink-400">
+              برای فعال‌شدن پرکردن خودکار فرم مشتری با هوش مصنوعی، اولین ورکر Cloudflare خود را
+              اضافه کنید (آدرس ورکر + کلید API + مدل).
+            </p>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2.5">
+            {workers.map((worker, i) => {
+              const test = testResults[worker.id];
+              return (
+                <div
+                  key={worker.id}
+                  className={`flex flex-col gap-2.5 rounded-2xl border p-3.5 ${
+                    worker.enabled
+                      ? "border-ink-900/8 bg-white/40 dark:border-white/10 dark:bg-white/[0.04]"
+                      : "border-ink-900/8 bg-ink-500/[0.04] opacity-70 dark:border-white/10"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-500/12 text-[12px] font-black text-brand-600 dark:text-brand-300">
+                        {toPersianDigits(i + 1)}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="truncate text-[13px] font-bold">{worker.label}</p>
+                        <p dir="ltr" className="num truncate text-left text-[10.5px] text-ink-400">
+                          {worker.model}
+                        </p>
+                      </div>
+                    </div>
+                    <Toggle
+                      checked={worker.enabled}
+                      onChange={(v) => void updateAiWorker(worker.id, { enabled: v })}
+                    />
+                  </div>
+
+                  <div dir="ltr" className="num flex flex-col gap-1 rounded-xl bg-ink-500/[0.06] px-2.5 py-2 text-left text-[11px] dark:bg-white/[0.05]">
+                    <span className="truncate text-ink-600 dark:text-ink-300">{worker.url}</span>
+                    <span className="flex items-center gap-1.5 text-ink-500 dark:text-ink-400">
+                      <button
+                        onClick={() => setShowKeys((s) => ({ ...s, [worker.id]: !s[worker.id] }))}
+                        className="inline-flex items-center gap-1 hover:text-brand-600"
+                        aria-label="نمایش/پنهان کلید"
+                      >
+                        {showKeys[worker.id] ? <EyeOff size={12} /> : <Eye size={12} />}
+                        {showKeys[worker.id] ? worker.key : `${worker.key.slice(0, 4)}••••••••${worker.key.slice(-4)}`}
+                      </button>
+                    </span>
+                  </div>
+
+                  {test && (
+                    <p
+                      className={`flex items-start gap-1.5 text-[11px] font-bold leading-5 ${
+                        test.ok ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"
+                      }`}
+                    >
+                      {test.ok ? <CheckCircle2 size={13} className="mt-0.5 shrink-0" /> : <XCircle size={13} className="mt-0.5 shrink-0" />}
+                      <span dir="auto">{test.text}</span>
+                    </p>
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="glass"
+                      icon={Signal}
+                      loading={testing === worker.id}
+                      onClick={() => void runTest(worker)}
+                    >
+                      تست اتصال
+                    </Button>
+                    <Button size="sm" variant="ghost" icon={Pencil} onClick={() => setEditWorker(worker)}>
+                      ویرایش
+                    </Button>
+                    <div className="mr-auto flex items-center gap-1">
+                      <IconButton
+                        icon={ArrowUp}
+                        label="انتقال به بالا"
+                        disabled={i === 0}
+                        onClick={() => void moveAiWorker(worker.id, -1)}
+                      />
+                      <IconButton
+                        icon={ArrowDown}
+                        label="انتقال به پایین"
+                        disabled={i === workers.length - 1}
+                        onClick={() => void moveAiWorker(worker.id, 1)}
+                      />
+                      <IconButton icon={Trash2} label="حذف" className="text-[#dc3535]" onClick={() => void removeWorker(worker)} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div>
+          <Button variant="primary" size="sm" icon={Plus} onClick={() => setAddOpen(true)}>
+            افزودن ورکر
+          </Button>
+        </div>
+
+        {/* Optional custom system prompt */}
+        <div className="border-t border-ink-900/5 pt-4 dark:border-white/5">
+          <FormField
+            label="پرامپت سفارشی استخراج (اختیاری)"
+            hint="اگر پرامپت مخصوص ورکر خود را دارید اینجا بچسبانید؛ خالی یعنی پرامپت پیش‌فرض برنامه استفاده می‌شود"
+          >
+            <Textarea
+              dir="ltr"
+              rows={5}
+              value={promptValue}
+              onChange={(e) => setPromptDraft(e.target.value)}
+              placeholder="You are a document-data extraction engine…"
+              className="num text-left text-[11.5px] leading-5"
+            />
+          </FormField>
+          {promptDraft !== null && (
+            <div className="mt-2 flex gap-2">
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={async () => {
+                  await updateAiSettings({ systemPromptOverride: promptDraft.trim() || null });
+                  setPromptDraft(null);
+                  toast.success("پرامپت ذخیره شد");
+                }}
+              >
+                ذخیره پرامپت
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setPromptDraft(null)}>
+                انصراف
+              </Button>
+            </div>
+          )}
+        </div>
+
+        <p className="text-[11px] leading-5 text-ink-400">
+          توجه: هنگام پرکردن خودکار، صفحات PDF ابتدا در همین مرورگر به عکس تبدیل می‌شوند و فقط
+          همین عکس‌ها (نه فایل اصلی) برای تحلیل به ورکر شما در Cloudflare ارسال می‌شود.
+        </p>
+      </div>
+
+      {(addOpen || editWorker != null) && (
+        <WorkerFormModal
+          worker={editWorker}
+          onClose={() => {
+            setAddOpen(false);
+            setEditWorker(null);
+          }}
+        />
+      )}
+    </SectionCard>
+  );
+}
+
+function WorkerFormModal({ worker, onClose }: { worker: AiWorker | null; onClose: () => void }) {
+  const toast = useToast();
+  const [label, setLabel] = useState(worker?.label ?? "");
+  const [url, setUrl] = useState(worker?.url ?? "");
+  const [key, setKey] = useState(worker?.key ?? "");
+  const [model, setModel] = useState(worker?.model ?? DEFAULT_MODEL);
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      if (worker) {
+        await updateAiWorker(worker.id, { label: label.trim(), url: url.trim(), key: key.trim(), model: model.trim() });
+        toast.success("ورکر به‌روزرسانی شد");
+      } else {
+        await addAiWorker({ label, url, key, model });
+        toast.success("ورکر اضافه شد");
+      }
+      onClose();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "ذخیره ناموفق بود.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={worker ? `ویرایش ورکر «${worker.label}»` : "افزودن ورکر هوش مصنوعی"}
+      subtitle="آدرس پایه ورکر + کلید API — درخواست‌ها مستقیم به همین آدرس ارسال می‌شود"
+      size="md"
+      footer={
+        <div className="flex items-center justify-end gap-2">
+          <button className="btn btn-ghost btn-sm" onClick={onClose} disabled={saving}>
+            انصراف
+          </button>
+          <Button variant="primary" onClick={() => void save()} loading={saving}>
+            ذخیره
+          </Button>
+        </div>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        <FormField label="نام حساب" hint="مثلاً: اکانت اصلی، اکانت دوم…">
+          <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="اکانت ۱" />
+        </FormField>
+        <FormField label="آدرس ورکر (URL)" required>
+          <Input
+            dir="ltr"
+            className="num text-left"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://your-worker.workers.dev"
+          />
+        </FormField>
+        <FormField label="کلید API" required>
+          <Input
+            dir="ltr"
+            className="num text-left"
+            type="password"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            placeholder="sk-…"
+          />
+        </FormField>
+        <FormField label="مدل" hint="می‌توانید از لیست انتخاب کنید یا آی‌دی مدل خود را بنویسید">
+          <Input
+            dir="ltr"
+            className="num text-left"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            list="ai-model-options"
+            placeholder={DEFAULT_MODEL}
+          />
+          <datalist id="ai-model-options">
+            {MODEL_OPTIONS.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+        </FormField>
+      </div>
+    </Modal>
   );
 }
 

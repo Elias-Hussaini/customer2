@@ -20,12 +20,10 @@
     "jspdf-autotable": "latest",
     "jszip": "^3.10.2",
     "lucide-react": "latest",
-    "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^5.7.284",
     "react": "latest",
     "react-dom": "latest",
     "react-router-dom": "latest",
-    "tesseract.js": "^6.0.1",
     "xlsx": "latest"
   },
   "devDependencies": {
