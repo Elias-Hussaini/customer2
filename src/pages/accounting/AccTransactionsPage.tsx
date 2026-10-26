@@ -1,13 +1,16 @@
 /** All transactions with rich filters, detail dialog, reverse/cancel actions
  *  and full export (XLSX / CSV / PDF / PNG). */
 
-import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Ban,
   FileDown,
+  FileText,
   History,
+  ImageIcon,
   MoreVertical,
+  Paperclip,
   Pencil,
   Plus,
   Receipt,
@@ -32,6 +35,7 @@ import {
 } from "../../accounting/types";
 import {
   useAccAccounts,
+  useAccDocsMeta,
   useAccParties,
   useAccTransactions,
 } from "../../accounting/hooks";
@@ -50,6 +54,8 @@ export function AccTransactionsPage() {
   const transactions = useAccTransactions();
   const parties = useAccParties();
   const accounts = useAccAccounts();
+  const docsMeta = useAccDocsMeta();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
@@ -64,9 +70,34 @@ export function AccTransactionsPage() {
   const [newOpen, setNewOpen] = useState(false);
   const [editTx, setEditTx] = useState<FinTransaction | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  const [docPreview, setDocPreview] = useState<{ name: string; mime: string; url: string } | null>(null);
 
   const partyName = (id?: string | null) => (parties ?? []).find((p) => p.id === id)?.name ?? "—";
   const accountName = (id?: string | null) => (accounts ?? []).find((a) => a.id === id)?.name ?? "";
+
+  /** transactionId → attached documents (metadata, no blobs). */
+  const docsByTx = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; mime: string }[]>();
+    for (const d of docsMeta ?? []) {
+      if (!d.transactionId) continue;
+      const list = map.get(d.transactionId) ?? [];
+      list.push({ id: d.id, name: d.name, mime: d.mime });
+      map.set(d.transactionId, list);
+    }
+    return map;
+  }, [docsMeta]);
+
+  // Deep link: /accounting/transactions?tx=<id> opens that transaction's
+  // detail dialog (used by the documents archive to jump to a transaction).
+  useEffect(() => {
+    const txId = searchParams.get("tx");
+    if (!txId || !transactions) return;
+    const target = transactions.find((t) => t.id === txId);
+    if (target) {
+      setDetail(target);
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, transactions, setSearchParams]);
 
   const rows = useMemo(() => {
     let list = [...(transactions ?? [])].sort((a, b) =>
@@ -136,7 +167,20 @@ export function AccTransactionsPage() {
       key: "number",
       header: "شماره",
       sortValue: (t) => t.number,
-      render: (t) => <span className="num text-xs font-bold">{t.number}</span>,
+      render: (t) => (
+        <span className="flex items-center gap-1.5">
+          <span className="num text-xs font-bold">{t.number}</span>
+          {(docsByTx.get(t.id)?.length ?? 0) > 0 && (
+            <span
+              className="flex items-center gap-0.5 rounded-full bg-brand-500/10 px-1.5 py-0.5 text-[10px] font-bold text-brand-600 dark:text-brand-300"
+              title={`${(docsByTx.get(t.id)?.length ?? 0).toLocaleString("fa-IR")} سند پیوست`}
+            >
+              <Paperclip size={10} />
+              {(docsByTx.get(t.id)?.length ?? 0).toLocaleString("fa-IR")}
+            </span>
+          )}
+        </span>
+      ),
     },
     { key: "type", header: "نوع", align: "center", render: (t) => <TxTypePill type={t.type} /> },
     {
@@ -221,6 +265,7 @@ export function AccTransactionsPage() {
     { key: "fromAccount", header: "از حساب" },
     { key: "toAccount", header: "به حساب" },
     { key: "status", header: "وضعیت" },
+    { key: "attachments", header: "پیوست" },
     { key: "reference", header: "مرجع" },
     { key: "description", header: "شرح" },
   ];
@@ -235,6 +280,9 @@ export function AccTransactionsPage() {
     fromAccount: t.sourceAccountId ? accountName(t.sourceAccountId) : "",
     toAccount: t.destAccountId ? accountName(t.destAccountId) : "",
     status: t.status === "final" ? (t.affectsBalance ? "قطعی" : "قطعی - فقط ثبت") : t.status === "reversed" ? "برگشت خورده" : "ابطال شده",
+    attachments: ((docsByTx.get(t.id)?.length ?? 0) > 0
+      ? `${(docsByTx.get(t.id)?.length ?? 0).toLocaleString("fa-IR")} سند`
+      : ""),
     reference: t.reference ?? "",
     description: t.description ?? "",
   }));
@@ -452,6 +500,63 @@ export function AccTransactionsPage() {
                 }
               />
             )}
+            {(docsByTx.get(detail.id)?.length ?? 0) > 0 && (
+              <div className="mt-1 flex flex-col gap-2">
+                <p className="text-xs font-bold text-ink-500 dark:text-ink-400">
+                  اسناد پیوست ({(docsByTx.get(detail.id)?.length ?? 0).toLocaleString("fa-IR")})
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {(docsByTx.get(detail.id) ?? []).map((doc) => (
+                    <div
+                      key={doc.id}
+                      className="flex items-center gap-2 rounded-2xl border border-ink-900/5 bg-white/50 py-1.5 pl-2 pr-1.5 dark:border-white/10 dark:bg-white/[0.05]"
+                    >
+                      <button
+                        className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl bg-brand-500/10"
+                        title={`پیش‌نمایش ${doc.name}`}
+                        onClick={async () => {
+                          const { db } = await import("../../db/schema");
+                          const record = await db.accDocs.get(doc.id);
+                          if (record) {
+                            setDocPreview({
+                              name: record.name,
+                              mime: record.mime,
+                              url: URL.createObjectURL(record.blob),
+                            });
+                          }
+                        }}
+                      >
+                        {doc.mime.startsWith("image/") ? (
+                          <ImageIcon size={17} className="text-brand-600 dark:text-brand-300" />
+                        ) : (
+                          <FileText size={17} className="text-brand-600 dark:text-brand-300" />
+                        )}
+                      </button>
+                      <div className="flex min-w-0 flex-col">
+                        <span className="max-w-[160px] truncate text-[11px] font-bold">{doc.name}</span>
+                        <div className="flex gap-2 text-[10.5px] font-semibold">
+                          <button
+                            className="text-brand-600 hover:underline dark:text-brand-300"
+                            onClick={async () => {
+                              const { db } = await import("../../db/schema");
+                              const record = await db.accDocs.get(doc.id);
+                              if (!record) return;
+                              const a = document.createElement("a");
+                              a.href = URL.createObjectURL(record.blob);
+                              a.download = record.name;
+                              a.click();
+                              setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+                            }}
+                          >
+                            دانلود
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="mt-1 flex items-center gap-1.5 text-[11px] text-ink-400">
               <History size={12} />
               ثبت: {new Date(detail.createdAt).toLocaleString("fa-IR")} · آخرین تغییر:{" "}
@@ -467,6 +572,32 @@ export function AccTransactionsPage() {
         onClose={() => setEditTx(null)}
         editTx={editTx}
       />
+
+      {/* Document preview (from the detail dialog) */}
+      <Modal
+        open={docPreview != null}
+        onClose={() => {
+          if (docPreview) URL.revokeObjectURL(docPreview.url);
+          setDocPreview(null);
+        }}
+        title={docPreview?.name ?? ""}
+        size="lg"
+      >
+        {docPreview &&
+          (docPreview.mime.startsWith("image/") ? (
+            <img
+              src={docPreview.url}
+              alt={docPreview.name}
+              className="max-h-[70vh] w-full rounded-2xl object-contain"
+            />
+          ) : (
+            <iframe
+              src={docPreview.url}
+              title={docPreview.name}
+              className="h-[70vh] w-full rounded-2xl"
+            />
+          ))}
+      </Modal>
       <ExportDialog
         open={exportOpen}
         onClose={() => setExportOpen(false)}

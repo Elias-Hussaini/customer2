@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   DatabaseBackup,
   FileArchive,
   FileDown,
@@ -11,6 +12,7 @@ import {
   RotateCcw,
   Save,
   Settings2,
+  Trash2,
   X,
 } from "lucide-react";
 import { PageHeader } from "../../components/ui/StatCard";
@@ -20,7 +22,7 @@ import { Input } from "../../components/ui/fields";
 import { ExportDialog } from "../../components/exports/ExportDialog";
 import { useConfirm } from "../../hooks/useConfirm";
 import { useToast } from "../../hooks/useToast";
-import { updateAccSettings } from "../../accounting/repo";
+import { resetAccounting, updateAccSettings } from "../../accounting/repo";
 import {
   applyAccBackup,
   buildAccBackup,
@@ -131,6 +133,29 @@ export function AccBackupPage() {
     await updateAccSettings({ categories: [...settings.categories, name] });
     setNewCategory("");
     toast.success("دسته اضافه شد");
+  };
+
+  const doReset = async () => {
+    const ok = await confirm({
+      title: "ریست کامل حسابداری",
+      message:
+        "همه طرف حساب‌ها، صندوق‌ها و بانک‌ها، تراکنش‌ها، مانده‌ها و اسناد بخش حسابداری برای همیشه پاک می‌شوند. قبل از پاک‌سازی، یک فایل پشتیبان ایمنی به‌طور خودکار دانلود می‌شود. داده‌های اصلی برنامه (مشتریان و ویزاها) دست‌نخورده می‌مانند.",
+      confirmLabel: "بله، همه چیز را پاک کن",
+      danger: true,
+    });
+    if (!ok) return;
+    setBusy("reset");
+    try {
+      const safety = await createAccSafetyBackup();
+      if (safety) exportAccBackupFile(safety);
+      await resetAccounting();
+      setRestorePreview(null);
+      toast.success("بخش حسابداری ریست شد — پشتیبان ایمنی دانلود شد");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "ریست ناموفق بود.");
+    } finally {
+      setBusy(null);
+    }
   };
 
   const exportDefs = {
@@ -343,6 +368,23 @@ export function AccBackupPage() {
                 افزودن
               </Button>
             </div>
+          </div>
+        </div>
+      </SectionCard>
+
+      {/* Danger zone — full reset */}
+      <SectionCard title="منطقه خطر — ریست کامل" icon={<AlertTriangle size={16} className="text-[#dc3535]" />}>
+        <div className="flex flex-col gap-3">
+          <p className="text-xs leading-6 text-ink-500 dark:text-ink-400">
+            دکمه زیر کل بخش حسابداری را به روز اول برمی‌گرداند: طرف حساب‌ها، صندوق‌ها و بانک‌ها، همه
+            تراکنش‌ها، مطالبات و بدهی‌ها و اسناد پاک می‌شوند و شماره‌گذاری‌ها از اول شروع می‌شود.
+            پیش از پاک‌سازی، یک فایل پشتیبان JSON از وضعیت فعلی به‌طور خودکار دانلود می‌شود که
+            می‌توانید هر زمان با «بازیابی» همان را برگردانید. داده‌های اصلی برنامه (مشتریان، ویزاها، پرداخت‌ها) دست‌نخورده می‌مانند.
+          </p>
+          <div>
+            <Button variant="danger-soft" icon={Trash2} loading={busy === "reset"} onClick={() => void doReset()}>
+              ریست کامل حسابداری
+            </Button>
           </div>
         </div>
       </SectionCard>

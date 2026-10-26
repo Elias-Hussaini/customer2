@@ -548,10 +548,22 @@ export interface TypeTotals {
   totals: Partial<Record<FinTxType, Record<Currency, number>>>;
 }
 
+/**
+ * Does this transaction count toward income/expense totals and charts?
+ * A REVERSED transaction and its counter-entry (reversalOf) are BOTH
+ * excluded: the reversal is an internal correction, not real business
+ * income/expense — so a refunded receipt must lower the receipts total
+ * back down instead of inflating both sides. Balances still net to zero
+ * through the mirrored counter-entry (see txEffects).
+ */
+export function countsTowardTotals(tx: FinTransaction): boolean {
+  return tx.status !== "cancelled" && tx.status !== "reversed" && !tx.reversalOf;
+}
+
 export function totalsByType(transactions: FinTransaction[]): TypeTotals {
   const out: TypeTotals = { count: {}, totals: {} };
   for (const tx of transactions) {
-    if (tx.status === "cancelled") continue;
+    if (!countsTowardTotals(tx)) continue;
     out.count[tx.type] = (out.count[tx.type] ?? 0) + 1;
     const bucket = (out.totals[tx.type] ?? { USD: 0, IRT: 0 }) as Record<Currency, number>;
     bucket[tx.currency] = sumAmounts([bucket[tx.currency], tx.amount], tx.currency);
@@ -582,7 +594,7 @@ export function groupByPeriod(
 ): PeriodBucket[] {
   const map = new Map<string, PeriodBucket>();
   for (const tx of transactions) {
-    if (tx.status === "cancelled") continue;
+    if (!countsTowardTotals(tx)) continue;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(tx.date)) continue;
     const key = bucketKey(tx.date, granularity);
     let bucket = map.get(key);

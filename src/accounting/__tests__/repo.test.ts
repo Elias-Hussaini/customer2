@@ -16,6 +16,7 @@ import {
   postTransaction,
   reconcileAccount,
   removeSettlement,
+  resetAccounting,
   reverseTransaction,
   settleOutstanding,
   TxValidationError,
@@ -420,5 +421,40 @@ describe("backup round-trip", () => {
     expect(restored.length).toBe(2);
     const map = await balances();
     expect(map.get("بانک")).toBe(370.5);
+  });
+});
+
+describe("resetAccounting", () => {
+  it("wipes every accounting table back to a clean slate and logs an activity", async () => {
+    const party = await createParty({ type: "individual", name: "علی", tags: [], active: true });
+    const account = await createAccount({
+      name: "صندوق",
+      type: "cash",
+      currency: "IRT",
+      active: true,
+      openingBalance: 1_000,
+      openingDate: "2025-08-01",
+    });
+    await createOutstanding({
+      kind: "receivable",
+      partyId: party.id,
+      amount: 500,
+      currency: "IRT",
+      dueDate: "2025-09-01",
+    });
+    expect(await db.accTransactions.count()).toBeGreaterThan(0);
+    expect(await db.accParties.count()).toBe(1);
+    expect(await db.accOutstanding.count()).toBe(1);
+
+    await resetAccounting();
+
+    expect(await db.accParties.count()).toBe(0);
+    expect(await db.accAccounts.count()).toBe(0);
+    expect(await db.accTransactions.count()).toBe(0);
+    expect(await db.accOutstanding.count()).toBe(0);
+    expect(await db.accDocs.count()).toBe(0);
+    expect(await db.accMeta.count()).toBe(0);
+    const log = await db.activities.toArray();
+    expect(log.some((a) => a.type === "acc-reset")).toBe(true);
   });
 });

@@ -7,11 +7,13 @@ import {
   buildStatementRows,
   computeAccountBalance,
   computePartyTotals,
+  countsTowardTotals,
   groupByPeriod,
   outstandingEffectiveStatus,
   outstandingRemaining,
   reversalCancelsExactly,
   totalCashBalances,
+  totalsByType,
   txEffects,
   validateTx,
 } from "../engine";
@@ -342,5 +344,56 @@ describe("aggregations", () => {
     expect(weeks[0].count).toBe(2);
     const months = groupByPeriod(txs, "month", (iso) => iso.slice(0, 7));
     expect(months.length).toBe(2);
+  });
+
+  it("reversed transactions and their counter-entries are excluded from totals (refunds subtract from income/expense)", () => {
+    const original = tx({
+      type: "receipt",
+      destAccountId: "acc-irt",
+      amount: 5_000_000,
+      date: "2025-10-01",
+    });
+    const counter = tx({
+      type: "payment",
+      sourceAccountId: "acc-irt",
+      amount: 5_000_000,
+      date: "2025-10-02",
+      status: "final",
+      reversalOf: original.id,
+    });
+    const reversedOriginal = { ...original, status: "reversed" as const, reversedBy: counter.id };
+    const otherReceipt = tx({ type: "receipt", destAccountId: "acc-irt", amount: 2_000_000 });
+
+    // Before reversal: 7M receipts.
+    const before = totalsByType([original, otherReceipt]);
+    expect(before.totals.receipt?.IRT).toBe(7_000_000);
+
+    // After reversal: only the untouched 2M receipt counts — neither the
+    // reversed original nor its counter-entry may inflate either side.
+    const after = totalsByType([reversedOriginal, counter, otherReceipt]);
+    expect(after.totals.receipt?.IRT).toBe(2_000_000);
+    expect(after.totals.payment?.IRT).toBeUndefined();
+    expect(after.count.receipt).toBe(1);
+    expect(after.count.payment).toBeUndefined();
+
+    // Balance still nets to zero through the counter-entry (unchanged rule).
+    const balance = computeAccountBalance(ACCOUNT_IRT, [reversedOriginal, counter, otherReceipt]);
+    expect(balance.balance).toBe(2_000_000);
+
+    expect(countsTowardTotals(reversedOriginal)).toBe(false);
+    expect(countsTowardTotals(counter)).toBe(false);
+    expect(countsTowardTotals(otherReceipt)).toBe(true);
+  });
+
+  it("groupByPeriod ignores reversals so charts show real activity only", () => {
+    const original = tx({ type: "receipt", date: "2025-10-01", destAccountId: "acc-irt" });
+    const reversed = { ...original, status: "reversed" as const, reversedBy: "c1" };
+    const counter = tx({ type: "payment", date: "2025-10-01", reversalOf: original.id });
+    const live = tx({ type: "receipt", date: "2025-10-01", destAccountId: "acc-irt", amount: 50 });
+
+    const days = groupByPeriod([reversed, counter, live], "day", (iso) => iso);
+    expect(days.length).toBe(1);
+    expect(days[0].count).toBe(1);
+    expect(days[0].receipts.IRT).toBe(50);
   });
 });

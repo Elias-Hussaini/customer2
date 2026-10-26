@@ -26,6 +26,7 @@ import { formatMoney } from "../../utils/num";
 import {
   computeAllAccountBalances,
   groupByPeriod,
+  countsTowardTotals,
   outstandingEffectiveStatus,
   outstandingRemaining,
   totalCashBalances,
@@ -116,6 +117,13 @@ export function AccDashboardPage() {
   );
 
   const typeTotals = useMemo(() => totalsByType(inRange), [inRange]);
+
+  // Reversed transactions and their counter-entries are corrections, not
+  // real business activity — they don't count toward period stats.
+  const effectiveInRange = useMemo(
+    () => inRange.filter(countsTowardTotals),
+    [inRange],
+  );
 
   const sumOf = (type: FinTxType, cur: Currency) =>
     typeTotals.totals[type]?.[cur] ?? 0;
@@ -292,7 +300,7 @@ export function AccDashboardPage() {
         <StatCard
           icon={Receipt}
           label="تراکنش‌های دوره"
-          value={inRange.length.toLocaleString("fa-IR")}
+          value={effectiveInRange.length.toLocaleString("fa-IR")}
           hint={docs ? `${docs.length.toLocaleString("fa-IR")} سند بایگانی شده` : undefined}
           tone="brand"
         />
@@ -320,7 +328,7 @@ export function AccDashboardPage() {
               }))
               .filter((s) => s.value > 0)}
             centerLabel="کل تراکنش"
-            centerValue={inRange.length.toLocaleString("fa-IR")}
+            centerValue={effectiveInRange.length.toLocaleString("fa-IR")}
           />
         </SectionCard>
       </div>

@@ -1006,3 +1006,38 @@ export async function reconcileAccount(
 }
 
 export type { AccountBalance };
+
+/**
+ * Wipe the ENTIRE accounting module back to a clean slate: parties, accounts,
+ * transactions, outstanding items, documents (with their files) and module
+ * settings/counters. The caller is expected to download a safety backup
+ * first (the UI always does). Main-app visa data is NOT touched.
+ */
+export async function resetAccounting(): Promise<void> {
+  await db.transaction(
+    "rw",
+    [db.accParties, db.accAccounts, db.accTransactions, db.accOutstanding, db.accDocs, db.accMeta, db.activities],
+    async () => {
+      const counts = {
+        parties: await db.accParties.count(),
+        accounts: await db.accAccounts.count(),
+        transactions: await db.accTransactions.count(),
+        outstanding: await db.accOutstanding.count(),
+        docs: await db.accDocs.count(),
+      };
+      await db.accParties.clear();
+      await db.accAccounts.clear();
+      await db.accTransactions.clear();
+      await db.accOutstanding.clear();
+      await db.accDocs.clear();
+      await db.accMeta.clear();
+      await logActivity({
+        type: "acc-reset",
+        entity: "accSettings",
+        entityId: "acc",
+        title: "بخش حسابداری ریست شد",
+        detail: `پاک‌سازی کامل: ${counts.parties.toLocaleString("fa-IR")} طرف حساب، ${counts.accounts.toLocaleString("fa-IR")} حساب، ${counts.transactions.toLocaleString("fa-IR")} تراکنش، ${counts.outstanding.toLocaleString("fa-IR")} مانده، ${counts.docs.toLocaleString("fa-IR")} سند. داده‌های اصلی برنامه دست‌نخورده ماند.`,
+      });
+    },
+  );
+}

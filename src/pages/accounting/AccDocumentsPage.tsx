@@ -1,45 +1,69 @@
-/** Accounting document archive — upload, search, filter, preview, download. */
+/** Accounting document archive — upload, search, filter, preview, download.
+ * Every document is two-way linked: attached from a transaction it shows on
+ * that transaction, and here its card jumps straight to the transaction. */
 
 import { useMemo, useRef, useState } from "react";
-import { FileText, ImageIcon, Paperclip, Search, Trash2, Upload } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { ArrowLeftCircle, FileText, ImageIcon, Paperclip, Receipt, Search, Trash2, Upload } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Modal } from "../../components/ui/Modal";
-import { SearchBox, FilterSelect, SectionCard } from "../../components/ui/inputs";
+import { SearchBox, FilterSelect, SearchSelect } from "../../components/ui/inputs";
 import { useConfirm } from "../../hooks/useConfirm";
 import { useToast } from "../../hooks/useToast";
 import { formatJalali } from "../../utils/jalali";
 import { addAccDoc, deleteAccDoc } from "../../accounting/repo";
-import { DOC_CATEGORY_LABELS, type AccDoc } from "../../accounting/types";
-import { useAccDocsMeta, useAccParties } from "../../accounting/hooks";
-
-function docUrl(doc: AccDoc): string {
-  return URL.createObjectURL(doc.blob);
-}
+import { DOC_CATEGORY_LABELS, TX_TYPE_LABELS, type AccDoc } from "../../accounting/types";
+import { useAccDocsMeta, useAccParties, useAccTransactions } from "../../accounting/hooks";
+import { formatMoney } from "../../utils/num";
 
 export function AccDocumentsPage() {
   const toast = useToast();
   const { confirm } = useConfirm();
+  const navigate = useNavigate();
   const docs = useAccDocsMeta();
   const parties = useAccParties();
+  const transactions = useAccTransactions();
 
   const [query, setQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadCategory, setUploadCategory] = useState<string>("رسید");
   const [uploadParty, setUploadParty] = useState<string>("none");
+  const [uploadTx, setUploadTx] = useState<string>("none");
   const [preview, setPreview] = useState<{ name: string; mime: string; url: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const partyName = (id?: string | null) => (parties ?? []).find((p) => p.id === id)?.name ?? "";
+  const txById = useMemo(
+    () => new Map((transactions ?? []).map((t) => [t.id, t])),
+    [transactions],
+  );
+  const linkOptions = useMemo(
+    () =>
+      (transactions ?? [])
+        .filter((t) => t.status === "final")
+        .slice(0, 200)
+        .map((t) => ({
+          id: t.id,
+          title: `${t.number} — ${TX_TYPE_LABELS[t.type]} — ${formatMoney(t.amount, t.currency)}`,
+          subtitle: t.description || undefined,
+        })),
+    [transactions],
+  );
 
   const rows = useMemo(() => {
     let list = docs ?? [];
     if (categoryFilter !== "all") list = list.filter((d) => (d.category ?? "سایر") === categoryFilter);
     const q = query.trim();
-    if (q) list = list.filter((d) => `${d.name} ${d.notes ?? ""} ${partyName(d.partyId)}`.includes(q));
+    if (q) {
+      list = list.filter((d) => {
+        const tx = d.transactionId ? txById.get(d.transactionId) : undefined;
+        return `${d.name} ${d.notes ?? ""} ${partyName(d.partyId)} ${tx?.number ?? ""} ${tx?.description ?? ""}`.includes(q);
+      });
+    }
     return list;
-  }, [docs, query, categoryFilter, parties]);
+  }, [docs, query, categoryFilter, parties, txById]);
 
   const upload = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -49,6 +73,7 @@ export function AccDocumentsPage() {
         await addAccDoc({
           file,
           partyId: uploadParty !== "none" ? uploadParty : null,
+          transactionId: uploadTx !== "none" ? uploadTx : null,
           category: uploadCategory,
         });
         ok++;
@@ -56,7 +81,10 @@ export function AccDocumentsPage() {
         toast.error(e instanceof Error ? e.message : `«${file.name}» بارگذاری نشد`);
       }
     }
-    if (ok > 0) toast.success(`${ok.toLocaleString("fa-IR")} سند بارگذاری شد`);
+    if (ok > 0) {
+      toast.success(`${ok.toLocaleString("fa-IR")} سند بارگذاری شد`);
+      setUploadTx("none");
+    }
     if (fileRef.current) fileRef.current.value = "";
   };
 
@@ -136,6 +164,22 @@ export function AccDocumentsPage() {
                     {formatJalali(new Date(doc.createdAt).toISOString().slice(0, 10))}
                     {doc.partyId ? ` — ${partyName(doc.partyId)}` : ""}
                   </p>
+                  {(() => {
+                    const tx = doc.transactionId ? txById.get(doc.transactionId) : undefined;
+                    if (!tx) return null;
+                    return (
+                      <button
+                        className="mt-1 flex w-full items-center gap-1 rounded-xl bg-brand-500/10 px-2 py-1 text-[10.5px] font-bold text-brand-600 transition-colors hover:bg-brand-500/20 dark:text-brand-300"
+                        title={`مشاهده جزئیات تراکنش ${tx.number}`}
+                        onClick={() => navigate(`/accounting/transactions?tx=${tx.id}`)}
+                      >
+                        <Receipt size={11} className="shrink-0" />
+                        <span className="num truncate">{tx.number}</span>
+                        <span className="truncate text-ink-400">· {TX_TYPE_LABELS[tx.type]}</span>
+                        <ArrowLeftCircle size={11} className="mr-auto shrink-0" />
+                      </button>
+                    );
+                  })()}
                 </div>
                 <div className="flex gap-1.5">
                   <button
@@ -197,6 +241,19 @@ export function AccDocumentsPage() {
                 ...(parties ?? []).map((p) => ({ value: p.id, label: p.name })),
               ]}
             />
+          </div>
+          <div>
+            <p className="mb-1.5 text-[13px] font-bold">پیوست به تراکنش (اختیاری)</p>
+            <SearchSelect
+              items={linkOptions}
+              value={uploadTx === "none" ? null : uploadTx}
+              onSelect={(id) => setUploadTx(id ?? "none")}
+              placeholder="جستجوی شماره تراکنش…"
+              emptyLabel="تراکنشی نیست"
+            />
+            <p className="mt-1 text-[11px] text-ink-400">
+              سند در جزئیات همان تراکنش هم نمایش داده می‌شود.
+            </p>
           </div>
           <input
             ref={fileRef}

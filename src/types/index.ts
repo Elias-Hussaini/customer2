@@ -151,7 +151,8 @@ export type ActivityType =
   | "acc-post"
   | "acc-reverse"
   | "acc-cancel"
-  | "acc-adjust";
+  | "acc-adjust"
+  | "acc-reset";
 
 export type ActivityEntity =
   | "customer"
