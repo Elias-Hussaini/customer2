@@ -12,6 +12,7 @@ import type {
 import type { StructuredRow } from "./pdfread";
 import { parsePrintedDate, shiftIsoYears } from "./dates";
 import { toLatinDigits } from "../../utils/jalali";
+import { scorePageText, filterNameTokens } from "./score";
 
 /* ------------------------------------------------------------------ */
 /* Normalization                                                       */
@@ -290,7 +291,8 @@ function applyRuleValue(
   cleaned = normalizeLatinDigits(cleaned);
 
   // Names: never contain digits; label words are mis-paired junk; tiny Latin
-  // fragments around the real name are OCR noise from the other column.
+  // fragments around the real name are OCR noise from the other column;
+  // low-entropy tokens ("کلکللل", "ABAB") are OCR garbage, not names.
   if (NAME_FIELDS.has(rule.field)) {
     if (/[\d\u06F0-\u06F9\u0660-\u0669]/.test(cleaned)) return null;
     if (/[\u0600-\u06FF]/.test(cleaned)) {
@@ -302,6 +304,11 @@ function applyRuleValue(
       if (!words.length) return null;
       cleaned = words.join(" ");
     }
+    // Structural garbage check (dictionary-free): repeated-letter tokens
+    // carry no information and are never real person names.
+    const filtered = filterNameTokens(cleaned);
+    if (!filtered) return null;
+    cleaned = filtered;
   }
 
   // Structured numbers are ONE token — a multi-word fragment is label noise;
@@ -857,9 +864,14 @@ export function detectKind(text: string, hasMrz: boolean, mrzFormat: string | nu
   // Visa forms mention “passport” in every field name — check the stronger
   // signal first so a visa application is never classified as a passport page.
   if (/VISA APPLICATION|APPLICATION FOR VISA|درخواست ویزا/.test(up + t)) return "visa_form";
-  if (/گذرنامه/.test(t)) return "passport";
-  if (/\bPASSPORT\b/.test(up) || /پاسپورت|پاسپوټ/.test(t)) return "passport";
-  if (/تذکره|تذکریه|شناسنامه|احوال شخص|TAZKIRA|TAZKERA/.test(up + t)) return "tazkira_paper";
+  // A real data page carries LABEL EVIDENCE, not just the word “passport”.
+  // Covers, letters and tickets mention the word but never the labels —
+  // requiring evidence is what stops their text from entering the form.
+  const rel = scorePageText(text, false);
+  const passportWord = /گذرنامه/.test(t) || /\bPASSPORT\b/.test(up) || /پاسپورت|پاسپوټ/.test(t);
+  if (passportWord && rel.strongHits >= 2) return "passport";
+  if (/تذکره|تذکریه|شناسنامه|احوال شخص|TAZKIRA|TAZKERA/.test(up + t) && rel.strongHits >= 2)
+    return "tazkira_paper";
   if (/REPUBLIC OF AFGHANISTAN|اسلامی افغانستان|جمهوری اسلامی افغانستان/.test(up + t)) return "id_card";
   const words = t.split(/\s+/).filter((w) => w.length > 1).length;
   if (words <= 4) return "photo";

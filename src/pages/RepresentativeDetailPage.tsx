@@ -9,6 +9,7 @@ import {
   FilePlus2,
   Phone,
   Receipt,
+  Trash2,
   Users,
 } from "lucide-react";
 import { PageHeader, StatCard } from "../components/ui/StatCard";
@@ -37,11 +38,16 @@ import { computeBalances, computeRepStats } from "../services/stats";
 import { formatMoney } from "../utils/num";
 import { formatJalali, toPersianDigits } from "../utils/jalali";
 import { customerFullName } from "../db/customers";
+import { deleteRepresentative } from "../db/reps";
+import { useConfirm } from "../hooks/useConfirm";
+import { useToast } from "../hooks/useToast";
 import type { Attachment, Payment } from "../types";
 
 export function RepresentativeDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { confirm } = useConfirm();
+  const toast = useToast();
 
   const rep = useRepresentativeOrDefault(id);
   const requests = useRequests();
@@ -56,6 +62,28 @@ export function RepresentativeDetailPage() {
   const [payOpen, setPayOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [previewReceipt, setPreviewReceipt] = useState<Attachment | null>(null);
+
+  /** Permanent delete — guarded by confirm; payments block it, requests/customers detach. */
+  const removeRep = async () => {
+    if (!rep) return;
+    const ok = await confirm({
+      title: `حذف «${rep.name}»`,
+      message:
+        stats.total > 0 || repCustomers.length > 0
+          ? `${toPersianDigits(stats.total)} درخواست و ${toPersianDigits(repCustomers.length)} مشتری این نماینده حفظ می‌شوند اما بدون نماینده می‌مانند. این عمل بازگشت‌پذیر نیست!`
+          : "این نماینده درخواست یا مشتری ثبت‌شده ندارد. این عمل بازگشت‌پذیر نیست!",
+      danger: true,
+      confirmLabel: "حذف قطعی",
+    });
+    if (!ok) return;
+    const res = await deleteRepresentative(rep.id, rep.name);
+    if (res.ok) {
+      toast.info("نماینده حذف شد");
+      navigate("/representatives");
+    } else {
+      toast.error(res.reason ?? "حذف ناموفق بود");
+    }
+  };
 
   const receiptByPayment = useMemo(
     () => new Map((receipts ?? []).map((r) => [r.paymentId ?? "", r] as const)),
@@ -167,6 +195,13 @@ export function RepresentativeDetailPage() {
             </button>
             <button className="btn btn-primary btn-sm" onClick={() => setEditOpen(true)}>
               <FilePenLine size={14} /> ویرایش
+            </button>
+            <button
+              className="btn btn-sm !border-rose-500/30 !bg-rose-500/10 !text-rose-600 hover:!bg-rose-500/20 dark:!text-rose-400"
+              onClick={() => void removeRep()}
+              title="حذف قطعی این نماینده"
+            >
+              <Trash2 size={14} /> حذف
             </button>
           </>
         }

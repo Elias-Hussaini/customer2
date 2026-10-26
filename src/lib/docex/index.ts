@@ -30,6 +30,8 @@ export {
 } from "./text";
 export { runExtraction, validateFile, MAX_FILE_BYTES, MAX_TEXT_PAGES, MAX_OCR_PAGES } from "./pipeline";
 export type { PipelineProgress, PipelineStage, RunOptions } from "./pipeline";
+export { scorePageText, isIdentitySource, filterNameTokens, isGarbageNameToken } from "./score";
+export type { PageRelevance } from "./score";
 export { preprocessCanvas, releaseOcr, resetWorker, warmupOcr } from "./ocr";
 export { openPdf, hasTextLayer } from "./pdfread";
 export { matchCustomers, diffWithCustomer } from "./match";

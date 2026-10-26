@@ -110,8 +110,14 @@ describe("detectKind — ordering & Persian passport keyword", () => {
     expect(detectKind(form, false, null)).toBe("visa_form");
   });
   it("classifies an Iranian bio page (گذرنامه) as passport", () => {
-    const page = "جمهوری اسلامی ایران\nگذرنامه\nنام: زهرا";
+    // Realistic bio page: the passport word + data-page labels (نام خانوادگی،
+    // تاریخ تولد، شماره پاسپورت) — enough label evidence to be a source.
+    const page =
+      "جمهوری اسلامی ایران\nگذرنامه\nنام: زهرا\nنام خانوادگی: موسوی\nتاریخ تولد: ۱۳۷۵/۰۴/۱۲\nشماره پاسپورت: A12345678";
     expect(detectKind(page, false, null)).toBe("passport");
+  });
+  it("keeps a cover that only says گذرنامه out of the passport kind", () => {
+    expect(detectKind("جمهوری اسلامی ایران\nگذرنامه", false, null)).not.toBe("passport");
   });
   it("keeps an unrecognizable stamp page unknown (visa-stamp profile covers it)", () => {
     expect(detectKind("وزارت امور خارجه تاریخ ورود", false, null)).toBe("unknown");

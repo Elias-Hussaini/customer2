@@ -5,6 +5,7 @@ import { DataTable, type Column } from "../components/ui/DataTable";
 import { EmptyState } from "../components/ui/EmptyState";
 import { FilterSelect, RadioSelect, SectionCard } from "../components/ui/inputs";
 import { JalaliDatePicker } from "../components/ui/JalaliDatePicker";
+import { StatusPill } from "../components/ui/Badges";
 import { ExportDialog } from "../components/exports/ExportDialog";
 import { useCustomers, useLists, usePayments, useRepresentatives, useRequests, useTags } from "../hooks/useData";
 import { computeBalances } from "../services/stats";
@@ -309,8 +310,9 @@ export function ReportsPage() {
             {
               key: "status",
               header: "وضعیت",
+              align: "center",
               sortValue: (r) => (r.issued ? 1 : 0),
-              render: (r) => (r.issued ? "✅ صادر شده" : "⏳ در حال کار"),
+              render: (r) => <StatusPill issued={r.issued} />,
             },
           ]}
           rows={filteredRequests}

@@ -87,6 +87,9 @@ export interface PageResult {
   mrz: MrzValidation | null;
   /** Fields parsed from this page only. */
   fields: Partial<Record<CanonicalField, ExtractedValue>>;
+  /** Page relevance — only tier 1/2 pages may feed identity fields
+   *  (tier 3 = cover/stamp/letter: its text is deliberately ignored). */
+  relevance?: { tier: 1 | 2 | 3; strongHits: number };
 }
 
 /** Fully merged, reviewed extraction across all pages of one upload. */

@@ -1,13 +1,13 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Archive, FilePenLine, Phone, UserRound, UserRoundPlus } from "lucide-react";
+import { Archive, FilePenLine, Phone, Trash2, UserRound, UserRoundPlus } from "lucide-react";
 import { PageHeader } from "../components/ui/StatCard";
 import { EmptyState } from "../components/ui/EmptyState";
 import { SearchBox } from "../components/ui/inputs";
 import { Menu } from "../components/ui/Menu";
 import { RepresentativeFormModal } from "../components/domain/RepresentativeFormModal";
 import { archiveRepresentative, deleteRepresentative } from "../db/reps";
-import { useRepresentatives, useRequests, usePayments, useTags } from "../hooks/useData";
+import { useCustomers, useRepresentatives, useRequests, usePayments, useTags } from "../hooks/useData";
 import { useConfirm } from "../hooks/useConfirm";
 import { useToast } from "../hooks/useToast";
 import { formatMoney } from "../utils/num";
@@ -21,6 +21,7 @@ export function RepresentativesPage() {
   const { confirm } = useConfirm();
   const toast = useToast();
   const representatives = useRepresentatives();
+  const customers = useCustomers();
   const requests = useRequests();
   const payments = usePayments();
   const tags = useTags();
@@ -28,6 +29,23 @@ export function RepresentativesPage() {
   const [query, setQuery] = useState("");
   const [editOpen, setEditOpen] = useState(false);
   const [editing, setEditing] = useState<Representative | null>(null);
+
+  /** Permanent delete — guarded by confirm; payments block it, requests/customers detach. */
+  const removeRep = async (rep: Representative, requestCount: number, customerCount: number) => {
+    const ok = await confirm({
+      title: `حذف «${rep.name}»`,
+      message:
+        requestCount > 0 || customerCount > 0
+          ? `${toPersianDigits(requestCount)} درخواست و ${toPersianDigits(customerCount)} مشتری این نماینده حفظ می‌شوند اما بدون نماینده می‌مانند. این عمل بازگشت‌پذیر نیست!`
+          : "این نماینده درخواست یا مشتری ثبت‌شده ندارد. این عمل بازگشت‌پذیر نیست!",
+      danger: true,
+      confirmLabel: "حذف قطعی",
+    });
+    if (!ok) return;
+    const res = await deleteRepresentative(rep.id, rep.name);
+    if (res.ok) toast.info("نماینده حذف شد");
+    else toast.error(res.reason ?? "حذف ناموفق بود");
+  };
 
   const urgentTagIds = useMemo(
     () => new Set((tags ?? []).filter((t) => t.isUrgent).map((t) => t.id)),
@@ -85,6 +103,7 @@ export function RepresentativesPage() {
           {rows.map((rep) => {
             const stats = computeRepStats(rep.id, requests ?? [], urgentTagIds);
             const repPayments = (payments ?? []).filter((p) => p.representativeId === rep.id);
+            const repCustomersCount = (customers ?? []).filter((c) => c.representativeId === rep.id).length;
             const paidIRT = repPayments.filter((p) => p.currency === "IRT").reduce((s, p) => s + p.amount, 0);
             const paidUSD = repPayments.filter((p) => p.currency === "USD").reduce((s, p) => s + p.amount, 0);
             return (
@@ -133,6 +152,12 @@ export function RepresentativesPage() {
                             toast.info("نماینده بایگانی شد");
                           }
                         },
+                      },
+                      {
+                        icon: Trash2,
+                        label: "حذف قطعی",
+                        danger: true,
+                        onClick: () => void removeRep(rep, stats.total, repCustomersCount),
                       },
                     ]}
                     trigger={

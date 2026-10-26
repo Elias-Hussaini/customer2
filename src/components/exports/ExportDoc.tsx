@@ -1,6 +1,7 @@
-import { forwardRef, useLayoutEffect, useRef, useState } from "react";
+import { forwardRef, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ExportColumn, ExportRow } from "../../utils/export/tabular";
-import { formatJalali, formatTimestamp, todayIso } from "../../utils/jalali";
+import { computeExportStats } from "../../utils/export/tabular";
+import { formatJalali, formatTimestamp, todayIso, toPersianDigits } from "../../utils/jalali";
 
 const BRAND = "#635bff";
 const BRAND_DARK = "#5344d6";
@@ -104,6 +105,17 @@ function statusTone(v: string): { bg: string; fg: string } | null {
   return null;
 }
 
+/** A cell that IS a status value (short + starts with a status phrase) —
+ *  never a long note that merely mentions one. */
+function isStatusCell(s: string): boolean {
+  const t = s.trim();
+  if (t.length > 22) return false;
+  return (
+    (t.startsWith("صادر") || t.startsWith("در حال") || t.startsWith("رد ") || t.startsWith("لغو")) &&
+    statusTone(t) != null
+  );
+}
+
 /* -------------------------------- component ------------------------------- */
 
 /**
@@ -128,6 +140,11 @@ export const ExportDoc = forwardRef<
   const [layout, setLayout] = useState<Layout | null>(null);
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
+
+  // Smart scope statistics — computed from the actual exported rows so the
+  // footer always describes exactly what this output contains (all reps vs.
+  // one rep, issued vs. in-progress counts, list count).
+  const stats = useMemo(() => computeExportStats(columns, rows), [columns, rows]);
 
   // Measure in a layout effect (after Vazirmatn is guaranteed loaded) so the
   // captured pixels exactly match the measured widths.
@@ -250,7 +267,7 @@ export const ExportDoc = forwardRef<
               ))}
             </colgroup>
             <thead>
-              <tr style={{ background: `linear-gradient(180deg, ${BRAND}, ${BRAND_DARK})` }}>
+              <tr data-export-head style={{ background: `linear-gradient(180deg, ${BRAND}, ${BRAND_DARK})` }}>
                 {layout.headers.map((h, i) => (
                   <th
                     key={columns[i].key}
@@ -274,13 +291,14 @@ export const ExportDoc = forwardRef<
               {layout.display.map((cells, r) => (
                 <tr
                   key={r}
+                  data-export-row
                   style={{
                     backgroundColor: r % 2 === 1 ? ZEBRA : "#ffffff",
                   }}
                 >
                   {cells.map((s, i) => {
                     const key = columns[i].key;
-                    const tone = key === "status" ? statusTone(s) : null;
+                    const tone = isStatusCell(s) ? statusTone(s) : null;
                     return (
                       <td
                         key={key}
@@ -299,19 +317,30 @@ export const ExportDoc = forwardRef<
                         }}
                       >
                         {tone ? (
-                          <span
+                          /* html2canvas does not center inline-block children
+                           * via text-align — an explicit flex wrapper is the
+                           * reliable way to keep the pill centered in PDF/PNG. */
+                          <div
                             style={{
-                              display: "inline-block",
-                              padding: "3px 11px",
-                              borderRadius: "999px",
-                              backgroundColor: tone.bg,
-                              color: tone.fg,
-                              fontSize: "11px",
-                              fontWeight: 700,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
                             }}
                           >
-                            {s}
-                          </span>
+                            <span
+                              style={{
+                                padding: "3px 11px",
+                                borderRadius: "999px",
+                                backgroundColor: tone.bg,
+                                color: tone.fg,
+                                fontSize: "11px",
+                                fontWeight: 700,
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {s}
+                            </span>
+                          </div>
                         ) : (
                           <span style={BOLD_KEYS.has(key) ? { fontWeight: 700 } : undefined}>{s}</span>
                         )}
@@ -340,20 +369,100 @@ export const ExportDoc = forwardRef<
         </div>
       )}
 
+      {/* Smart summary footer — describes exactly what this output contains:
+          total rows, representative scope (one name vs. a count), list count,
+          issued / in-progress / rejected counts. */}
       <div
+        data-export-footer
         style={{
           marginTop: "18px",
-          paddingTop: "11px",
-          borderTop: `1px solid ${BORDER}`,
-          display: "flex",
-          justifyContent: "space-between",
-          fontSize: "10px",
-          color: MUTED,
+          paddingTop: "13px",
+          borderTop: `1.5px solid ${BORDER}`,
         }}
       >
-        <span>تعداد ردیف‌ها: {String(rows.length).replace(/\d/g, (d) => "۰۱۲۳۴۵۶۷۸۹"[Number(d)])}</span>
-        <span>ساخته‌شده در {formatTimestamp(Date.now())}</span>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
+          <span style={{ fontSize: "12px", fontWeight: 800, color: BRAND_DARK }}>جمع‌بندی:</span>
+          <FooterChip label="کل رکوردها" value={toPersianDigits(stats.total)} />
+          {stats.hasRepresentative &&
+            (stats.representatives.length === 1 ? (
+              <FooterChip label="نماینده" value={stats.representatives[0]} />
+            ) : (
+              <FooterChip label="نمایندگان" value={toPersianDigits(stats.representatives.length)} />
+            ))}
+          {stats.lists.length > 1 && (
+            <FooterChip label="لیست‌ها" value={toPersianDigits(stats.lists.length)} />
+          )}
+          {stats.hasStatus && (
+            <>
+              <FooterChip
+                label="صادر شده"
+                value={toPersianDigits(stats.issued)}
+                bg="#e5f6ec"
+                fg="#0b7a55"
+              />
+              <FooterChip
+                label="در حال کار"
+                value={toPersianDigits(stats.inProgress)}
+                bg="#fdf2dd"
+                fg="#a56a06"
+              />
+              {stats.rejected > 0 && (
+                <FooterChip
+                  label="لغو شده"
+                  value={toPersianDigits(stats.rejected)}
+                  bg="#fdeaea"
+                  fg="#c0392b"
+                />
+              )}
+            </>
+          )}
+        </div>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            marginTop: "10px",
+            fontSize: "10px",
+            color: MUTED,
+          }}
+        >
+          <span>ساخته‌شده در {formatTimestamp(Date.now())}</span>
+          <span dir="ltr">E-managment</span>
+        </div>
       </div>
     </div>
   );
 });
+
+/** A small summary chip for the smart footer. */
+function FooterChip({
+  label,
+  value,
+  bg = "#f3f1ff",
+  fg,
+}: {
+  label: string;
+  value: string;
+  bg?: string;
+  fg?: string;
+}) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "5px",
+        border: `1px solid ${BORDER}`,
+        borderRadius: "999px",
+        padding: "4px 12px",
+        fontSize: "11px",
+        backgroundColor: bg,
+        color: fg ?? INK,
+        whiteSpace: "nowrap",
+      }}
+    >
+      <span style={{ color: fg ? undefined : MUTED }}>{label}:</span>
+      <span style={{ fontWeight: 800 }}>{value}</span>
+    </span>
+  );
+}

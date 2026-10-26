@@ -129,9 +129,10 @@ export function RequestsTable({
     {
       key: "issued",
       header: "وضعیت",
+      align: "center",
       sortValue: (r) => (r.issued ? 1 : 0),
       render: (r) => (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center justify-center gap-2">
           <button
             role="switch"
             aria-checked={r.issued}

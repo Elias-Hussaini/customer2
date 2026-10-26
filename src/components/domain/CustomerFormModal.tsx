@@ -20,6 +20,7 @@ import {
   warmupOcr,
   formatDateForTemplate,
   latinNameToFa,
+  filterNameTokens,
   METHOD_RANK,
   type PipelineProgress,
   type CanonicalField,
@@ -113,7 +114,8 @@ function AiMark({ state }: { state?: "ok" | "review" }) {
 
 /**
  * Names: keep Persian letters (or Latin A-Z) and drop OCR noise — stray
- * dots, pipes and digits never reach the customer record.
+ * dots, pipes, digits and low-entropy garbage ("کلکللل") never reach the
+ * customer record.
  */
 function safePersonName(s: string): string {
   if (!s) return "";
@@ -121,7 +123,10 @@ function safePersonName(s: string): string {
   const cleaned = hasFa
     ? s.replace(/[^\u0600-\u06FF\s\-'\u200C]/g, "")
     : s.toUpperCase().replace(/[^A-Z\s\-'.]/g, "");
-  return cleaned.replace(/\s+/g, " ").trim();
+  const collapsed = cleaned.replace(/\s+/g, " ").trim();
+  // Structural garbage guard (dictionary-free): a name made only of a
+  // repeated letter is OCR noise — leave the field empty for the operator.
+  return filterNameTokens(collapsed) ?? "";
 }
 
 export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {

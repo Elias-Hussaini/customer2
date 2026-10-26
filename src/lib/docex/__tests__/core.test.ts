@@ -108,9 +108,21 @@ describe("extractByLabels — passport profile", () => {
 });
 
 describe("detectKind", () => {
-  it("classifies passports, tazkira, forms and photos", () => {
-    expect(detectKind("PASSPORT REPUBLIC OF TEST", false, null)).toBe("passport");
-    expect(detectKind("جمهوری اسلامی افغانستان تذکره", false, null)).toBe("tazkira_paper");
+  it("classifies real data pages, covers, tazkira, forms and photos", () => {
+    // A cover page only SAYS passport — it has no data-page labels and must
+    // never be treated as a passport source (its text must not fill the form).
+    expect(detectKind("PASSPORT REPUBLIC OF TEST", false, null)).toBe("photo");
+    // A real bio page carries label evidence.
+    expect(
+      detectKind(
+        "REPUBLIC OF TEST PASSPORT\nType P\nSurname: DOE\nGiven names: JANE\nDate of birth: 10 MAR 1997",
+        false,
+        null,
+      ),
+    ).toBe("passport");
+    expect(
+      detectKind("تذکره جمهوری اسلامی افغانستان\nنام پدر: محمد\nولایت: کابل\nتاریخ تولد ۱۳۷۶", false, null),
+    ).toBe("tazkira_paper");
     expect(detectKind("VISA APPLICATION FORM", false, null)).toBe("visa_form");
     expect(detectKind("", false, null)).toBe("photo");
     expect(detectKind("hello world foo bar baz", false, null)).toBe("unknown");

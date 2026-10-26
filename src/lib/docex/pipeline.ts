@@ -39,6 +39,7 @@ import {
   VISA_STAMP_PROFILE,
 } from "./text";
 import { shiftIsoYears } from "./dates";
+import { isIdentitySource, scorePageText } from "./score";
 
 export const MAX_FILE_BYTES = 25 * 1024 * 1024; // 25 MB
 export const MAX_TEXT_PAGES = 120; // text-layer scan is cheap — go wide
@@ -229,8 +230,16 @@ export async function runExtraction(file: File, opts: RunOptions = {}): Promise<
 
       const recomputeMerge = () => {
         const next: Partial<Record<CanonicalField, ExtractedValue>> = {};
-        for (const p of [...allPages.values()].sort((a, b) => a.index - b.index)) {
+        const pages = [...allPages.values()].sort((a, b) => a.index - b.index);
+        for (const p of pages) {
+          // ONLY proven data pages (MRZ or label-dense) may feed identity
+          // fields. Covers, stamps, letters and other noise pages are read
+          // but deliberately ignored — their text can never reach the form.
+          // Exception: entryDate lives on visa STAMPS, which are noise-tier
+          // by design, so it stays mergable from every page.
+          const source = !p.relevance || isIdentitySource(p.relevance);
           for (const key of Object.keys(p.fields) as CanonicalField[]) {
+            if (!source && key !== "entryDate") continue;
             next[key] = mergeField(next[key], p.fields[key]);
           }
         }
@@ -316,7 +325,9 @@ export async function runExtraction(file: File, opts: RunOptions = {}): Promise<
           if (merged.dateOfIssue?.value || !merged.dateOfBirth?.value || !merged.dateOfExpiry?.value) return;
           const expIso = String(merged.dateOfExpiry.value);
           const docPages = [...allPages.values()].filter(
-            (p) => p.kind === "passport" || p.kind === "id_card" || p.mrz,
+            (p) =>
+              (p.kind === "passport" || p.kind === "id_card" || p.mrz) &&
+              (!p.relevance || isIdentitySource(p.relevance)),
           );
           const fromTextLayer = docPages.some((p) => p.method === "pdf_text");
           const candidates = docPages.flatMap((p) => findDateCandidates(p.text));
@@ -460,7 +471,9 @@ export async function runExtraction(file: File, opts: RunOptions = {}): Promise<
   ) {
     const expIso = String(result.fields.dateOfExpiry.value);
     const docPages = result.pages.filter(
-      (p) => p.kind === "passport" || p.kind === "id_card" || p.mrz,
+      (p) =>
+        (p.kind === "passport" || p.kind === "id_card" || p.mrz) &&
+        (!p.relevance || isIdentitySource(p.relevance)),
     );
     const fromTextLayer = docPages.some((p) => p.method === "pdf_text");
     const candidates = docPages.flatMap((p) => findDateCandidates(p.text));
@@ -502,6 +515,15 @@ export async function runExtraction(file: File, opts: RunOptions = {}): Promise<
     warnings.push("هیچ متنی از این فایل خوانده نشد — ورود دستی فیلدها لازم است.");
   } else if (Object.keys(result.fields).length === 0) {
     warnings.push("متنی خوانده شد اما هیچ فیلد شناخته‌شده‌ای پیدا نشد — ورود دستی فیلدها لازم است.");
+  } else {
+    // Transparency: say when non-document pages were read and deliberately
+    // ignored, so the operator knows why their text never reached the form.
+    const ignored = usable.filter((p) => p.relevance && !isIdentitySource(p.relevance)).length;
+    if (ignored > 0) {
+      warnings.push(
+        `فقط صفحهٔ مشخصات سند خوانده شد — متن ${ignored} صفحهٔ دیگر (جلد/مهر/سند جانبی) نادیده گرفته شد.`,
+      );
+    }
   }
   report("done", 0, result.pages.length, 100);
   // OCR workers stay warm — the next document then fills in a blink.
@@ -587,6 +609,8 @@ function buildPageResult(
 ): PageResult {
   const mrzHit = parseMrzFromText(text);
   const kind: DocumentKind = detectKind(text, Boolean(mrzHit), mrzHit?.mrz.format ?? null);
+  const rel = scorePageText(text, Boolean(mrzHit));
+  const relevance = { tier: rel.tier, strongHits: rel.strongHits };
   const fields: Partial<Record<CanonicalField, ExtractedValue>> = {};
 
   if (mrzHit) {
@@ -619,7 +643,7 @@ function buildPageResult(
 
   // Photo pages / pages with no recognizable structure stay empty.
   if (kind === "photo") {
-    return { index, kind, text: "", method, ocrConfidence, previewDataUrl, mrz: mrzHit?.mrz ?? null, fields: {} };
+    return { index, kind, text: "", method, ocrConfidence, previewDataUrl, mrz: mrzHit?.mrz ?? null, fields: {}, relevance };
   }
 
   return {
@@ -631,6 +655,7 @@ function buildPageResult(
     previewDataUrl,
     mrz: mrzHit?.mrz ?? null,
     fields,
+    relevance,
   };
 }
 
