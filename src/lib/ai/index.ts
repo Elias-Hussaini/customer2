@@ -33,6 +33,23 @@ export {
 } from "./extract";
 export { isLatinName, latinToPersianName } from "./translit";
 export {
+  buildDocSortSystemPrompt,
+  buildDocSortMessages,
+  parseDocSortReply,
+  extractJsonArray,
+  sanitizeNewSlotLabel,
+  type DocSlotOption,
+  type DocSortResult,
+  type DocSortTarget,
+} from "./docsort";
+export {
+  splitCombinedImage,
+  findGutterBands,
+  type LineProfile,
+  type GutterOptions,
+  type SplitReport,
+} from "./split";
+export {
   useAiWorkers,
   useAiSettings,
   addAiWorker,

@@ -207,7 +207,10 @@ export interface Attachment {
 export interface DocType {
   id: string;
   label: string;
-  /** Short one-line description under the label. */
+  /**
+   * Short one-line description — legacy field kept for data compatibility.
+   * No longer shown or edited anywhere in the UI.
+   */
   hint?: string;
   order: number;
   createdAt: number;
@@ -227,6 +230,8 @@ export interface AppPreferences {
   /** Last mode used in the customer form: smart extraction vs manual. */
   /** Internal: default document slots have been seeded once. */
   docTypesSeeded?: boolean;
+  /** Internal: legacy doc-type hints stripped once. */
+  docHintsStripped?: boolean;
   updatedAt: number;
 }
 
@@ -251,8 +256,10 @@ export interface BackupFile {
     docTypes?: DocType[];
     activities: Activity[];
     preferences: AppPreferences | null;
-    /** Accounting section data — present in backups made after the accounting
-     *  module was added (v6 schema). Optional so old backups still restore. */
+    /** Accounting section data — LEGACY: only old backups (made while the
+     *  accounting module was bundled into the main backup) contain it. New
+     *  full backups never include accounting; it has its own separate backup
+     *  inside the حسابداری section. Kept optional so old files still restore. */
     acc?: import("../accounting/types").AccBackupData;
   };
 }

@@ -6,13 +6,18 @@ import type {
 } from "../types";
 import { customerFullName } from "../db/customers";
 import { downloadBlob } from "./export/tabular";
-import { buildAccBackupData, applyAccBackup } from "../accounting/backup";
+import { applyAccBackup } from "../accounting/backup";
 
 export const BACKUP_VERSION = 1;
 export const BACKUP_FORMAT = "2customer-backup";
 export const ENCRYPTED_FORMAT = "2customer-encrypted-backup";
 
-/** Full JSON backup of every table except attachments (by design). */
+/**
+ * Full JSON backup of every main-app table except attachments (by design).
+ * The حسابداری (accounting) section is a completely separate world — it is
+ * deliberately NOT part of this backup and has its own backup/restore inside
+ * the accounting section itself.
+ */
 export async function buildBackup(): Promise<BackupFile> {
   const [
     representatives,
@@ -26,7 +31,6 @@ export async function buildBackup(): Promise<BackupFile> {
     docTypes,
     activities,
     preferences,
-    acc,
   ] = await Promise.all([
     db.representatives.toArray(),
     db.customers.toArray(),
@@ -39,7 +43,6 @@ export async function buildBackup(): Promise<BackupFile> {
     db.docTypes.toArray(),
     db.activities.orderBy("ts").reverse().limit(800).toArray(),
     db.preferences.get("app"),
-    buildAccBackupData(),
   ]);
 
   return {
@@ -71,7 +74,6 @@ export async function buildBackup(): Promise<BackupFile> {
       docTypes,
       activities,
       preferences: preferences ?? null,
-      acc,
     },
   };
 }
@@ -227,6 +229,11 @@ export async function buildRestorePreview(backup: BackupFile): Promise<RestorePr
   if (backup.schemaVersion > db.verno) {
     warnings.push("این پشتیبان با نسخه جدیدتری از ساختار داده ساخته شده است.");
   }
+  if (backup.data.acc) {
+    warnings.push(
+      "این فایل قدیمی شامل داده‌های بخش حسابداری است — هنگام بازیابی، حسابداری هم بازنشانی می‌شود. پشتیبان جدید فقط داده‌های اصلی را شامل می‌شود.",
+    );
+  }
 
   return { backup, duplicates, existingCounts, warnings };
 }
@@ -320,8 +327,9 @@ export async function applyRestore(backup: BackupFile, mode: RestoreMode): Promi
     },
   );
 
-  // Accounting section lives in its own table set — restore it separately so
-  // old backups without accounting data still restore cleanly.
+  // Accounting section lives in its own table set with its own backup — old
+  // full backups (made while accounting was bundled in) still restore their
+  // accounting data here so nothing is ever lost.
   if (d.acc) {
     await applyAccBackup(d.acc, mode);
   }
@@ -331,14 +339,13 @@ export async function applyRestore(backup: BackupFile, mode: RestoreMode): Promi
 
 /* --------------------------- Attachments archive -------------------------- */
 
-/** ZIP archive of all document attachments, organized per customer. */
+/** ZIP archive of all main-app document attachments, organized per customer. */
 export async function buildAttachmentsZip(
   onProgress?: (percent: number) => void,
 ): Promise<void> {
   const { default: JSZip } = await import("jszip");
   const attachments = await db.attachments.toArray();
-  const accDocs = await db.accDocs.toArray();
-  if (attachments.length === 0 && accDocs.length === 0) {
+  if (attachments.length === 0) {
     throw new Error("هیچ پیوستی برای بایگانی وجود ندارد.");
   }
   const customers = await db.customers.toArray();
@@ -368,20 +375,6 @@ export async function buildAttachmentsZip(
     const ext = att.name.includes(".") ? "" : guessExt(att.mime);
     folder?.file(`${att.kind}-${att.name}${ext}`, att.blob);
   }
-  // Accounting documents ride along in their own folder.
-  if (accDocs.length > 0) {
-    const accParties = await db.accParties.toArray();
-    const accNameById = new Map(accParties.map((p) => [p.id, p.name]));
-    for (const doc of accDocs) {
-      const folder = zip.folder(
-        `اسناد-حسابداری/${(accNameById.get(doc.partyId ?? "") ?? "اسناد عمومی").replace(
-          /[\\/:*?"<>|]/g,
-          "-",
-        )}`,
-      );
-      folder?.file(doc.name, doc.blob);
-    }
-  }
   const blob = await zip.generateAsync({ type: "blob" }, (meta) => {
     onProgress?.(Math.round(meta.percent));
   });
@@ -397,7 +390,7 @@ function guessExt(mime: string): string {
   return "";
 }
 
-/** Quick stats for the backup screen. */
+/** Quick stats for the backup screen (main app only — accounting is separate). */
 export async function getStorageStats(): Promise<{
   tableCounts: Record<string, number>;
   attachments: { count: number; bytes: number };
@@ -414,13 +407,6 @@ export async function getStorageStats(): Promise<{
       db.customFields.count(),
       db.activities.count(),
     ]);
-  const [accParties, accAccounts, accTx, accOutstanding, accDocs] = await Promise.all([
-    db.accParties.count(),
-    db.accAccounts.count(),
-    db.accTransactions.count(),
-    db.accOutstanding.count(),
-    db.accDocs.count(),
-  ]);
   const atts = await db.attachments.toArray();
   return {
     tableCounts: {
@@ -434,17 +420,10 @@ export async function getStorageStats(): Promise<{
       customFields,
       activities,
       attachments: atts.length,
-      accParties,
-      accAccounts,
-      accTransactions: accTx,
-      accOutstanding,
-      accDocs,
     },
     attachments: {
-      count: atts.length + accDocs,
-      bytes:
-        atts.reduce((s, a) => s + a.size, 0) +
-        (await db.accDocs.toArray()).reduce((s, d) => s + d.size, 0),
+      count: atts.length,
+      bytes: atts.reduce((s, a) => s + a.size, 0),
     },
   };
 }

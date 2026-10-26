@@ -270,7 +270,9 @@ export function BackupPage() {
           <div className="flex flex-col gap-3.5">
             <p className="text-[12px] leading-6 text-ink-500 dark:text-ink-400">
               شامل همه مشتریان، نمایندگان، درخواست‌ها، لیست‌ها، پرداخت‌ها، تگ‌ها، فیلدهای
-              سفارشی و تنظیمات — بدون تصاویر (برای تصاویر از بایگانی ZIP استفاده کنید).
+              سفارشی و تنظیمات — بدون تصاویر (برای تصاویر از بایگانی ZIP استفاده کنید). بخش
+              <b> حسابداری </b>جداگانه است و در این پشتیبان نمی‌آید — پشتیبان مخصوص آن، داخل
+              خود بخش حسابداری قرار دارد.
             </p>
             <div className="flex items-center justify-between rounded-2xl bg-brand-500/6 px-4 py-3">
               <div className="flex items-center gap-2 text-[13px] font-bold">
@@ -320,7 +322,8 @@ export function BackupPage() {
           <div className="flex flex-col gap-3.5">
             <p className="text-[12px] leading-6 text-ink-500 dark:text-ink-400">
               همه عکس‌های پاسپورت و تذکره در یک فایل ZIP، به تفکیک پوشه هر مشتری. چون حجم
-              تصاویر بالاست، در فایل JSON پشتیبان قرار نمی‌گیرند.
+              تصاویر بالاست، در فایل JSON پشتیبان قرار نمی‌گیرند. (اسناد بخش حسابداری در
+              همین بایگانی نیست — بایگانی اسناد حسابداری داخل خود آن بخش است.)
             </p>
             <Button
               variant="glass"

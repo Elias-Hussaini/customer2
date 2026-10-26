@@ -14,35 +14,6 @@ import { uid } from "../utils/id";
 
 export interface DocTypeInput {
   label: string;
-  hint?: string;
-}
-
-const BUILT_IN: { id: string; label: string; hint: string; order: number }[] = [
-  { id: "passport", label: "عکس پاسپورت", hint: "صفحه اول پاسپورت", order: 0 },
-  { id: "nidFront", label: "عکس روی تذکره", hint: "روی کارت ملی", order: 1 },
-  { id: "nidBack", label: "عکس پشت تذکره", hint: "پشت کارت ملی", order: 2 },
-];
-
-/**
- * Seed the built-in slots exactly once (guarded by a preferences flag so
- * user-deleted types are never resurrected on the next launch).
- */
-export async function ensureDefaultDocTypes(): Promise<void> {
-  const prefs = await db.preferences.get("app");
-  if (prefs?.docTypesSeeded) return;
-  const now = Date.now();
-  const rows: DocType[] = BUILT_IN.map((b) => ({
-    id: b.id,
-    label: b.label,
-    hint: b.hint,
-    order: b.order,
-    createdAt: now,
-    updatedAt: now,
-  }));
-  // bulkPut is idempotent for the fixed ids (safe under StrictMode double-run).
-  await db.docTypes.bulkPut(rows);
-  const current = prefs ?? { ...DEFAULT_PREFS };
-  await db.preferences.put({ ...current, id: "app", docTypesSeeded: true, updatedAt: now });
 }
 
 export async function createDocType(input: DocTypeInput): Promise<DocType> {
@@ -51,7 +22,6 @@ export async function createDocType(input: DocTypeInput): Promise<DocType> {
   const dt: DocType = {
     id: uid(),
     label: input.label.trim(),
-    hint: input.hint?.trim() || undefined,
     order: count,
     createdAt: now,
     updatedAt: now,
@@ -68,13 +38,60 @@ export async function createDocType(input: DocTypeInput): Promise<DocType> {
 export async function updateDocType(id: string, input: DocTypeInput): Promise<void> {
   await db.docTypes.update(id, {
     label: input.label.trim(),
-    hint: input.hint?.trim() || undefined,
+    hint: undefined,
     updatedAt: Date.now(),
   });
   await logActivity({
     type: "settings",
     entity: "settings",
     title: `مدرک «${input.label.trim()}» ویرایش شد`,
+  });
+}
+
+const BUILT_IN: { id: string; label: string; order: number }[] = [
+  { id: "passport", label: "عکس پاسپورت", order: 0 },
+  { id: "nidFront", label: "عکس روی تذکره", order: 1 },
+  { id: "nidBack", label: "عکس پشت تذکره", order: 2 },
+];
+
+/**
+ * Seed the built-in slots exactly once (guarded by a preferences flag so
+ * user-deleted types are never resurrected on the next launch).
+ */
+export async function ensureDefaultDocTypes(): Promise<void> {
+  const prefs = await db.preferences.get("app");
+  if (prefs?.docTypesSeeded) return;
+  const now = Date.now();
+  const rows: DocType[] = BUILT_IN.map((b) => ({
+    id: b.id,
+    label: b.label,
+    order: b.order,
+    createdAt: now,
+    updatedAt: now,
+  }));
+  // bulkPut is idempotent for the fixed ids (safe under StrictMode double-run).
+  await db.docTypes.bulkPut(rows);
+  const current = prefs ?? { ...DEFAULT_PREFS };
+  await db.preferences.put({ ...current, id: "app", docTypesSeeded: true, updatedAt: now });
+}
+
+/**
+ * One-time cleanup: the short-description (hint) field is retired — strip it
+ * from existing rows so no stale text ever comes back.
+ */
+export async function stripLegacyDocHints(): Promise<void> {
+  const prefs = await db.preferences.get("app");
+  if (prefs?.docHintsStripped) return;
+  const all = await db.docTypes.toArray();
+  const withHints = all.filter((d) => d.hint != null);
+  if (withHints.length > 0) {
+    await Promise.all(withHints.map((d) => db.docTypes.update(d.id, { hint: undefined })));
+  }
+  await db.preferences.put({
+    ...(prefs ?? DEFAULT_PREFS),
+    id: "app",
+    docHintsStripped: true,
+    updatedAt: Date.now(),
   });
 }
 

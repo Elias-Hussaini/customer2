@@ -2,6 +2,18 @@ import { db } from "./schema";
 import type { Attachment } from "../types";
 import { uid } from "../utils/id";
 
+/** Decode a data-URL into its bytes (used by the AI document flow). */
+export function dataUrlToBlob(dataUrl: string): Blob {
+  const comma = dataUrl.indexOf(",");
+  const meta = comma >= 0 ? dataUrl.slice(0, comma) : "";
+  const body = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+  const mime = /data:([^;]+)/.exec(meta)?.[1] ?? "image/jpeg";
+  const bin = atob(body);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
 /** Downscale large photos before storing so IndexedDB stays lean. */
 export async function processImage(file: File, maxDim = 1600, quality = 0.85): Promise<Blob> {
   if (!file.type.startsWith("image/")) return file;
@@ -74,6 +86,32 @@ export async function getReceipt(paymentId: string): Promise<Attachment | undefi
 
 export async function deleteAttachment(id: string): Promise<void> {
   await db.attachments.delete(id);
+}
+
+/**
+ * Save an already-normalized JPEG data URL (AI pipeline output) as a
+ * document attachment — no re-processing, bytes are stored as they come.
+ */
+export async function saveAttachmentDataUrl(
+  customerId: string,
+  kind: string,
+  dataUrl: string,
+  name: string,
+): Promise<Attachment> {
+  const blob = dataUrlToBlob(dataUrl);
+  const att: Attachment = {
+    id: uid(),
+    customerId,
+    paymentId: null,
+    kind,
+    name,
+    mime: blob.type || "image/jpeg",
+    size: blob.size,
+    blob,
+    createdAt: Date.now(),
+  };
+  await db.attachments.add(att);
+  return att;
 }
 
 export async function getAttachmentsFor(customerId: string): Promise<Attachment[]> {

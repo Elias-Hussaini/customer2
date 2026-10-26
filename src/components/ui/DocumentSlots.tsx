@@ -5,6 +5,7 @@ import { saveAs } from "file-saver";
 import { db } from "../../db/schema";
 import type { Attachment, DocType } from "../../types";
 import { saveAttachment, deleteAttachment } from "../../db/attachments";
+import { AiDocSortButton } from "../domain/AiDocSortButton";
 import { Modal } from "./Modal";
 import { useToast } from "../../hooks/useToast";
 import { formatTimestamp } from "../../utils/jalali";
@@ -130,7 +131,7 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
             )}
           </p>
           <p className="truncate text-[11px] text-ink-500 dark:text-ink-400">
-            {latest ? `${dt.hint ?? "مدرک"} • ${formatTimestamp(latest.createdAt)}` : (dt.hint ?? "بارگذاری نشده")}
+            {latest ? formatTimestamp(latest.createdAt) : "بارگذاری نشده"}
           </p>
         </div>
 
@@ -181,6 +182,14 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
 
   return (
     <div className="flex flex-col gap-3.5">
+      {/* Smart AI filing — picks any mix of photos/PDFs and files them */}
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[#6366f1]/20 bg-gradient-to-l from-[#6366f1]/6 via-[#8b5cf6]/6 to-[#d946ef]/6 px-3 py-2.5 dark:border-[#818cf8]/25">
+        <p className="min-w-0 flex-1 text-[11.5px] leading-5 text-ink-600 dark:text-ink-300">
+          چند عکس یا PDF را انتخاب کنید — هوش مصنوعی هر کدام را می‌شناسد و در جای درستش می‌گذارد
+          (صفحات ترکیبی هم خودکار جدا می‌شوند).
+        </p>
+        <AiDocSortButton customerId={customerId} />
+      </div>
       {docList.length === 0 ? (
         <p className="rounded-2xl border border-dashed border-ink-300/60 px-4 py-5 text-center text-xs leading-6 text-ink-400 dark:border-ink-700">
           هنوز نوع مدرکی تعریف نشده — از تنظیمات ← «مدارک و تصاویر» اضافه کنید

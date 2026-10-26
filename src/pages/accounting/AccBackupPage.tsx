@@ -220,8 +220,9 @@ export function AccBackupPage() {
         <div className="flex flex-col gap-3">
           <p className="text-xs leading-6 text-ink-500 dark:text-ink-400">
             پشتیبان کامل شامل طرف حساب‌ها، صندوق‌ها و بانک‌ها، همه تراکنش‌ها، مانده‌ها، متادیتای اسناد و
-            تنظیمات است. فایل JSON سبک است و می‌توانید آن را هر جا ذخیره کنید. پشتیبان اصلی برنامه
-            (بخش «پشتیبان‌گیری» در منوی بیشتر) هم به‌صورت خودکار شامل همین داده‌ها می‌شود.
+            تنظیمات است. فایل JSON سبک است و می‌توانید آن را هر جا ذخیره کنید. حسابداری یک بخش
+            کاملاً جدا است — پشتیبان اصلی برنامه (بخش «پشتیبان‌گیری» در منوی بیشتر) شامل این
+            داده‌ها نمی‌شود و پشتیبان حسابداری فقط همین‌جا گرفته می‌شود.
           </p>
           <div className="flex flex-wrap gap-2">
             <Button variant="primary" icon={HardDriveDownload} loading={busy === "backup"} onClick={() => void doBackup()}>

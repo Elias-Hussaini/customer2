@@ -878,7 +878,6 @@ function VisaTypesSection() {
 
 interface DocTypeFormState {
   label: string;
-  hint: string;
 }
 
 function DocTypesSection() {
@@ -895,7 +894,7 @@ function DocTypesSection() {
   const openCreate = () => {
     setEditingId(null);
     setError("");
-    setForm({ label: "", hint: "" });
+    setForm({ label: "" });
     setEditOpen(true);
   };
 
@@ -904,7 +903,7 @@ function DocTypesSection() {
     if (!dt) return;
     setEditingId(id);
     setError("");
-    setForm({ label: dt.label, hint: dt.hint ?? "" });
+    setForm({ label: dt.label });
     setEditOpen(true);
   };
 
@@ -970,9 +969,6 @@ function DocTypesSection() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[13px] font-bold">{dt.label}</p>
-                  <p className="truncate text-[10.5px] text-ink-400">
-                    {dt.hint || "بدون توضیح"}
-                  </p>
                 </div>
                 <button className="icon-btn !h-8 !w-8" aria-label="ویرایش" onClick={() => openEdit(dt.id)}>
                   <Pencil size={14} />
@@ -1026,13 +1022,6 @@ function DocTypesSection() {
                 onChange={(e) => setForm({ ...form, label: e.target.value })}
                 placeholder="مثلاً عکس ویزه"
                 autoFocus
-              />
-            </FormField>
-            <FormField label="توضیح کوتاه" hint="اختیاری — زیر عنوان نمایش داده می‌شود">
-              <Input
-                value={form.hint}
-                onChange={(e) => setForm({ ...form, hint: e.target.value })}
-                placeholder="مثلاً صفحه ویزه پاسپورت"
               />
             </FormField>
           </div>
