@@ -13,6 +13,14 @@ import type {
   VisaRequest,
   VisaType,
 } from "../types";
+import type {
+  AccDoc,
+  AccParty,
+  AccSettings,
+  FinAccount,
+  FinTransaction,
+  OutstandingItem,
+} from "../accounting/types";
 
 /**
  * Local IndexedDB database. All application data lives here — in the user's
@@ -34,6 +42,13 @@ export class VisaDB extends Dexie {
   attachments!: Table<Attachment, string>;
   docTypes!: Table<DocType, string>;
   preferences!: Table<AppPreferences, string>;
+  // Accounting section (بخش حسابداری) — separate financial world.
+  accParties!: Table<AccParty, string>;
+  accAccounts!: Table<FinAccount, string>;
+  accTransactions!: Table<FinTransaction, string>;
+  accOutstanding!: Table<OutstandingItem, string>;
+  accDocs!: Table<AccDoc, string>;
+  accMeta!: Table<AccSettings, string>;
 
   constructor() {
     super("customer2-visa");
@@ -72,6 +87,18 @@ export class VisaDB extends Dexie {
     // entirely in code (src/lib/docex/fill.ts). Drop the stored templates.
     this.version(5).stores({
       pdfTemplates: null,
+    });
+    // v6: accounting module (بخش حسابداری) — parties, managed cash/bank
+    // accounts, financial transactions, outstanding items, documents and
+    // module settings. Balances are derived from accTransactions.
+    this.version(6).stores({
+      accParties: "id, code, type, name, active, createdAt, photoDocId",
+      accAccounts: "id, name, type, currency, active, createdAt",
+      accTransactions:
+        "id, number, type, partyId, sourceAccountId, destAccountId, currency, date, status, createdAt",
+      accOutstanding: "id, partyId, kind, status, dueDate, currency, createdAt",
+      accDocs: "id, partyId, transactionId, accountId, createdAt",
+      accMeta: "id",
     });
   }
 }

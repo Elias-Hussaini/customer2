@@ -177,14 +177,18 @@ interface RadioSelectProps {
   value: string;
   onChange: (value: string) => void;
   className?: string;
+  disabled?: boolean;
 }
 
 /** Segmented control for small option sets. */
-export function RadioSelect({ options, value, onChange, className = "" }: RadioSelectProps) {
+export function RadioSelect({ options, value, onChange, className = "", disabled }: RadioSelectProps) {
   return (
     <div
-      className={`flex gap-1 rounded-[0.85rem] border border-ink-900/10 bg-white/50 p-1 dark:border-white/10 dark:bg-white/5 ${className}`}
+      className={`flex gap-1 rounded-[0.85rem] border border-ink-900/10 bg-white/50 p-1 dark:border-white/10 dark:bg-white/5 ${
+        disabled ? "pointer-events-none opacity-50" : ""
+      } ${className}`}
       role="radiogroup"
+      aria-disabled={disabled}
     >
       {options.map((opt) => (
         <button

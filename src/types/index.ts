@@ -147,7 +147,11 @@ export type ActivityType =
   | "payment"
   | "backup"
   | "restore"
-  | "settings";
+  | "settings"
+  | "acc-post"
+  | "acc-reverse"
+  | "acc-cancel"
+  | "acc-adjust";
 
 export type ActivityEntity =
   | "customer"
@@ -157,7 +161,14 @@ export type ActivityEntity =
   | "payment"
   | "tag"
   | "settings"
-  | "backup";
+  | "backup"
+  | "accParty"
+  | "accAccount"
+  | "accTx"
+  | "accOutstanding"
+  | "accDoc"
+  | "accSettings"
+  | "accBackup";
 
 export interface Activity {
   id: string;
@@ -235,6 +246,9 @@ export interface BackupFile {
     docTypes?: DocType[];
     activities: Activity[];
     preferences: AppPreferences | null;
+    /** Accounting section data — present in backups made after the accounting
+     *  module was added (v6 schema). Optional so old backups still restore. */
+    acc?: import("../accounting/types").AccBackupData;
   };
 }
 

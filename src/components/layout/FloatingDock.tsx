@@ -1,5 +1,6 @@
 import { NavLink, useLocation } from "react-router-dom";
 import {
+  Calculator,
   FolderOpen,
   LayoutDashboard,
   MoreHorizontal,
@@ -13,6 +14,7 @@ const ITEMS = [
   { to: "/lists", icon: FolderOpen, label: "لیست‌ها", end: false },
   { to: "/customers", icon: Users, label: "مشتریان", end: false },
   { to: "/representatives", icon: UserRound, label: "نمایندگان", end: false },
+  { to: "/accounting", icon: Calculator, label: "حسابداری", end: false },
 ];
 
 /**

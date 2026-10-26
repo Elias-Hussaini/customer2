@@ -6,6 +6,7 @@ import type {
 } from "../types";
 import { customerFullName } from "../db/customers";
 import { downloadBlob } from "./export/tabular";
+import { buildAccBackupData, applyAccBackup } from "../accounting/backup";
 
 export const BACKUP_VERSION = 1;
 export const BACKUP_FORMAT = "2customer-backup";
@@ -25,6 +26,7 @@ export async function buildBackup(): Promise<BackupFile> {
     docTypes,
     activities,
     preferences,
+    acc,
   ] = await Promise.all([
     db.representatives.toArray(),
     db.customers.toArray(),
@@ -37,6 +39,7 @@ export async function buildBackup(): Promise<BackupFile> {
     db.docTypes.toArray(),
     db.activities.orderBy("ts").reverse().limit(800).toArray(),
     db.preferences.get("app"),
+    buildAccBackupData(),
   ]);
 
   return {
@@ -68,6 +71,7 @@ export async function buildBackup(): Promise<BackupFile> {
       docTypes,
       activities,
       preferences: preferences ?? null,
+      acc,
     },
   };
 }
@@ -316,6 +320,12 @@ export async function applyRestore(backup: BackupFile, mode: RestoreMode): Promi
     },
   );
 
+  // Accounting section lives in its own table set — restore it separately so
+  // old backups without accounting data still restore cleanly.
+  if (d.acc) {
+    await applyAccBackup(d.acc, mode);
+  }
+
   return { inserted, updated };
 }
 
@@ -327,7 +337,10 @@ export async function buildAttachmentsZip(
 ): Promise<void> {
   const { default: JSZip } = await import("jszip");
   const attachments = await db.attachments.toArray();
-  if (attachments.length === 0) throw new Error("هیچ پیوستی برای بایگانی وجود ندارد.");
+  const accDocs = await db.accDocs.toArray();
+  if (attachments.length === 0 && accDocs.length === 0) {
+    throw new Error("هیچ پیوستی برای بایگانی وجود ندارد.");
+  }
   const customers = await db.customers.toArray();
   const nameById = new Map(customers.map((c) => [c.id, customerFullName(c)]));
 
@@ -354,6 +367,20 @@ export async function buildAttachmentsZip(
     }
     const ext = att.name.includes(".") ? "" : guessExt(att.mime);
     folder?.file(`${att.kind}-${att.name}${ext}`, att.blob);
+  }
+  // Accounting documents ride along in their own folder.
+  if (accDocs.length > 0) {
+    const accParties = await db.accParties.toArray();
+    const accNameById = new Map(accParties.map((p) => [p.id, p.name]));
+    for (const doc of accDocs) {
+      const folder = zip.folder(
+        `اسناد-حسابداری/${(accNameById.get(doc.partyId ?? "") ?? "اسناد عمومی").replace(
+          /[\\/:*?"<>|]/g,
+          "-",
+        )}`,
+      );
+      folder?.file(doc.name, doc.blob);
+    }
   }
   const blob = await zip.generateAsync({ type: "blob" }, (meta) => {
     onProgress?.(Math.round(meta.percent));
@@ -387,6 +414,13 @@ export async function getStorageStats(): Promise<{
       db.customFields.count(),
       db.activities.count(),
     ]);
+  const [accParties, accAccounts, accTx, accOutstanding, accDocs] = await Promise.all([
+    db.accParties.count(),
+    db.accAccounts.count(),
+    db.accTransactions.count(),
+    db.accOutstanding.count(),
+    db.accDocs.count(),
+  ]);
   const atts = await db.attachments.toArray();
   return {
     tableCounts: {
@@ -400,8 +434,18 @@ export async function getStorageStats(): Promise<{
       customFields,
       activities,
       attachments: atts.length,
+      accParties,
+      accAccounts,
+      accTransactions: accTx,
+      accOutstanding,
+      accDocs,
     },
-    attachments: { count: atts.length, bytes: atts.reduce((s, a) => s + a.size, 0) },
+    attachments: {
+      count: atts.length + accDocs,
+      bytes:
+        atts.reduce((s, a) => s + a.size, 0) +
+        (await db.accDocs.toArray()).reduce((s, d) => s + d.size, 0),
+    },
   };
 }
 

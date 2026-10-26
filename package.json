@@ -35,6 +35,7 @@
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "@vitejs/plugin-react": "latest",
+    "fake-indexeddb": "^6.2.6",
     "tailwindcss": "latest",
     "typescript": "latest",
     "vite": "latest",
