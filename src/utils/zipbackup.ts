@@ -54,8 +54,13 @@ export const ENC_ZIP_FORMAT = "emanagement-encrypted-zip";
 export const ENC_ZIP_VERSION = 1;
 
 /** Safety limits while reading untrusted archives (zip-bomb protection). */
-const MAX_ZIP_ENTRIES = 20_000;
-const MAX_UNCOMPRESSED_BYTES = 1.5 * 1024 * 1024 * 1024; // 1.5 GB
+export const MAX_ZIP_ENTRIES = 20_000;
+export const MAX_UNCOMPRESSED_BYTES = 1.5 * 1024 * 1024 * 1024; // 1.5 GB
+
+/** Format string of the accounting ZIP backup (defined in
+ *  accounting/zipbackup.ts — kept as a literal here to avoid a circular
+ *  import; the two constants must stay in sync). */
+const ACC_ZIP_FORMAT_LITERAL = "emanagement-acc-zip-backup";
 
 const MANIFEST_PATH = "manifest.json";
 const DATABASE_PATH = "data/database.json";
@@ -170,7 +175,8 @@ function assertNotCancelled(opts: { shouldCancel?: () => boolean }): void {
   if (opts.shouldCancel?.()) throw new BackupCancelledError();
 }
 
-async function sha256Hex(data: Uint8Array | string): Promise<string> {
+/** SHA-256 hex digest — shared with the accounting ZIP engine. */
+export async function sha256Hex(data: Uint8Array | string): Promise<string> {
   const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
   const digest = await crypto.subtle.digest("SHA-256", bytes as unknown as BufferSource);
   return Array.from(new Uint8Array(digest))
@@ -370,6 +376,7 @@ export async function buildFullZipBackup(
 export async function encryptZipBytes(
   zipBytes: Uint8Array,
   password: string,
+  innerFormat: string = ZIP_BACKUP_FORMAT,
 ): Promise<Blob> {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -388,7 +395,7 @@ export async function encryptZipBytes(
       salt: bufToB64(salt),
       iv: bufToB64(iv),
       createdAt: Date.now(),
-      inner: ZIP_BACKUP_FORMAT,
+      inner: innerFormat,
     }),
   );
   const out = new Uint8Array(8 + 4 + header.length + cipher.byteLength);
@@ -495,6 +502,11 @@ export async function parseZipBackup(
     manifest = JSON.parse(await manifestEntry.async("string"));
   } catch {
     throw new Error("manifest.json قابل خواندن نیست.");
+  }
+  if ((manifest.format as string) === ACC_ZIP_FORMAT_LITERAL) {
+    throw new Error(
+      "این ZIP پشتیبان بخش حسابداری است — برای بازیابی آن به بخش حسابداری › پشتیبان و تنظیمات بروید.",
+    );
   }
   if (manifest.format !== ZIP_BACKUP_FORMAT) {
     throw new Error("این ZIP یک پشتیبان کامل E-managment نیست.");
