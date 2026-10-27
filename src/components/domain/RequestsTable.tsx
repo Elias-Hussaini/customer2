@@ -1,9 +1,12 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Archive, FilePenLine, FolderInput, Trash2 } from "lucide-react";
 import type { Customer, ListFolder, Representative, Tag, VisaRequest } from "../../types";
 import { DataTable, type Column } from "../ui/DataTable";
 import { Menu } from "../ui/Menu";
 import { StatusPill, TagBadge, TagsRow } from "../ui/Badges";
+import { Avatar } from "../ui/Avatar";
+import { Modal } from "../ui/Modal";
 import { formatMoney } from "../../utils/num";
 import { formatJalali, todayIso } from "../../utils/jalali";
 import { customerFullName } from "../../db/customers";
@@ -39,6 +42,8 @@ export function RequestsTable({
   const navigate = useNavigate();
   const { confirm } = useConfirm();
   const toast = useToast();
+  /** Big profile photo opened from a row's avatar button. */
+  const [photoView, setPhotoView] = useState<{ photo: string; name: string } | null>(null);
 
   const customersById = new Map(extras.customers.map((c) => [c.id, c]));
   const repsById = new Map(extras.representatives.map((r) => [r.id, r]));
@@ -62,14 +67,33 @@ export function RequestsTable({
           : "zz",
       render: (r) => {
         const c = customersById.get(r.customerId);
+        const fullName = c ? customerFullName(c) : "—";
         return (
-          <div className="min-w-0">
-            <span className="block truncate font-semibold">
-              {c ? customerFullName(c) : "—"}
-            </span>
-            {c?.passportNo && (
-              <span className="ltr block text-[11px] text-ink-400">{c.passportNo}</span>
+          <div className="flex items-center gap-2.5">
+            {c?.photo ? (
+              <button
+                type="button"
+                className="shrink-0 rounded-full outline-none ring-brand-400/60 transition-shadow focus-visible:ring-2"
+                title={`دیدن عکس پروفایل ${fullName}`}
+                aria-label={`دیدن عکس پروفایل ${fullName}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPhotoView({ photo: c.photo!, name: fullName });
+                }}
+              >
+                <Avatar photo={c.photo} name={fullName} />
+              </button>
+            ) : (
+              <Avatar photo={undefined} name={fullName} />
             )}
+            <div className="min-w-0">
+              <span className="block truncate font-semibold" title={fullName}>
+                {fullName}
+              </span>
+              {c?.passportNo && (
+                <span className="ltr block text-[11px] text-ink-400">{c.passportNo}</span>
+              )}
+            </div>
           </div>
         );
       },
@@ -221,7 +245,8 @@ export function RequestsTable({
   ];
 
   return (
-    <DataTable
+    <>
+      <DataTable
       columns={columns}
       rows={requests}
       rowKey={(r) => r.id}
@@ -232,22 +257,40 @@ export function RequestsTable({
       footer={`${toPersianDigits(requests.length)} درخواست`}
       mobileCard={(r) => {
         const c = customersById.get(r.customerId);
+        const fullName = c ? customerFullName(c) : "—";
         return (
           <div className="glass rounded-2xl p-4">
             <div className="mb-2 flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className="truncate text-[14px] font-bold">{c ? customerFullName(c) : "—"}</p>
-                <p
-                  className="truncate text-[11px] text-ink-500 dark:text-ink-400"
-                  title={
-                    `${r.visaType ?? "بدون نوع"}${
-                      r.representativeId ? ` • ${repsById.get(r.representativeId)?.name ?? ""}` : ""
-                    }`
-                  }
-                >
-                  {r.visaType ?? "بدون نوع"}
-                  {r.representativeId ? ` • ${repsById.get(r.representativeId)?.name ?? ""}` : ""}
-                </p>
+              <div className="flex min-w-0 items-center gap-2.5">
+                {c?.photo ? (
+                  <button
+                    type="button"
+                    className="shrink-0 self-start rounded-full outline-none ring-brand-400/60 transition-shadow focus-visible:ring-2"
+                    aria-label={`دیدن عکس پروفایل ${fullName}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setPhotoView({ photo: c.photo!, name: fullName });
+                    }}
+                  >
+                    <Avatar photo={c.photo} name={fullName} />
+                  </button>
+                ) : (
+                  <Avatar photo={undefined} name={fullName} className="self-start" />
+                )}
+                <div className="min-w-0">
+                  <p className="truncate text-[14px] font-bold">{fullName}</p>
+                  <p
+                    className="truncate text-[11px] text-ink-500 dark:text-ink-400"
+                    title={
+                      `${r.visaType ?? "بدون نوع"}${
+                        r.representativeId ? ` • ${repsById.get(r.representativeId)?.name ?? ""}` : ""
+                      }`
+                    }
+                  >
+                    {r.visaType ?? "بدون نوع"}
+                    {r.representativeId ? ` • ${repsById.get(r.representativeId)?.name ?? ""}` : ""}
+                  </p>
+                </div>
               </div>
               <StatusPill issued={r.issued} />
             </div>
@@ -285,6 +328,25 @@ export function RequestsTable({
         );
       }}
     />
+
+    {/* Big profile photo (opened from a row's avatar) */}
+    <Modal
+      open={photoView != null}
+      onClose={() => setPhotoView(null)}
+      size="md"
+      title={photoView?.name}
+    >
+      {photoView && (
+        <div className="flex justify-center py-2">
+          <img
+            src={photoView.photo}
+            alt={`عکس پروفایل ${photoView.name}`}
+            className="max-h-[64vh] rounded-3xl object-contain"
+          />
+        </div>
+      )}
+    </Modal>
+    </>
   );
 }
 

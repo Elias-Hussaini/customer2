@@ -22,11 +22,16 @@ if (typeof globalThis.localStorage === "undefined") {
 }
 
 import { db } from "../schema";
-import { createDocType, deleteDocType, getDocTypesForCustomer } from "../docTypes";
+import {
+  createDocType,
+  deleteDocType,
+  getDocTypesForCustomer,
+  scopeDocTypesToOwners,
+} from "../docTypes";
 import { deleteCustomer } from "../customers";
 import { buildFullZipBackup, applyZipRestore, parseZipBackup } from "../../utils/zipbackup";
 import { loadPageFilter, savePageFilter } from "../../utils/pageFilters";
-import type { Attachment, Customer } from "../../types";
+import type { Attachment, Customer, DocType } from "../../types";
 
 const T = Date.now();
 
@@ -158,5 +163,81 @@ describe("page filter persistence", () => {
     // Corrupt JSON never throws.
     localStorage.setItem("customer2-filter-p", "{not json");
     expect(loadPageFilter("p", "k", "default", () => true)).toBe("default");
+  });
+});
+
+describe("scopeDocTypesToOwners (one-time legacy re-scope)", () => {
+  /** A legacy SHARED slot exactly as older app versions stored it. */
+  async function addLegacySlot(id: string, label: string): Promise<void> {
+    const dt: DocType = {
+      id,
+      label,
+      customerId: null,
+      order: 50,
+      createdAt: T,
+      updatedAt: T,
+    };
+    await db.docTypes.add(dt);
+  }
+
+  it("re-scopes a legacy AI slot whose files all belong to ONE customer", async () => {
+    await db.customers.bulkAdd([mkCustomer("c1", "احمد"), mkCustomer("c2", "مریم")]);
+    await addLegacySlot("ai1", "کارت واکسن کرونا");
+    await db.attachments.bulkAdd([
+      mkAttachment("a1", "c1", "ai1"),
+      mkAttachment("a2", "c1", "ai1"),
+    ]);
+    await scopeDocTypesToOwners();
+    expect((await db.docTypes.get("ai1"))?.customerId).toBe("c1");
+    // And it is now invisible on the other profile.
+    expect((await getDocTypesForCustomer("c2")).some((d) => d.id === "ai1")).toBe(false);
+    expect((await getDocTypesForCustomer("c1")).some((d) => d.id === "ai1")).toBe(true);
+  });
+
+  it("keeps a slot global when its files belong to SEVERAL customers", async () => {
+    await db.customers.bulkAdd([mkCustomer("c1", "احمد"), mkCustomer("c2", "مریم")]);
+    await addLegacySlot("ai2", "عکس شناسنامه");
+    await db.attachments.bulkAdd([
+      mkAttachment("a1", "c1", "ai2"),
+      mkAttachment("a2", "c2", "ai2"),
+    ]);
+    await scopeDocTypesToOwners();
+    expect((await db.docTypes.get("ai2"))?.customerId ?? null).toBeNull();
+  });
+
+  it("keeps an empty slot global (a fresh Settings slot is never stolen)", async () => {
+    await addLegacySlot("user1", "عکس ویزه");
+    await scopeDocTypesToOwners();
+    expect((await db.docTypes.get("user1"))?.customerId ?? null).toBeNull();
+  });
+
+  it("never touches the built-in slots, even with one owner's files", async () => {
+    await db.customers.add(mkCustomer("c1", "احمد"));
+    await db.docTypes.add({
+      id: "passport",
+      label: "عکس پاسپورت",
+      customerId: null,
+      order: 0,
+      createdAt: T,
+      updatedAt: T,
+    });
+    await db.attachments.add(mkAttachment("a1", "c1", "passport"));
+    await scopeDocTypesToOwners();
+    expect((await db.docTypes.get("passport"))?.customerId ?? null).toBeNull();
+  });
+
+  it("runs only once (guarded by the preferences flag)", async () => {
+    await db.customers.add(mkCustomer("c1", "احمد"));
+    await addLegacySlot("ai3", "کارت واکسن");
+    await db.attachments.add(mkAttachment("a1", "c1", "ai3"));
+    await scopeDocTypesToOwners();
+    expect((await db.docTypes.get("ai3"))?.customerId).toBe("c1");
+    // Anything added afterwards is NOT re-scoped by a second launch.
+    await addLegacySlot("user2", "عکس سند");
+    await db.attachments.add(mkAttachment("a2", "c1", "user2"));
+    await scopeDocTypesToOwners();
+    expect((await db.docTypes.get("user2"))?.customerId ?? null).toBeNull();
+    const prefs = await db.preferences.get("app");
+    expect(prefs?.docOwnerScoped).toBe(true);
   });
 });

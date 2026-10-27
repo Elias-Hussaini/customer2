@@ -240,6 +240,8 @@ export interface AppPreferences {
   docHintsStripped?: boolean;
   /** Internal: bogus AI-created «کد ملی» doc slots purged once. */
   nidJunkPurged?: boolean;
+  /** Internal: legacy shared AI doc slots re-scoped to their single owner once. */
+  docOwnerScoped?: boolean;
   updatedAt: number;
 }
 

@@ -89,6 +89,51 @@ const BUILT_IN: { id: string; label: string; order: number }[] = [
   { id: "nidBack", label: "عکس پشت تذکره", order: 2 },
 ];
 
+const BUILT_IN_IDS = new Set(BUILT_IN.map((b) => b.id));
+
+/**
+ * One-time re-scope of LEGACY shared slots. Before per-customer slots
+ * existed, every slot the AI created was global and showed up on EVERY
+ * profile. Any non-built-in slot whose files all belong to exactly ONE
+ * customer becomes that customer's private slot; slots with no files or
+ * with files from several customers stay global (fresh Settings slots or
+ * genuinely shared ones). Runs once, guarded by a preferences flag.
+ */
+export async function scopeDocTypesToOwners(): Promise<void> {
+  const prefs = await db.preferences.get("app");
+  if (prefs?.docOwnerScoped) return;
+  const all = await db.docTypes.toArray();
+  const candidates = all.filter(
+    (d) => !d.archivedAt && !d.customerId && !BUILT_IN_IDS.has(d.id),
+  );
+  const moved: { id: string; label: string; customerId: string }[] = [];
+  for (const dt of candidates) {
+    const files = await db.attachments.where("kind").equals(dt.id).toArray();
+    const owners = new Set(
+      files.map((f) => f.customerId).filter((c): c is string => c != null),
+    );
+    if (owners.size === 1) {
+      const customerId = owners.values().next().value as string;
+      await db.docTypes.update(dt.id, { customerId, updatedAt: Date.now() });
+      moved.push({ id: dt.id, label: dt.label, customerId });
+    }
+  }
+  if (moved.length > 0) {
+    await logActivity({
+      type: "settings",
+      entity: "settings",
+      title: `${moved.length.toLocaleString("fa-IR")} بخش هوش مصنوعی فقط به پروندهٔ خودش منتقل شد`,
+      detail: moved.map((m) => m.label).join("، "),
+    });
+  }
+  await db.preferences.put({
+    ...(prefs ?? { ...DEFAULT_PREFS, id: "app" }),
+    id: "app",
+    docOwnerScoped: true,
+    updatedAt: Date.now(),
+  });
+}
+
 /**
  * Seed the built-in slots exactly once (guarded by a preferences flag so
  * user-deleted types are never resurrected on the next launch).

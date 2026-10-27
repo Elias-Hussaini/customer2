@@ -1,10 +1,22 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { Eye, FolderMinus, ImagePlus, Inbox, Trash2, Download, FileImage } from "lucide-react";
+import {
+  Eye,
+  FolderMinus,
+  ImagePlus,
+  Inbox,
+  Pin,
+  RotateCcw,
+  RotateCw,
+  Save,
+  Trash2,
+  Download,
+  FileImage,
+} from "lucide-react";
 import { saveAs } from "file-saver";
 import { db } from "../../db/schema";
 import type { Attachment, DocType } from "../../types";
-import { saveAttachment, deleteAttachment } from "../../db/attachments";
+import { saveAttachment, deleteAttachment, rotateAttachmentImage } from "../../db/attachments";
 import { deleteDocType, getDocTypesForCustomer } from "../../db/docTypes";
 import { AiDocSortButton } from "../domain/AiDocSortButton";
 import { Modal } from "./Modal";
@@ -28,6 +40,9 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
   const { confirm } = useConfirm();
   const [preview, setPreview] = useState<Attachment | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  /** Pending preview rotation in degrees (multiple of 90; CSS-only until saved). */
+  const [rot, setRot] = useState(0);
+  const [rotBusy, setRotBusy] = useState(false);
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const attachments = useLiveQuery(
@@ -129,14 +144,6 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
             <span className="truncate text-[13px] font-bold" title={dt.label}>
               {dt.label}
             </span>
-            {dt.customerId && (
-              <span
-                className="chip-soft shrink-0 rounded-full bg-brand-500/10 px-2 py-0.5 text-[9.5px] font-bold text-brand-600 dark:text-brand-300"
-                title="این بخش فقط برای همین مشتری است"
-              >
-                مخصوص این پرونده
-              </span>
-            )}
             {files.length > 1 && (
               <span className="chip-soft num shrink-0 rounded-full px-2 py-0.5 text-[10px]">
                 {toPersianDigits(files.length)}
@@ -214,6 +221,38 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
   };
 
   const docList = docTypes ?? [];
+  // Own (AI-created) slots render in their OWN GROUP ON TOP — right under
+  // the AI button, well clear of the dates/«سایر مدارک» at the bottom — so a
+  // freshly created slot is immediately visible on the profile.
+  const ownSlots = docList.filter((d) => d.customerId === customerId);
+  const globalSlots = docList.filter((d) => !d.customerId);
+
+  /* --------------------- rotation (preview → persisted) -------------------- */
+
+  // Opening another file (or closing) always starts upright.
+  useEffect(() => {
+    setRot(0);
+  }, [preview?.id]);
+
+  const saveRotation = async () => {
+    if (!preview || rotBusy) return;
+    const net = ((rot % 360) + 360) % 360;
+    if (net === 0) return;
+    setRotBusy(true);
+    try {
+      const updated = await rotateAttachmentImage(preview, net);
+      setPreview(updated);
+      setRot(0);
+      toast.success("چرخش عکس ذخیره شد");
+    } catch (e) {
+      console.error(e);
+      toast.error("ذخیره چرخش با خطا مواجه شد");
+    } finally {
+      setRotBusy(false);
+    }
+  };
+
+  const rotated = Math.abs(((rot % 360) + 360) % 180) === 90;
 
   return (
     <div className="flex flex-col gap-3.5">
@@ -226,7 +265,29 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
           هنوز نوع مدرکی تعریف نشده — از تنظیمات ← «مدارک و تصاویر» اضافه کنید
         </p>
       ) : (
-        <ul className="flex flex-col gap-2">{docList.map((dt) => slotRow(dt, byKind(dt.id)))}</ul>
+        <>
+          {/* Per-profile slots (AI-created for THIS customer) — on top */}
+          {ownSlots.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <p className="flex items-center gap-1.5 px-1 text-[11px] font-bold text-brand-600 dark:text-brand-300">
+                <Pin size={12} className="shrink-0" />
+                مخصوص این پرونده
+              </p>
+              <ul className="flex flex-col gap-2">
+                {ownSlots.map((dt) => slotRow(dt, byKind(dt.id)))}
+              </ul>
+            </div>
+          )}
+          {ownSlots.length > 0 && globalSlots.length > 0 && (
+            <div className="h-px bg-ink-900/5 dark:bg-white/5" />
+          )}
+          {/* Global slots (Settings-defined, shared by every profile) */}
+          {globalSlots.length > 0 && (
+            <ul className="flex flex-col gap-2">
+              {globalSlots.map((dt) => slotRow(dt, byKind(dt.id)))}
+            </ul>
+          )}
+        </>
       )}
 
       {/* Fixed bucket for extra files */}
@@ -306,7 +367,11 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
             <img
               src={URL.createObjectURL(preview.blob)}
               alt={preview.name}
-              className="mx-auto max-h-[64vh] rounded-2xl object-contain"
+              className="mx-auto rounded-2xl object-contain transition-transform duration-200"
+              style={{
+                transform: `rotate(${rot}deg)`,
+                maxHeight: rotated ? "min(58vh, 80vw)" : "64vh",
+              }}
             />
           ) : (
             <p className="py-10 text-center text-sm text-ink-500">
@@ -314,7 +379,39 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
             </p>
           ))}
         {preview && (
-          <div className="mt-4 flex justify-end gap-2">
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+            {preview.mime.startsWith("image/") ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  className="btn btn-glass btn-sm"
+                  disabled={rotBusy}
+                  onClick={() => setRot((r) => r - 90)}
+                  title="چرخش به چپ"
+                >
+                  <RotateCcw size={15} />
+                </button>
+                <button
+                  className="btn btn-glass btn-sm"
+                  disabled={rotBusy}
+                  onClick={() => setRot((r) => r + 90)}
+                  title="چرخش به راست"
+                >
+                  <RotateCw size={15} />
+                </button>
+                {((rot % 360) + 360) % 360 !== 0 && (
+                  <button
+                    className="btn btn-primary btn-sm"
+                    disabled={rotBusy}
+                    onClick={() => void saveRotation()}
+                  >
+                    <Save size={14} />
+                    ذخیره چرخش
+                  </button>
+                )}
+              </div>
+            ) : (
+              <span />
+            )}
             <button className="btn btn-glass" onClick={() => saveAs(preview.blob, preview.name)}>
               <Download size={15} />
               دانلود

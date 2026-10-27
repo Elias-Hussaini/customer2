@@ -29,13 +29,13 @@ export function TagBadge({ tag, onRemove }: { tag: TagType; onRemove?: () => voi
 export function StatusPill({ issued }: { issued: boolean }) {
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-[3px] text-[11px] font-semibold ${
+      className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1 text-[11px] font-semibold ${
         issued
           ? "bg-[#10b981]/12 text-[#0b9e6e] dark:text-[#3ddc9a]"
           : "bg-[#f59e0b]/14 text-[#c77d0a] dark:text-[#f5b84f]"
       }`}
     >
-      <span className={`h-1.5 w-1.5 rounded-full ${issued ? "bg-[#10b981]" : "bg-[#f59e0b]"}`} />
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${issued ? "bg-[#10b981]" : "bg-[#f59e0b]"}`} />
       {issued ? "صادر شده" : "در حال کار"}
     </span>
   );

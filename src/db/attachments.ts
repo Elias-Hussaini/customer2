@@ -118,6 +118,40 @@ export async function getAttachmentsFor(customerId: string): Promise<Attachment[
   return db.attachments.where("customerId").equals(customerId).sortBy("createdAt");
 }
 
+/**
+ * Rotate a stored image by a multiple of 90° and persist the re-encoded
+ * JPEG in place — the fix is permanent, so thumbnails, exports, backups and
+ * the AI pipeline all see the rotated image afterwards.
+ */
+export async function rotateAttachmentImage(att: Attachment, degrees: number): Promise<Attachment> {
+  if (!att.mime.startsWith("image/")) throw new Error("not an image");
+  const net = ((degrees % 360) + 360) % 360;
+  if (net === 0) return att;
+  const bitmap = await createImageBitmap(att.blob);
+  try {
+    const swap = net % 180 === 90;
+    const canvas = document.createElement("canvas");
+    canvas.width = swap ? bitmap.height : bitmap.width;
+    canvas.height = swap ? bitmap.width : bitmap.height;
+    const ctx = canvas.getContext("2d", { alpha: false });
+    if (!ctx) throw new Error("canvas unavailable");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate((net * Math.PI) / 180);
+    ctx.drawImage(bitmap, -bitmap.width / 2, -bitmap.height / 2);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", 0.92),
+    );
+    if (!blob) throw new Error("re-encode failed");
+    const name = att.name.replace(/\.(png|webp|gif|bmp|heic|avif|jfif)$/i, ".jpg");
+    await db.attachments.update(att.id, { blob, mime: "image/jpeg", size: blob.size, name });
+    return { ...att, blob, mime: "image/jpeg", size: blob.size, name };
+  } finally {
+    bitmap.close();
+  }
+}
+
 export async function totalAttachmentsSize(): Promise<{ count: number; bytes: number }> {
   const all = await db.attachments.toArray();
   return { count: all.length, bytes: all.reduce((s, a) => s + a.size, 0) };
