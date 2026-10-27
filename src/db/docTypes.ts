@@ -14,15 +14,28 @@ import { uid } from "../utils/id";
 
 export interface DocTypeInput {
   label: string;
+  /** When set, the slot exists only on this customer's profile (AI-created). */
+  customerId?: string | null;
 }
+
+/** Per-customer slots order above this line so they always render after the
+ *  global ones — no matter how many global slots are added later. */
+const GLOBAL_ORDER_MAX = 999;
 
 export async function createDocType(input: DocTypeInput): Promise<DocType> {
   const now = Date.now();
-  const count = await db.docTypes.count();
+  const scope = input.customerId ?? null;
+  // Order is counted within the slot's own scope (global slots together,
+  // per-customer slots after them) so the two worlds never interleave.
+  const all = await db.docTypes.toArray();
+  const order = scope
+    ? GLOBAL_ORDER_MAX + 1 + all.filter((d) => d.customerId === scope).length
+    : all.filter((d) => !d.customerId).length;
   const dt: DocType = {
     id: uid(),
     label: input.label.trim(),
-    order: count,
+    ...(scope ? { customerId: scope } : {}),
+    order,
     createdAt: now,
     updatedAt: now,
   };
@@ -30,7 +43,9 @@ export async function createDocType(input: DocTypeInput): Promise<DocType> {
   await logActivity({
     type: "settings",
     entity: "settings",
-    title: `مدرک «${dt.label}» به بخش مدارک اضافه شد`,
+    title: scope
+      ? `بخش «${dt.label}» به مدارک همین مشتری اضافه شد`
+      : `مدرک «${dt.label}» به بخش مدارک اضافه شد`,
   });
   return dt;
 }
@@ -46,6 +61,26 @@ export async function updateDocType(id: string, input: DocTypeInput): Promise<vo
     entity: "settings",
     title: `مدرک «${input.label.trim()}» ویرایش شد`,
   });
+}
+
+/**
+ * The document slots visible on ONE customer's profile: every global slot
+ * plus the slots that belong to that customer only, in display order.
+ */
+export async function getDocTypesForCustomer(customerId: string): Promise<DocType[]> {
+  const all = await db.docTypes.toArray();
+  return all
+    .filter((d) => !d.archivedAt && (!d.customerId || d.customerId === customerId))
+    .sort((a, b) => a.order - b.order || a.createdAt - b.createdAt);
+}
+
+/**
+ * Delete every per-customer slot of a customer (called when the customer is
+ * permanently deleted, so no orphaned slots are left behind).
+ */
+export async function deleteCustomerDocTypes(customerId: string): Promise<void> {
+  const own = (await db.docTypes.toArray()).filter((d) => d.customerId === customerId);
+  if (own.length > 0) await db.docTypes.bulkDelete(own.map((d) => d.id));
 }
 
 const BUILT_IN: { id: string; label: string; order: number }[] = [

@@ -55,7 +55,7 @@ import {
   type SortPiece,
 } from "../../lib/ai";
 import type { DocType } from "../../types";
-import { createDocType } from "../../db/docTypes";
+import { createDocType, getDocTypesForCustomer } from "../../db/docTypes";
 import { saveAttachmentDataUrl } from "../../db/attachments";
 import { dataUrlToSquareDataUrl, setCustomerPhoto } from "../../db/photos";
 import { customerFullName } from "../../db/customers";
@@ -197,7 +197,11 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
       }
     }
 
-    const docTypes = (await db.docTypes.toArray())
+    // Slots the AI may choose from: the global defaults (Settings) plus the
+    // slots that belong to THIS customer only. A slot another customer's AI
+    // run created is deliberately invisible here — new inputs never leak
+    // into every profile again.
+    const docTypes = (await getDocTypesForCustomer(customerId))
       .filter((d) => !d.archivedAt)
       .sort((a, b) => a.order - b.order);
     return {
@@ -260,7 +264,9 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
           job.newIdByLabel.set(key, existing.id);
           continue;
         }
-        const dt = await createDocType({ label: key });
+        // New slots are created for THIS customer only — other profiles keep
+        // their own clean slot list (defaults stay global via Settings).
+        const dt = await createDocType({ label: key, customerId });
         job.newIdByLabel.set(key, dt.id);
         job.newLabels.push(key);
       }
@@ -484,6 +490,9 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
             {run.outcome.newSlots.length > 0 && (
               <div className="rounded-2xl bg-brand-500/8 px-3.5 py-2.5 text-[12px] leading-5">
                 بخش جدید: <b>{run.outcome.newSlots.join("، ")}</b>
+                <span className="text-ink-500 dark:text-ink-400">
+                  {" "}— فقط برای همین مشتری اضافه شد؛ بقیهٔ پروفایل‌ها تغییری نمی‌کنند.
+                </span>
               </div>
             )}
             {(run.outcome.truncated || run.outcome.blankSkipped > 0 || run.outcome.skippedPhoto) && (

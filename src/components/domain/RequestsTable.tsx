@@ -78,7 +78,11 @@ export function RequestsTable({
       key: "visaType",
       header: "نوع ویزا",
       sortValue: (r) => r.visaType ?? "",
-      render: (r) => <span className="font-medium">{r.visaType ?? "—"}</span>,
+      render: (r) => (
+        <span className="block max-w-[200px] truncate font-medium" title={r.visaType ?? undefined}>
+          {r.visaType ?? "—"}
+        </span>
+      ),
     },
     {
       key: "tags",
@@ -89,11 +93,17 @@ export function RequestsTable({
       key: "representative",
       header: "نماینده",
       sortValue: (r) => repsById.get(r.representativeId ?? "")?.name ?? "—",
-      render: (r) => (
-        <span className="text-ink-600 dark:text-ink-300">
-          {r.representativeId ? (repsById.get(r.representativeId)?.name ?? "—") : "—"}
-        </span>
-      ),
+      render: (r) => {
+        const repName = r.representativeId ? (repsById.get(r.representativeId)?.name ?? "—") : "—";
+        return (
+          <span
+            className="block max-w-[170px] truncate text-ink-600 dark:text-ink-300"
+            title={repName === "—" ? undefined : repName}
+          >
+            {repName}
+          </span>
+        );
+      },
     },
     ...(extras.hideListColumn
       ? []
@@ -102,11 +112,17 @@ export function RequestsTable({
             key: "list",
             header: "لیست",
             sortValue: (r: VisaRequest) => listsById.get(r.listId ?? "")?.name ?? "—",
-            render: (r: VisaRequest) => (
-              <span className="text-ink-600 dark:text-ink-300">
-                {r.listId ? (listsById.get(r.listId)?.name ?? "—") : "—"}
-              </span>
-            ),
+            render: (r: VisaRequest) => {
+              const listName = r.listId ? (listsById.get(r.listId)?.name ?? "—") : "—";
+              return (
+                <span
+                  className="block max-w-[170px] truncate text-ink-600 dark:text-ink-300"
+                  title={listName === "—" ? undefined : listName}
+                >
+                  {listName}
+                </span>
+              );
+            },
           },
         ] as Column<VisaRequest>[])),
     {
@@ -221,7 +237,14 @@ export function RequestsTable({
             <div className="mb-2 flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <p className="truncate text-[14px] font-bold">{c ? customerFullName(c) : "—"}</p>
-                <p className="text-[11px] text-ink-500 dark:text-ink-400">
+                <p
+                  className="truncate text-[11px] text-ink-500 dark:text-ink-400"
+                  title={
+                    `${r.visaType ?? "بدون نوع"}${
+                      r.representativeId ? ` • ${repsById.get(r.representativeId)?.name ?? ""}` : ""
+                    }`
+                  }
+                >
                   {r.visaType ?? "بدون نوع"}
                   {r.representativeId ? ` • ${repsById.get(r.representativeId)?.name ?? ""}` : ""}
                 </p>

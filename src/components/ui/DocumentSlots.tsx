@@ -1,12 +1,14 @@
 import { useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { Eye, ImagePlus, Inbox, Trash2, Download, FileImage } from "lucide-react";
+import { Eye, FolderMinus, ImagePlus, Inbox, Trash2, Download, FileImage } from "lucide-react";
 import { saveAs } from "file-saver";
 import { db } from "../../db/schema";
 import type { Attachment, DocType } from "../../types";
 import { saveAttachment, deleteAttachment } from "../../db/attachments";
+import { deleteDocType, getDocTypesForCustomer } from "../../db/docTypes";
 import { AiDocSortButton } from "../domain/AiDocSortButton";
 import { Modal } from "./Modal";
+import { useConfirm } from "../../hooks/useConfirm";
 import { useToast } from "../../hooks/useToast";
 import { formatTimestamp } from "../../utils/jalali";
 import { formatNumber } from "../../utils/num";
@@ -15,12 +17,15 @@ import { toPersianDigits } from "../../utils/jalali";
 /**
  * Documents & images section of a customer.
  *
- * The slots are fully data-driven: they come from the `docTypes` table and
- * can be added / edited / reordered / removed from Settings → مدارک و تصاویر.
- * "other" is a fixed bucket for extra files; receipt photos live on payments.
+ * The slots are data-driven: global slots come from the `docTypes` table and
+ * are managed in Settings → مدارک و تصاویر; slots with a `customerId` belong
+ * to THIS profile only (created by the AI smart filing) and can be removed
+ * right here. "other" is a fixed bucket for extra files; receipt photos live
+ * on payments.
  */
 export function DocumentSlots({ customerId }: { customerId: string }) {
   const toast = useToast();
+  const { confirm } = useConfirm();
   const [preview, setPreview] = useState<Attachment | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
@@ -30,11 +35,9 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
     [customerId],
   );
 
-  const docTypes = useLiveQuery(
-    async () =>
-      (await db.docTypes.toArray()).filter((d) => !d.archivedAt).sort((a, b) => a.order - b.order),
-    [],
-  );
+  // Global slots + this customer's own slots (AI-created ones never leak
+  // into other profiles).
+  const docTypes = useLiveQuery(() => getDocTypesForCustomer(customerId), [customerId]);
 
   const byKind = (kind: string) =>
     (attachments ?? []).filter((a) => a.kind === kind).sort((a, b) => b.createdAt - a.createdAt);
@@ -123,7 +126,17 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
         {/* One-line texts — never wrap into the mess below */}
         <div className="min-w-0 flex-1">
           <p className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate text-[13px] font-bold">{dt.label}</span>
+            <span className="truncate text-[13px] font-bold" title={dt.label}>
+              {dt.label}
+            </span>
+            {dt.customerId && (
+              <span
+                className="chip-soft shrink-0 rounded-full bg-brand-500/10 px-2 py-0.5 text-[9.5px] font-bold text-brand-600 dark:text-brand-300"
+                title="این بخش فقط برای همین مشتری است"
+              >
+                مخصوص این پرونده
+              </span>
+            )}
             {files.length > 1 && (
               <span className="chip-soft num shrink-0 rounded-full px-2 py-0.5 text-[10px]">
                 {toPersianDigits(files.length)}
@@ -171,6 +184,28 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
                 <Trash2 size={15} />
               </button>
             </>
+          )}
+          {dt.customerId && (
+            <button
+              type="button"
+              className="icon-btn !h-8 !w-8 hover:!text-[#ef4444]"
+              title="حذف این بخش (فایل‌ها به «سایر مدارک» منتقل می‌شوند)"
+              aria-label="حذف این بخش"
+              onClick={async () => {
+                const ok = await confirm({
+                  title: `حذف بخش «${dt.label}» از همین پرونده؟`,
+                  message:
+                    "این بخش فقط برای همین مشتری است. فایل‌های داخلش حذف نمی‌شوند؛ به «سایر مدارک» منتقل می‌شوند.",
+                  confirmLabel: "حذف بخش",
+                });
+                if (ok) {
+                  await deleteDocType(dt.id, dt.label);
+                  toast.info("بخش حذف شد");
+                }
+              }}
+            >
+              <FolderMinus size={15} />
+            </button>
           )}
         </div>
         {hiddenInput(dt.id)}

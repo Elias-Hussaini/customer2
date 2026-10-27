@@ -6,9 +6,10 @@
  */
 
 import { useRef, useState } from "react";
-import { Camera, Loader2, Trash2 } from "lucide-react";
+import { Camera, Eye, Loader2, Trash2 } from "lucide-react";
 import { Avatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
+import { Modal } from "../ui/Modal";
 import {
   fileToSquareDataUrl,
   setCustomerPhoto,
@@ -31,6 +32,7 @@ export function ProfilePhotoCard({ kind, id, photo, name, subtitle }: Props) {
   const { confirm } = useConfirm();
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  const [viewing, setViewing] = useState(false);
 
   const pick = () => fileRef.current?.click();
 
@@ -91,6 +93,11 @@ export function ProfilePhotoCard({ kind, id, photo, name, subtitle }: Props) {
             {busy ? "در حال ذخیره…" : photo ? "تغییر عکس" : "ثبت عکس پروفایل"}
           </Button>
           {photo && (
+            <Button size="sm" variant="glass" icon={Eye} onClick={() => setViewing(true)}>
+              مشاهده عکس
+            </Button>
+          )}
+          {photo && (
             <Button size="sm" variant="ghost" icon={Trash2} className="!text-rose-600 dark:!text-rose-400" onClick={() => void remove()}>
               حذف عکس
             </Button>
@@ -109,6 +116,38 @@ export function ProfilePhotoCard({ kind, id, photo, name, subtitle }: Props) {
           void onFile(file);
         }}
       />
+
+      {/* Full-size photo lightbox */}
+      <Modal
+        open={viewing && !!photo}
+        onClose={() => setViewing(false)}
+        title="عکس پروفایل"
+        subtitle={name}
+        size="sm"
+        footer={
+          <div className="flex items-center justify-between gap-2">
+            <a
+              className="btn btn-glass btn-sm"
+              href={photo ?? undefined}
+              download={`${name || "profile"}.jpg`}
+              onClick={() => setViewing(false)}
+            >
+              دانلود عکس
+            </a>
+            <button className="btn btn-primary btn-sm" onClick={() => setViewing(false)}>
+              بستن
+            </button>
+          </div>
+        }
+      >
+        {photo && (
+          <img
+            src={photo}
+            alt={name}
+            className="mx-auto max-h-[64vh] rounded-3xl border border-ink-900/5 object-contain dark:border-white/10"
+          />
+        )}
+      </Modal>
     </div>
   );
 }

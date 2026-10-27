@@ -657,6 +657,17 @@ export async function parseZipBackup(
       `${dangling} پیوست به مشتری/پرداختی اشاره می‌کند که در این پشتیبان نیست (مثلاً حذف‌شده) — خود فایل‌ها محفوظ می‌مانند.`,
     );
   }
+  // Profile-specific document slots (AI-created) whose customer is missing
+  // from this archive — they restore silently and only reappear if that
+  // customer is ever restored too; nothing is lost either way.
+  const orphanSlots = (payload.data.docTypes ?? []).filter(
+    (d) => d.customerId && !customerIds.has(d.customerId),
+  ).length;
+  if (orphanSlots > 0) {
+    warnings.push(
+      `${orphanSlots} بخش مدارک مخصوص یک مشتری است که در این پشتیبان نیست — با بازگردانی مشتری دوباره نمایان می‌شود.`,
+    );
+  }
 
   onProgress?.({ phase: "validating", percent: 75 });
   return { manifest, backup: payload, assets, warnings };

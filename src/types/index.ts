@@ -208,6 +208,12 @@ export interface DocType {
   id: string;
   label: string;
   /**
+   * Set when this slot belongs to ONE customer only (created by the AI smart
+   * filing for that specific profile). Undefined/null = a global slot that
+   * Settings manages and every customer shows.
+   */
+  customerId?: string | null;
+  /**
    * Short one-line description — legacy field kept for data compatibility.
    * No longer shown or edited anywhere in the UI.
    */
