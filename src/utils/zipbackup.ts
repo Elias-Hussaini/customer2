@@ -211,6 +211,7 @@ function stripAttachmentBlob(att: Attachment): AttachmentMeta {
     mime: att.mime,
     size: att.size,
     createdAt: att.createdAt,
+    opt: att.opt,
   };
 }
 

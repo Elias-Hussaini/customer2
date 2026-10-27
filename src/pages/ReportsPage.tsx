@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { FileBarChart, FileDown, Wallet } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { CalendarRange, FileBarChart, FileDown, Wallet } from "lucide-react";
 import { PageHeader } from "../components/ui/StatCard";
 import { DataTable, type Column } from "../components/ui/DataTable";
 import { EmptyState } from "../components/ui/EmptyState";
@@ -28,6 +29,7 @@ interface BalanceRow {
 }
 
 export function ReportsPage() {
+  const navigate = useNavigate();
   const requests = useRequests();
   const payments = usePayments();
   const customers = useCustomers();
@@ -250,9 +252,14 @@ export function ReportsPage() {
         title="گزارش‌ها"
         subtitle="گزارش بگیرید و در قالب اکسل، CSV، PDF یا تصویر خروجی بگیرید"
         actions={
-          <button className="btn btn-primary btn-sm" onClick={() => setExportOpen(true)}>
-            <FileDown size={14} /> خروجی گزارش
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button className="btn btn-glass btn-sm" onClick={() => navigate("/stats")}>
+              <CalendarRange size={14} /> آمار ماهانه
+            </button>
+            <button className="btn btn-primary btn-sm" onClick={() => setExportOpen(true)}>
+              <FileDown size={14} /> خروجی گزارش
+            </button>
+          </div>
         }
       />
 

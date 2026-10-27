@@ -201,6 +201,8 @@ export interface Attachment {
   size: number;
   blob: Blob;
   createdAt: number;
+  /** Timestamp of the last at-rest compression attempt (background pass marker). */
+  opt?: number;
 }
 
 /** A user-definable document slot shown on the customer page (مدارک و تصاویر). */
@@ -259,6 +261,8 @@ export interface AttachmentMeta {
   mime: string;
   size: number;
   createdAt: number;
+  /** Last at-rest compression timestamp — survives the ZIP round trip. */
+  opt?: number;
 }
 
 /** JSON backup file (attachments excluded by design). */

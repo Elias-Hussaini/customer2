@@ -670,3 +670,12 @@
     background: #fff !important;
   }
 }
+
+/* Hide the scrollbar on horizontal chip strips (monthly stats month picker) */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}

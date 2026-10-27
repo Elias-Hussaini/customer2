@@ -18,6 +18,7 @@ import { uid } from "../utils/id";
 import { formatMoney } from "../utils/num";
 import { todayIso, formatJalali } from "../utils/jalali";
 import { toJalaali } from "jalaali-js";
+import { compressImage } from "../utils/imageCompress";
 import type { Currency } from "../types";
 import {
   buildReversalDraft,
@@ -907,18 +908,21 @@ export async function addAccDoc(input: AccDocInput): Promise<AccDoc> {
   if (input.file.size > MAX_DOC_SIZE) {
     throw new Error("حجم فایل نباید بیشتر از ۱۵ مگابایت باشد.");
   }
+  // Images are compressed at rest (visually lossless, PDFs stay byte-identical).
+  const res = await compressImage({ blob: input.file, name: input.file.name, mime });
   const doc: AccDoc = {
     id: uid(),
     partyId: input.partyId ?? null,
     transactionId: input.transactionId ?? null,
     accountId: input.accountId ?? null,
-    name: input.file.name,
-    mime,
-    size: input.file.size,
-    blob: input.file,
+    name: res.replaced ? res.name : input.file.name,
+    mime: res.replaced ? res.mime : mime,
+    size: res.blob.size,
+    blob: res.blob,
     category: input.category,
     notes: input.notes?.trim() || undefined,
     createdAt: Date.now(),
+    opt: Date.now(),
   };
   await db.accDocs.add(doc);
   await logActivity({

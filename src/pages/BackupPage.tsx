@@ -6,6 +6,7 @@ import {
   FileArchive,
   FileUp,
   HardDriveDownload,
+  ImageDown,
   KeyRound,
   Loader2,
   ShieldAlert,
@@ -41,6 +42,11 @@ import { useToast } from "../hooks/useToast";
 import { useConfirm } from "../hooks/useConfirm";
 import { formatNumber } from "../utils/num";
 import { formatTimestamp, toPersianDigits } from "../utils/jalali";
+import {
+  cancelImageOptimizer,
+  optimizeStoredImages,
+  type OptimizeProgress,
+} from "../services/imageMaintenance";
 
 const PHASE_LABELS: Record<BackupProgress["phase"], string> = {
   reading: "در حال خواندن داده‌ها",
@@ -96,6 +102,9 @@ export function BackupPage() {
   const [restorePassword, setRestorePassword] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cancelRef = useRef(false);
+  const [optimize, setOptimize] = useState<
+    { running: true; progress: OptimizeProgress } | { running: false; summary: OptimizeProgress | null }
+  >({ running: false, summary: null });
 
   const refreshStats = async () => {
     setStats(await getStorageStats());
@@ -301,6 +310,41 @@ export function BackupPage() {
     await refreshStats();
   };
 
+  /* --------------------------- image optimizer ---------------------------- */
+
+  const runOptimizer = async () => {
+    if (optimize.running) return;
+    setOptimize({
+      running: true,
+      progress: { done: 0, total: 0, optimized: 0, savedBytes: 0, section: "attachments" },
+    });
+    try {
+      const summary = await optimizeStoredImages((progress) => setOptimize({ running: true, progress }));
+      setOptimize({
+        running: false,
+        summary: {
+          done: summary.scanned,
+          total: summary.scanned,
+          optimized: summary.optimized,
+          savedBytes: summary.savedBytes,
+          section: "attachments",
+        },
+      });
+      if (summary.optimized > 0) {
+        toast.success(
+          `${toPersianDigits(summary.optimized)} عکس فشرده شد — ${bytesLabel(summary.savedBytes)} آزاد شد`,
+        );
+      } else {
+        toast.info("همه عکس‌ها از قبل بهینه شده‌اند");
+      }
+      void refreshStats();
+    } catch (e) {
+      console.error(e);
+      setOptimize({ running: false, summary: null });
+      toast.error("فشرده‌سازی عکس‌ها ناتمام ماند");
+    }
+  };
+
   /* -------------------------------- render ------------------------------- */
 
   return (
@@ -309,6 +353,66 @@ export function BackupPage() {
         title="پشتیبان‌گیری و بازیابی"
         subtitle="داده‌ها فقط در مرورگر شما (IndexedDB) ذخیره می‌شوند — پشتیبان منظم فراموش نشود"
       />
+
+      {/* At-rest image optimizer */}
+      <SectionCard
+        title="بهینه‌سازی حجم عکس‌ها"
+        icon={<ImageDown size={15} className="text-[#0b9e6e]" />}
+      >
+        <div className="flex flex-col gap-3">
+          <p className="text-[12px] leading-6 text-ink-500 dark:text-ink-400">
+            هر عکسی که ثبت می‌شود <b>به‌صورت خودکار و در پشت‌صحنه</b> بدون افت کیفیتِ قابل‌دیدن فشرده
+            می‌شود (عکس‌های ۵۰۰ کیلوبایتی و ۱ مگابایتی معمولاً به یک‌سوم یا کمتر می‌رسند). PDFها
+            دست‌نخورده و بدون تغییر می‌مانند. این دکمه فقط برای عکس‌های<b> قدیمی‌تر</b> است که قبل از
+            این قابلیت ثبت شده‌اند:
+          </p>
+          {optimize.running ? (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between text-[11px] text-ink-500 dark:text-ink-400">
+                <span>
+                  {optimize.progress.section === "attachments" ? "عکس‌های مشتریان" : "اسناد حسابداری"}{" "}
+                  {" — "}
+                  <span className="num font-bold">
+                    {toPersianDigits(optimize.progress.done)} از{" "}
+                    {toPersianDigits(Math.max(optimize.progress.done, optimize.progress.total))}
+                  </span>
+                </span>
+                <span className="num font-bold text-[#0b9e6e]">
+                  {bytesLabel(optimize.progress.savedBytes)} آزاد شد
+                </span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-ink-500/10">
+                <div
+                  className="h-full rounded-full bg-[#10b981] transition-all duration-300"
+                  style={{
+                    width: `${
+                      optimize.progress.total > 0
+                        ? Math.round((optimize.progress.done / optimize.progress.total) * 100)
+                        : 0
+                    }%`,
+                  }}
+                />
+              </div>
+              <button className="btn btn-ghost btn-sm self-end" onClick={() => cancelImageOptimizer()}>
+                توقف
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <button className="btn btn-glass btn-sm" onClick={() => void runOptimizer()}>
+                <ImageDown size={14} />
+                فشرده‌سازی عکس‌های موجود
+              </button>
+              {optimize.summary && optimize.summary.optimized > 0 && (
+                <span className="text-[11px] font-bold text-[#0b9e6e]">
+                  <span className="num">{toPersianDigits(optimize.summary.optimized)}</span> عکس فشرده
+                  شد — <span className="num">{bytesLabel(optimize.summary.savedBytes)}</span> آزاد شد
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      </SectionCard>
 
       {/* Status */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">

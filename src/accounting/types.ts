@@ -151,6 +151,8 @@ export interface AccDoc {
   category?: string;
   notes?: string;
   createdAt: number;
+  /** Timestamp of the last at-rest compression attempt (background pass marker). */
+  opt?: number;
 }
 
 /* -------------------------------- Settings -------------------------------- */

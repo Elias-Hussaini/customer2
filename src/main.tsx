@@ -11,6 +11,7 @@ import {
   purgeNationalIdDocTypes,
   scopeDocTypesToOwners,
 } from "./db/docTypes";
+import { runStartupImageOptimizer } from "./services/imageMaintenance";
 import "./styles/global.css";
 
 /** GitHub Pages serves under /customer2/ — the router base follows Vite's base. */
@@ -27,6 +28,11 @@ void (async () => {
   await purgeNationalIdDocTypes();
   await scopeDocTypesToOwners();
 })();
+
+// Quietly compress oversized stored images (registered before compression
+// existed, or restored from an older backup) — throttled, in the background,
+// long after the app is interactive. New uploads compress at save time.
+runStartupImageOptimizer();
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

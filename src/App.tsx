@@ -11,6 +11,7 @@ import { RequestFormPage } from "./pages/RequestFormPage";
 import { RequestsPage } from "./pages/RequestsPage";
 import { PaymentsPage } from "./pages/PaymentsPage";
 import { ReportsPage } from "./pages/ReportsPage";
+import { MonthlyStatsPage } from "./pages/MonthlyStatsPage";
 import { SearchPage } from "./pages/SearchPage";
 import { ArchivePage } from "./pages/ArchivePage";
 import { BackupPage } from "./pages/BackupPage";
@@ -44,6 +45,7 @@ export default function App() {
         <Route path="requests/:id/edit" element={<RequestFormPage />} />
         <Route path="payments" element={<PaymentsPage />} />
         <Route path="reports" element={<ReportsPage />} />
+        <Route path="stats" element={<MonthlyStatsPage />} />
         <Route path="search" element={<SearchPage />} />
         <Route path="archive" element={<ArchivePage />} />
         <Route path="backup" element={<BackupPage />} />
