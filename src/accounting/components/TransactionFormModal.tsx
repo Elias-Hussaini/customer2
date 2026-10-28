@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, FileText, Paperclip, Trash2, X } from "lucide-react";
 import { Modal } from "../../components/ui/Modal";
 import { Button } from "../../components/ui/Button";
+import { useDropTarget } from "../../components/ui/DropZone";
 import { Checkbox, Input, Select, Textarea } from "../../components/ui/fields";
 import { FormField } from "../../components/ui/fields";
 import { JalaliDatePicker } from "../../components/ui/JalaliDatePicker";
@@ -217,7 +218,7 @@ export function TransactionFormModal({ open, onClose, initial, editTx }: Transac
     }
   }, [type, amount, destAmount, currency]);
 
-  const pickFiles = (files: FileList | null) => {
+  const pickFiles = (files: FileList | File[] | null) => {
     if (!files) return;
     const next: PendingDoc[] = [];
     for (const f of Array.from(files)) {
@@ -236,6 +237,9 @@ export function TransactionFormModal({ open, onClose, initial, editTx }: Transac
     setPendingDocs((prev) => [...prev, ...next]);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
+
+  // The dashed attachment button doubles as a drop zone.
+  const docsDrop = useDropTarget((files) => pickFiles(files));
 
   const save = async () => {
     if (busy) return;
@@ -570,8 +574,12 @@ export function TransactionFormModal({ open, onClose, initial, editTx }: Transac
           />
           <button
             type="button"
-            className="flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-ink-300/70 py-3 text-xs font-bold text-ink-500 transition-colors hover:border-brand-400 hover:text-brand-600 dark:border-ink-700 dark:text-ink-400"
+            className={`flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-ink-300/70 py-3 text-xs font-bold text-ink-500 transition-all hover:border-brand-400 hover:text-brand-600 dark:border-ink-700 dark:text-ink-400 ${
+              docsDrop.hovering ? "border-brand-400 bg-brand-500/10 text-brand-600 ring-2 ring-brand-400/40" : ""
+            }`}
             onClick={() => fileInputRef.current?.click()}
+            title="انتخاب فایل — یا فایل‌ها را همین‌جا رها کنید"
+            {...docsDrop.dropHandlers}
           >
             <Paperclip size={15} />
             افزودن رسید یا فاکتور

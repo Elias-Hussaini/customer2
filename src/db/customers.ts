@@ -105,7 +105,7 @@ export async function restoreCustomer(id: string, name: string): Promise<void> {
   await logActivity({ type: "restore", entity: "customer", entityId: id, title: `مشتری «${name}» بازگردانده شد` });
 }
 
-/** Permanently delete a customer along with their requests, attachments and linked payments. */
+/** Permanently delete a customer along with their requests, attachments, linked payments and their profile-specific document slots. */
 export async function deleteCustomer(id: string, name: string): Promise<void> {
   await db.transaction(
     "rw",
@@ -113,12 +113,16 @@ export async function deleteCustomer(id: string, name: string): Promise<void> {
     db.requests,
     db.attachments,
     db.payments,
+    db.docTypes,
     async () => {
       await db.customers.delete(id);
       const reqs = await db.requests.where("customerId").equals(id).toArray();
       await db.requests.bulkDelete(reqs.map((r) => r.id));
       const atts = await db.attachments.where("customerId").equals(id).toArray();
       await db.attachments.bulkDelete(atts.map((a) => a.id));
+      // Profile-specific slots (AI-created) belong to no one else — remove them.
+      const ownSlots = (await db.docTypes.toArray()).filter((d) => d.customerId === id);
+      if (ownSlots.length > 0) await db.docTypes.bulkDelete(ownSlots.map((d) => d.id));
       for (const r of reqs) {
         const pays = await db.payments.where("requestId").equals(r.id).toArray();
         await Promise.all(pays.map((p) => db.payments.update(p.id, { requestId: null })));

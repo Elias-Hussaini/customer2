@@ -2,6 +2,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Archive,
   Banknote,
+  CalendarRange,
   DatabaseBackup,
   FileBarChart,
   Search,
@@ -26,6 +27,13 @@ const MORE_ITEMS: MoreItem[] = [
     description: "دفتر مالی و مانده حساب",
     to: "/payments",
     tint: "bg-[#10b981]/12 text-[#0b9e6e] dark:text-[#3ddc9a]",
+  },
+  {
+    icon: CalendarRange,
+    label: "آمار ماهانه",
+    description: "نمودارهای ماهانه و روند",
+    to: "/stats",
+    tint: "bg-[#8b5cf6]/12 text-[#7c3aed] dark:text-[#c4b5fd]",
   },
   {
     icon: FileBarChart,

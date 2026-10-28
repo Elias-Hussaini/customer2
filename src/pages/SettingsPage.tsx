@@ -881,7 +881,7 @@ interface DocTypeFormState {
 }
 
 function DocTypesSection() {
-  const docTypes = useDocTypes();
+  const allDocTypes = useDocTypes();
   const toast = useToast();
   const { confirm } = useConfirm();
   const [editOpen, setEditOpen] = useState(false);
@@ -889,7 +889,9 @@ function DocTypesSection() {
   const [form, setForm] = useState<DocTypeFormState | null>(null);
   const [error, setError] = useState("");
 
-  const list = docTypes ?? [];
+  // Settings manages the GLOBAL slots only — the AI's per-profile sections
+  // live on each customer's own page (مدارک و تصاویر) and never show here.
+  const list = (allDocTypes ?? []).filter((d) => !d.customerId);
 
   const openCreate = () => {
     setEditingId(null);
@@ -937,6 +939,9 @@ function DocTypesSection() {
         <p className="mb-3 text-[12px] leading-6 text-ink-500 dark:text-ink-400">
           نوع مدارک پرونده مشتری را مثل «عکس ویزه» یا «عکس سند» اضافه، ویرایش یا جابه‌جا کنید.
           این اسلات‌ها در صفحه هر مشتری، بخش «مدارک و تصاویر» نمایش داده می‌شوند.
+          <br />
+          بخش‌هایی که هوش مصنوعی برای یک مشتری می‌سازد فقط در پروندهٔ همان مشتری می‌مانند و
+          اینجا فهرست نمی‌شوند — از صفحهٔ خود مشتری قابل حذف‌اند.
         </p>
         {list.length === 0 ? (
           <EmptyState

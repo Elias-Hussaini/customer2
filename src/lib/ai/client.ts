@@ -57,6 +57,24 @@ export async function getEnabledWorkers(): Promise<AiWorker[]> {
     .sort((a, b) => a.priority - b.priority || a.createdAt - b.createdAt);
 }
 
+/**
+ * Session-level cooldown: workers that just failed (rate limit, network…)
+ * rotate to the BACK of the chain for a while, so quota is spread across
+ * accounts and a 429'd account is not hammered first on every request.
+ * Never removes a worker — only reorders.
+ */
+const cooldown = new Map<string, number>();
+const COOLDOWN_MS = 90_000;
+
+function orderWithCooldown<T extends { id: string }>(workers: T[]): T[] {
+  const now = Date.now();
+  return [...workers].sort((a, b) => {
+    const ca = (cooldown.get(a.id) ?? 0) > now ? 1 : 0;
+    const cb = (cooldown.get(b.id) ?? 0) > now ? 1 : 0;
+    return ca - cb; // stable: keeps priority order inside each group
+  });
+}
+
 /** Read the generated text from any of the known response shapes. */
 export function extractReplyText(data: unknown): string {
   if (data == null || typeof data !== "object") return "";
@@ -182,8 +200,9 @@ export interface ChatOptions {
  * AiAllWorkersFailedError when the whole chain fails.
  */
 export async function aiChat(messages: ChatMessage[], opts: ChatOptions = {}): Promise<ChatResult> {
-  const workers = await getEnabledWorkers();
-  if (workers.length === 0) throw new AiAllWorkersFailedError([]);
+  const enabled = await getEnabledWorkers();
+  if (enabled.length === 0) throw new AiAllWorkersFailedError([]);
+  const workers = orderWithCooldown(enabled);
 
   const attempts: WorkerAttempt[] = [];
   for (let i = 0; i < workers.length; i++) {
@@ -196,9 +215,11 @@ export async function aiChat(messages: ChatMessage[], opts: ChatOptions = {}): P
         timeoutMs: opts.timeoutMs ?? 120_000,
         signal: opts.signal,
       });
+      cooldown.delete(worker.id); // healthy again — restore its priority
       return { text, worker };
     } catch (e) {
       if (opts.signal?.aborted) throw new AiAllWorkersFailedError(attempts);
+      cooldown.set(worker.id, Date.now() + COOLDOWN_MS); // try other accounts first
       attempts.push({
         label: worker.label || worker.url,
         url: worker.url,

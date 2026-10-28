@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Archive, FilePenLine, Search, Trash2, UserPlus, Users } from "lucide-react";
+import { Archive, FilePenLine, Search, Trash2, UserPlus, Users, X } from "lucide-react";
 import { PageHeader } from "../components/ui/StatCard";
 import { DataTable, type Column } from "../components/ui/DataTable";
 import { EmptyState } from "../components/ui/EmptyState";
@@ -14,7 +14,16 @@ import { useConfirm } from "../hooks/useConfirm";
 import { useToast } from "../hooks/useToast";
 import { formatJalali, toPersianDigits } from "../utils/jalali";
 import { uiActions } from "../components/layout/uiStore";
+import { loadPageFilter, savePageFilter } from "../utils/pageFilters";
 import type { Customer } from "../types";
+
+const CUSTOMERS_SORTS = ["newest", "oldest", "name"] as const;
+
+type CustomersSort = (typeof CUSTOMERS_SORTS)[number];
+
+function isCustomersSort(v: string): v is CustomersSort {
+  return (CUSTOMERS_SORTS as readonly string[]).includes(v);
+}
 
 export function CustomersPage() {
   const navigate = useNavigate();
@@ -25,18 +34,39 @@ export function CustomersPage() {
   const representatives = useRepresentatives();
   const lists = useLists();
 
+  // Last used filters are remembered across visits (validated on load).
   const [query, setQuery] = useState("");
-  const [repFilter, setRepFilter] = useState("");
-  const [sort, setSort] = useState("newest");
+  const [repFilter, setRepFilter] = useState<string>(() => loadPageFilter<string>("customers", "rep", "", () => true));
+  const [sort, setSort] = useState<CustomersSort>(() => {
+    const saved = loadPageFilter<string>("customers", "sort", "newest", () => true);
+    return isCustomersSort(saved) ? saved : "newest";
+  });
   const [editing, setEditing] = useState<Customer | null>(null);
   const [editOpen, setEditOpen] = useState(false);
 
+  // A saved representative may have been deleted/archived since — ignore the
+  // stale filter once the rep list has loaded, instead of hiding every row.
+  const activeRepFilter =
+    representatives !== undefined && repFilter
+      ? (representatives ?? []).some((r) => r.id === repFilter)
+        ? repFilter
+        : ""
+      : repFilter;
+
+  useEffect(() => {
+    savePageFilter("customers", "sort", sort);
+  }, [sort]);
+  useEffect(() => {
+    savePageFilter("customers", "rep", activeRepFilter);
+  }, [activeRepFilter]);
+
   const statsByCustomer = useMemo(() => {
-    const map = new Map<string, { total: number; issued: number }>();
+    const map = new Map<string, { total: number; issued: number; rejected: number }>();
     for (const r of requests ?? []) {
-      const entry = map.get(r.customerId) ?? { total: 0, issued: 0 };
+      const entry = map.get(r.customerId) ?? { total: 0, issued: 0, rejected: 0 };
       entry.total++;
       if (r.issued) entry.issued++;
+      else if (r.rejected) entry.rejected++;
       map.set(r.customerId, entry);
     }
     return map;
@@ -69,8 +99,8 @@ export function CustomersPage() {
 
   const rows = useMemo(() => {
     let list = [...(customers ?? [])];
-    if (repFilter) {
-      list = list.filter((c) => displayRepId(c) === repFilter);
+    if (activeRepFilter) {
+      list = list.filter((c) => displayRepId(c) === activeRepFilter);
     }
     if (query.trim()) {
       const q = query.trim().toLowerCase();
@@ -93,7 +123,7 @@ export function CustomersPage() {
     }
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customers, requests, query, repFilter, sort]);
+  }, [customers, requests, query, activeRepFilter, sort]);
 
   const columns: Column<Customer>[] = [
     {
@@ -176,6 +206,9 @@ export function CustomersPage() {
           <span className="chip-soft num inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px]">
             {toPersianDigits(s.total)}
             <span className="text-[#10b981]">({toPersianDigits(s.issued)} صادر)</span>
+            {s.rejected > 0 && (
+              <span className="text-[#dc3535] dark:text-[#f87b7b]">({toPersianDigits(s.rejected)} رد)</span>
+            )}
           </span>
         );
       },
@@ -264,7 +297,7 @@ export function CustomersPage() {
         />
         <FilterSelect
           ariaLabel="نماینده"
-          value={repFilter}
+          value={activeRepFilter}
           onChange={setRepFilter}
           options={[
             { value: "", label: "همه مشتریان" },
@@ -282,13 +315,24 @@ export function CustomersPage() {
         <FilterSelect
           ariaLabel="مرتب‌سازی"
           value={sort}
-          onChange={setSort}
+          onChange={(v) => setSort(isCustomersSort(v) ? v : "newest")}
           options={[
             { value: "newest", label: "جدیدترین" },
             { value: "oldest", label: "قدیمی‌ترین" },
             { value: "name", label: "الفبا" },
           ]}
         />
+        {(query.trim() || activeRepFilter) && (
+          <button
+            className="btn btn-ghost btn-sm !text-rose-500 dark:!text-rose-400"
+            onClick={() => {
+              setQuery("");
+              setRepFilter("");
+            }}
+          >
+            <X size={14} /> پاک‌کردن فیلترها
+          </button>
+        )}
       </div>
 
       <DataTable

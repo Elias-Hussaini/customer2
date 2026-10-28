@@ -22,12 +22,13 @@ export function ListsPage() {
   const [editing, setEditing] = useState<ListFolder | null>(null);
 
   const statsByList = useMemo(() => {
-    const map = new Map<string, { total: number; issued: number }>();
+    const map = new Map<string, { total: number; issued: number; rejected: number }>();
     for (const r of requests ?? []) {
       if (!r.listId) continue;
-      const entry = map.get(r.listId) ?? { total: 0, issued: 0 };
+      const entry = map.get(r.listId) ?? { total: 0, issued: 0, rejected: 0 };
       entry.total++;
       if (r.issued) entry.issued++;
+      else if (r.rejected) entry.rejected++;
       map.set(r.listId, entry);
     }
     return map;
@@ -71,7 +72,7 @@ export function ListsPage() {
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {lists.map((list) => {
-            const stats = statsByList.get(list.id) ?? { total: 0, issued: 0 };
+            const stats = statsByList.get(list.id) ?? { total: 0, issued: 0, rejected: 0 };
             return (
               <div key={list.id} className="glass group relative rounded-3xl p-5 transition-transform duration-150 hover:-translate-y-0.5">
                 <div className="mb-3 flex items-start justify-between gap-2">
@@ -153,6 +154,11 @@ export function ListsPage() {
                   {stats.issued > 0 && (
                     <span className="num inline-flex items-center gap-1 rounded-full bg-[#10b981]/12 px-2.5 py-1 text-[11px] font-semibold text-[#0b9e6e] dark:text-[#3ddc9a]">
                       {toPersianDigits(stats.issued)} صادر شده
+                    </span>
+                  )}
+                  {stats.rejected > 0 && (
+                    <span className="num inline-flex items-center gap-1 rounded-full bg-[#ef4444]/12 px-2.5 py-1 text-[11px] font-semibold text-[#dc3535] dark:text-[#f87b7b]">
+                      {toPersianDigits(stats.rejected)} رد شده
                     </span>
                   )}
                 </div>

@@ -5,6 +5,7 @@ export interface RepStats {
   total: number;
   issued: number;
   inProgress: number;
+  rejected: number;
   customers: number;
   urgent: number;
 }
@@ -26,7 +27,8 @@ export function computeRepStats(
   return {
     total: own.length,
     issued: own.filter((r) => r.issued).length,
-    inProgress: own.filter((r) => !r.issued).length,
+    inProgress: own.filter((r) => !r.issued && !r.rejected).length,
+    rejected: own.filter((r) => r.rejected && !r.issued).length,
     customers: new Set(own.map((r) => r.customerId)).size,
     urgent: own.filter((r) => r.tags.some((t) => urgentTagIds.has(t))).length,
   };
@@ -64,6 +66,7 @@ export interface DashboardStats {
   requests: number;
   issued: number;
   inProgress: number;
+  rejected: number;
   urgent: number;
   balances: CurrencyBalance[];
   lists: number;
@@ -82,7 +85,8 @@ export function computeDashboardStats(
     representatives: representatives.length,
     requests: requests.length,
     issued: requests.filter((r) => r.issued).length,
-    inProgress: requests.filter((r) => !r.issued).length,
+    inProgress: requests.filter((r) => !r.issued && !r.rejected).length,
+    rejected: requests.filter((r) => r.rejected && !r.issued).length,
     urgent: requests.filter((r) => r.tags.some((t) => urgentTagIds.has(t))).length,
     balances: computeBalances(requests, payments),
     lists,

@@ -22,7 +22,15 @@ import {
 import { useToast } from "../hooks/useToast";
 import { formatJalali, toPersianDigits } from "../utils/jalali";
 import { normalizeFa } from "../utils/normalize";
+import {
+  REQUEST_DATE_BASIS_OPTIONS,
+  basisRangePlaceholders,
+  isRequestDateBasis,
+  requestWithinRange,
+  type RequestDateBasis,
+} from "../utils/requestDateFilter";
 import { customerFullName } from "../db/customers";
+import { requestStatusFa } from "../types";
 import type { VisaRequest } from "../types";
 
 export function ListDetailPage() {
@@ -38,6 +46,8 @@ export function ListDetailPage() {
 
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("");
+  /** Which request date (registration / issuance / rejection) the range applies to. */
+  const [dateBasis, setDateBasis] = useState<RequestDateBasis>("registration");
   const [from, setFrom] = useState<string | null>(null);
   const [to, setTo] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
@@ -65,9 +75,9 @@ export function ListDetailPage() {
     const q = normalizeFa(query);
     return inList.filter((r) => {
       if (status === "issued" && !r.issued) return false;
-      if (status === "pending" && r.issued) return false;
-      if (from && r.registrationDate < from) return false;
-      if (to && r.registrationDate > to) return false;
+      if (status === "pending" && (r.issued || r.rejected)) return false;
+      if (status === "rejected" && !r.rejected) return false;
+      if (!requestWithinRange(r, dateBasis, from, to)) return false;
       if (q) {
         const c = (customers ?? []).find((x) => x.id === r.customerId);
         const hay = normalizeFa(`${c ? customerFullName(c) : ""} ${c?.passportNo ?? ""} ${r.visaType ?? ""}`);
@@ -75,7 +85,7 @@ export function ListDetailPage() {
       }
       return true;
     });
-  }, [inList, query, status, from, to, customers]);
+  }, [inList, query, status, dateBasis, from, to, customers]);
 
   if (!list) {
     return (
@@ -88,6 +98,7 @@ export function ListDetailPage() {
   }
 
   const issued = inList.filter((r) => r.issued).length;
+  const rejectedCount = inList.filter((r) => r.rejected && !r.issued).length;
 
   const doMove = async () => {
     if (!moveTarget || !moveListId) return;
@@ -106,6 +117,9 @@ export function ListDetailPage() {
           <>
             {list.category ? `${list.category} • ` : ""}
             {toPersianDigits(listCustomers.length)} مشتری • {toPersianDigits(inList.length)} درخواست • {toPersianDigits(issued)} صادر شده
+            {rejectedCount > 0 && (
+              <span className="text-[#dc3535] dark:text-[#f87b7b]"> • {toPersianDigits(rejectedCount)} رد شده</span>
+            )}
             {(list.startDate || list.endDate) && (
               <span className="num">
                 {" "}
@@ -152,10 +166,27 @@ export function ListDetailPage() {
             { value: "", label: "همه وضعیت‌ها" },
             { value: "issued", label: "صادر شده" },
             { value: "pending", label: "در حال کار" },
+            { value: "rejected", label: "رد شده" },
           ]}
         />
-        <JalaliDatePicker value={from} onChange={setFrom} placeholder="از تاریخ" className="w-40" />
-        <JalaliDatePicker value={to} onChange={setTo} placeholder="تا تاریخ" className="w-40" />
+        <FilterSelect
+          ariaLabel="مبنای بازه تاریخ"
+          value={dateBasis}
+          onChange={(v) => setDateBasis(isRequestDateBasis(v) ? v : "registration")}
+          options={REQUEST_DATE_BASIS_OPTIONS.map((o) => ({ value: o.value, label: `مبنای بازه: ${o.label}` }))}
+        />
+        <JalaliDatePicker
+          value={from}
+          onChange={setFrom}
+          placeholder={basisRangePlaceholders(dateBasis).from}
+          className="w-40"
+        />
+        <JalaliDatePicker
+          value={to}
+          onChange={setTo}
+          placeholder={basisRangePlaceholders(dateBasis).to}
+          className="w-40"
+        />
       </div>
 
       {/* Customers registered in this list */}
@@ -265,8 +296,9 @@ export function ListDetailPage() {
             amount: r.quotedAmount ?? "",
             currency: r.currency === "USD" ? "دلار" : r.currency === "IRT" ? "تومان" : "",
             registrationDate: formatJalali(r.registrationDate),
-            status: r.issued ? "صادر شده" : "در حال کار",
+            status: requestStatusFa(r),
             issuedAt: r.issuedAt ? formatJalali(r.issuedAt) : "",
+            rejectedAt: r.rejectedAt ? formatJalali(r.rejectedAt) : "",
             notes: r.notes ?? "",
           };
         })}
@@ -275,6 +307,7 @@ export function ListDetailPage() {
           { label: "لیست", value: list.name },
           { label: "درخواست‌ها", value: toPersianDigits(filtered.length) },
           { label: "صادر شده", value: toPersianDigits(issued) },
+          ...(rejectedCount > 0 ? [{ label: "رد شده", value: toPersianDigits(rejectedCount) }] : []),
         ]}
         columns={[
           { key: "customer", header: "مشتری" },
@@ -286,6 +319,7 @@ export function ListDetailPage() {
           { key: "registrationDate", header: "تاریخ ثبت" },
           { key: "status", header: "وضعیت" },
           { key: "issuedAt", header: "تاریخ صدور" },
+          { key: "rejectedAt", header: "تاریخ رد" },
           { key: "notes", header: "توضیحات" },
         ]}
       />

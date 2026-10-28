@@ -171,7 +171,7 @@ export function RepresentativesPage() {
                   />
                 </div>
 
-                <div className="mb-3 grid grid-cols-3 gap-1.5 text-center">
+                <div className={`mb-3 grid gap-1.5 text-center ${stats.rejected > 0 ? "grid-cols-4" : "grid-cols-3"}`}>
                   <div className="rounded-2xl bg-brand-500/6 py-2">
                     <p className="num text-[15px] font-bold">{toPersianDigits(stats.total)}</p>
                     <p className="text-[10px] text-ink-500 dark:text-ink-400">درخواست</p>
@@ -188,6 +188,14 @@ export function RepresentativesPage() {
                     </p>
                     <p className="text-[10px] text-ink-500 dark:text-ink-400">در حال کار</p>
                   </div>
+                  {stats.rejected > 0 && (
+                    <div className="rounded-2xl bg-[#ef4444]/8 py-2">
+                      <p className="num text-[15px] font-bold text-[#dc3535] dark:text-[#f87b7b]">
+                        {toPersianDigits(stats.rejected)}
+                      </p>
+                      <p className="text-[10px] text-ink-500 dark:text-ink-400">رد شده</p>
+                    </div>
+                  )}
                 </div>
 
                 {(paidUSD > 0 || paidIRT > 0) && (

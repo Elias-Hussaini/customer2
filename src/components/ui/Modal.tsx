@@ -16,14 +16,52 @@ function useDelayedUnmount(open: boolean, timeout = 200): boolean {
   return mounted;
 }
 
+/**
+ * Reference-counted body scroll lock.
+ *
+ * The previous per-dialog save/restore had a fatal flaw when two dialogs
+ * overlapped (progress modal → result modal, form → nested confirm…): the
+ * first dialog restored its saved value while the second was still open, and
+ * when the second finally closed it restored the STALE "hidden" it had saved
+ * — leaving the page without a scrollbar until a manual refresh. A shared
+ * counter unlocks the body exactly once, when the LAST dialog closes.
+ */
+let bodyLockCount = 0;
+let bodyPrevOverflow: string | null = null;
+
+function acquireBodyLock(): void {
+  if (bodyLockCount === 0) {
+    bodyPrevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+  }
+  bodyLockCount++;
+}
+
+function releaseBodyLock(): void {
+  if (bodyLockCount === 0) return;
+  bodyLockCount--;
+  if (bodyLockCount === 0 && bodyPrevOverflow !== null) {
+    document.body.style.overflow = bodyPrevOverflow;
+    bodyPrevOverflow = null;
+  }
+}
+
+/** Safety net: force-release a stuck lock (e.g. on route change). */
+export function forceUnlockBodyScroll(): void {
+  bodyLockCount = 0;
+  if (bodyPrevOverflow !== null) {
+    document.body.style.overflow = bodyPrevOverflow;
+    bodyPrevOverflow = null;
+  } else if (document.body.style.overflow === "hidden") {
+    document.body.style.overflow = "";
+  }
+}
+
 function useLockBodyScroll(active: boolean) {
   useEffect(() => {
     if (!active) return;
-    const original = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = original;
-    };
+    acquireBodyLock();
+    return releaseBodyLock;
   }, [active]);
 }
 

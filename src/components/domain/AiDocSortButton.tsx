@@ -4,13 +4,21 @@
  *   1. PDFs are rendered to page images locally (pdf.js); blank pages are
  *      dropped; photos are normalized.
  *   2. Combined scans (e.g. front+back of a tazkira on one page) are cut
- *      apart locally by gutter detection.
+ *      apart locally by gutter detection — but NEVER through content: a
+ *      "blank" band whose edges touch ink sits inside ONE document and is
+ *      rejected (fixes the halved پشت-تذکره bug).
  *   3. Every image is sent to the user's Cloudflare AI worker with the
  *      customer's CURRENT document slots — the model answers where each
  *      image belongs.
  *   4. Pieces of one page that all land in the same destination are re-joined
  *      (the original whole page is filed once) — resolveActions.
  *   5. Images are saved to their destinations and a short summary is shown.
+ *
+ * The pipeline is RESUMABLE: when any step fails (CORS, network, invalid
+ * JSON, quota…), the error shows a «تلاش دوباره» button that continues
+ * EXACTLY where it stopped — converted pages and already-classified chunks
+ * are never redone, so no quota is wasted. A «لغو» button stops a running
+ * job at any time.
  */
 
 import { useRef, useState } from "react";
@@ -19,15 +27,19 @@ import {
   AlertTriangle,
   CheckCircle2,
   Loader2,
+  RotateCcw,
   Settings2,
   Sparkles,
+  X,
 } from "lucide-react";
 import { db } from "../../db/schema";
 import {
   AiAllWorkersFailedError,
   ACCEPTED_MIME,
   aiChat,
+  buildChunks,
   buildDocSortMessages,
+  chunkLocalGroups,
   imageFileToJpeg,
   isBlankImage,
   parseDocSortReply,
@@ -36,23 +48,49 @@ import {
   splitCombinedImage,
   useAiWorkers,
   validateAiFile,
+  type DocSlotOption,
   type DocSortResult,
   type SortAction,
   type SortOriginal,
   type SortPiece,
 } from "../../lib/ai";
-import { createDocType } from "../../db/docTypes";
+import type { DocType } from "../../types";
+import { createDocType, getDocTypesForCustomer } from "../../db/docTypes";
 import { saveAttachmentDataUrl } from "../../db/attachments";
 import { dataUrlToSquareDataUrl, setCustomerPhoto } from "../../db/photos";
 import { customerFullName } from "../../db/customers";
 import { Modal } from "../ui/Modal";
+import { useDropTarget } from "../ui/DropZone";
 import { useToast } from "../../hooks/useToast";
 import { toPersianDigits } from "../../utils/jalali";
 
-/** Images per AI request (context/cost safety — extra images go in a 2nd batch). */
-const CHUNK = 6;
 /** Hard cap on images per run (after splitting). */
 const MAX_IMAGES = 18;
+
+/** A run that can be paused by an error and continued with «تلاش دوباره». */
+interface SortJob {
+  files: File[];
+  expanded: SortPiece[];
+  originals: SortOriginal[];
+  docTypes: DocType[];
+  slots: DocSlotOption[];
+  chunks: number[][];
+  results: DocSortResult[];
+  /** Next chunk index to classify (== chunks.length when all are done). */
+  nextChunk: number;
+  /** Computed once all chunks are classified. */
+  actions: SortAction[] | null;
+  newIdByLabel: Map<string, string>;
+  newLabels: string[];
+  /** Next action index to save (== actions.length when all are saved). */
+  appliedIdx: number;
+  truncated: boolean;
+  blankSkipped: number;
+  skippedPhoto: boolean;
+}
+
+/** Errors that retrying the same files will never fix (bad/empty input). */
+class DeterministicError extends Error {}
 
 interface Outcome {
   actions: SortAction[];
@@ -66,7 +104,7 @@ type RunState =
   | { t: "idle" }
   | { t: "busy"; label: string; percent: number }
   | { t: "done"; outcome: Outcome }
-  | { t: "error"; message: string; needsSetup?: boolean };
+  | { t: "error"; message: string; needsSetup?: boolean; canRetry?: boolean };
 
 export function AiDocSortButton({ customerId }: { customerId: string }) {
   const toast = useToast();
@@ -74,11 +112,229 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
   const hasWorker = (workers ?? []).some((w) => w.enabled && w.url.trim() && w.key.trim());
   const fileRef = useRef<HTMLInputElement>(null);
   const [run, setRun] = useState<RunState>({ t: "idle" });
+  /** The resumable job (null until the files are prepared). */
+  const jobRef = useRef<SortJob | null>(null);
+  /** Last picked files — lets a failed PREPARE retry without re-picking. */
+  const filesRef = useRef<File[] | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const cancelledRef = useRef(false);
 
   const stage = (label: string, percent: number) =>
     setRun((cur) => (cur.t === "busy" ? { t: "busy", label, percent } : cur));
 
   const pick = () => fileRef.current?.click();
+
+  /* ------------------------------ 1+2) prepare ----------------------------- */
+
+  const prepareJob = async (files: File[]): Promise<SortJob> => {
+    const pieces: SortPiece[] = [];
+    const originals: SortOriginal[] = [];
+    let truncated = false;
+    let blankSkipped = 0;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+      if (isPdf) {
+        const pages = await pdfToJpegs(file, (p) =>
+          stage(
+            `تبدیل PDF — صفحهٔ ${p.page.toLocaleString("fa-IR")} از ${p.totalPages.toLocaleString("fa-IR")}`,
+            4 + Math.round(((i + p.page / p.totalPages) / files.length) * 30),
+          ),
+        );
+        const base = file.name.replace(/\.pdf$/i, "");
+        for (let n = 0; n < pages.length; n++) {
+          if (await isBlankImage(pages[n])) {
+            blankSkipped++;
+            continue;
+          }
+          if (pieces.length >= MAX_IMAGES) {
+            truncated = true;
+            break;
+          }
+          const origin = `${base || "صفحه"}-ص${n + 1}.jpg`;
+          originals.push({ dataUrl: pages[n], origin });
+          pieces.push({ dataUrl: pages[n], origin, groupId: originals.length - 1 });
+        }
+      } else {
+        if (pieces.length >= MAX_IMAGES) {
+          truncated = true;
+          continue;
+        }
+        stage("آماده‌سازی فایل‌ها…", 4 + Math.round(((i + 1) / files.length) * 30));
+        const img = await imageFileToJpeg(file);
+        const origin = file.name || "تصویر.jpg";
+        originals.push({ dataUrl: img, origin });
+        pieces.push({ dataUrl: img, origin, groupId: originals.length - 1 });
+      }
+    }
+    if (pieces.length === 0) {
+      throw new DeterministicError(
+        blankSkipped > 0
+          ? "همه صفحه‌ها خالی بودند — فایل دیگری امتحان کنید."
+          : "از این فایل‌ها هیچ تصویری ساخته نشد — فایل دیگری امتحان کنید.",
+      );
+    }
+
+    // Cut combined scans apart (front+back on one page) — never through ink.
+    stage("بررسی صفحات ترکیبی…", 36);
+    const expanded: SortPiece[] = [];
+    for (const piece of pieces) {
+      const report = await splitCombinedImage(piece.dataUrl);
+      if (report.images.length === 1) {
+        expanded.push(piece);
+      } else {
+        const base = piece.origin.replace(/\.[a-z0-9]+$/i, "");
+        for (let n = 0; n < report.images.length; n++) {
+          if (expanded.length >= MAX_IMAGES) {
+            truncated = true;
+            break;
+          }
+          expanded.push({
+            dataUrl: report.images[n],
+            origin: `${base}-بخش${n + 1}.jpg`,
+            groupId: piece.groupId,
+          });
+        }
+      }
+    }
+
+    // Slots the AI may choose from: the global defaults (Settings) plus the
+    // slots that belong to THIS customer only. A slot another customer's AI
+    // run created is deliberately invisible here — new inputs never leak
+    // into every profile again.
+    const docTypes = (await getDocTypesForCustomer(customerId))
+      .filter((d) => !d.archivedAt)
+      .sort((a, b) => a.order - b.order);
+    return {
+      files,
+      expanded,
+      originals,
+      docTypes,
+      slots: docTypes.map((d) => ({ id: d.id, label: d.label })),
+      chunks: buildChunks(expanded),
+      results: [],
+      nextChunk: 0,
+      actions: null,
+      newIdByLabel: new Map(),
+      newLabels: [],
+      appliedIdx: 0,
+      truncated,
+      blankSkipped,
+      skippedPhoto: false,
+    };
+  };
+
+  /* --------------------------- 3+4) classify & save ------------------------- */
+
+  const runJob = async (job: SortJob) => {
+    /* ---- classify in chunks (resume: skip already-classified chunks) ---- */
+    for (let c = job.nextChunk; c < job.chunks.length; c++) {
+      if (cancelledRef.current) return;
+      const chunk = job.chunks[c];
+      const slice = chunk.map((idx) => job.expanded[idx].dataUrl);
+      const localGroups = chunkLocalGroups(job.expanded, chunk);
+      abortRef.current = new AbortController();
+      const { text } = await aiChat(buildDocSortMessages(slice, job.slots, localGroups), {
+        maxTokens: 1024,
+        temperature: 0.1,
+        signal: abortRef.current.signal,
+        onAttempt: ({ worker, index, total }) =>
+          stage(
+            total > 1 && index > 0
+              ? `حساب قبلی خطا داد — تلاش با «${worker.label}»…`
+              : `ارسال به هوش مصنوعی (${worker.label})…`,
+            40 + Math.round(((c + 0.6) / job.chunks.length) * 45),
+          ),
+      });
+      if (cancelledRef.current) return;
+      const part = parseDocSortReply(text, job.slots, slice.length);
+      job.results.push(...part.map((r) => ({ ...r, index: r.index + chunk[0] - 1 })));
+      job.nextChunk = c + 1;
+    }
+
+    /* ---- collapse same-destination cut groups, create new slots ---- */
+    if (!job.actions) {
+      stage("ذخیره مدارک…", 90);
+      const actions = resolveActions(job.expanded, job.originals, job.results);
+      for (const a of actions) {
+        if (a.target.kind !== "new") continue;
+        const key = a.target.label;
+        if (job.newIdByLabel.has(key)) continue;
+        const existing = job.docTypes.find((d) => d.label === key);
+        if (existing) {
+          job.newIdByLabel.set(key, existing.id);
+          continue;
+        }
+        // New slots are created for THIS customer only — other profiles keep
+        // their own clean slot list (defaults stay global via Settings).
+        const dt = await createDocType({ label: key, customerId });
+        job.newIdByLabel.set(key, dt.id);
+        job.newLabels.push(key);
+      }
+      job.actions = actions;
+      job.appliedIdx = 0;
+    }
+
+    /* ---- save (resume: continue from the action that failed) ---- */
+    const customer = await db.customers.get(customerId);
+    const customerName = customer ? customerFullName(customer) : "مشتری";
+    for (let i = job.appliedIdx; i < job.actions.length; i++) {
+      if (cancelledRef.current) return;
+      const a = job.actions[i];
+      if (a.target.kind === "photo") {
+        if (customer && !customer.photo) {
+          const square = await dataUrlToSquareDataUrl(a.image);
+          await setCustomerPhoto(customerId, square, customerName);
+        } else {
+          // Profile photo already exists — keep the user's choice, keep the image.
+          await saveAttachmentDataUrl(customerId, "other", a.image, "عکس شخصی.jpg");
+          job.skippedPhoto = true;
+        }
+      } else if (a.target.kind === "slot") {
+        await saveAttachmentDataUrl(customerId, a.target.slotId, a.image, `${a.target.label}.jpg`);
+      } else if (a.target.kind === "new") {
+        const slotId = job.newIdByLabel.get(a.target.label);
+        await saveAttachmentDataUrl(
+          customerId,
+          slotId ?? "other",
+          a.image,
+          slotId ? `${a.target.label}.jpg` : a.origin,
+        );
+      } else {
+        await saveAttachmentDataUrl(customerId, "other", a.image, a.origin);
+      }
+      job.appliedIdx = i + 1;
+    }
+
+    setRun({
+      t: "done",
+      outcome: {
+        actions: job.actions,
+        newSlots: [...job.newLabels],
+        skippedPhoto: job.skippedPhoto,
+        truncated: job.truncated,
+        blankSkipped: job.blankSkipped,
+      },
+    });
+    toast.success("مدارک ثبت شد");
+  };
+
+  /* -------------------------------- controls ------------------------------- */
+
+  const formatError = (e: unknown): { message: string; needsSetup?: boolean } => {
+    if (e instanceof AiAllWorkersFailedError) {
+      return {
+        message:
+          e.attempts.length === 0
+            ? "هیچ ورکر فعالی تنظیم نشده است."
+            : `همه حساب‌ها ناموفق بودند:\n${e.attempts.map((a) => `• ${a.label}: ${a.message}`).join("\n")}`,
+        needsSetup: e.attempts.length === 0,
+      };
+    }
+    return {
+      message: e instanceof Error ? e.message : "افزودن هوشمند مدارک با خطا متوقف شد.",
+    };
+  };
 
   const start = async (files: File[]) => {
     if (files.length === 0) return;
@@ -97,210 +353,62 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
         return;
       }
     }
-
+    cancelledRef.current = false;
+    filesRef.current = files;
+    jobRef.current = null;
     setRun({ t: "busy", label: "آماده‌سازی فایل‌ها…", percent: 4 });
     try {
-      /* ---- 1) convert: PDF → page images (blank pages dropped), photos ---- */
-      const pieces: SortPiece[] = [];
-      const originals: SortOriginal[] = [];
-      let truncated = false;
-      let blankSkipped = 0;
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-        if (isPdf) {
-          const pages = await pdfToJpegs(file, (p) =>
-            stage(
-              `تبدیل PDF — صفحهٔ ${p.page.toLocaleString("fa-IR")} از ${p.totalPages.toLocaleString("fa-IR")}`,
-              4 + Math.round(((i + p.page / p.totalPages) / files.length) * 30),
-            ),
-          );
-          const base = file.name.replace(/\.pdf$/i, "");
-          for (let n = 0; n < pages.length; n++) {
-            if (await isBlankImage(pages[n])) {
-              blankSkipped++;
-              continue;
-            }
-            if (pieces.length >= MAX_IMAGES) {
-              truncated = true;
-              break;
-            }
-            const origin = `${base || "صفحه"}-ص${n + 1}.jpg`;
-            originals.push({ dataUrl: pages[n], origin });
-            pieces.push({ dataUrl: pages[n], origin, groupId: originals.length - 1 });
-          }
-        } else {
-          if (pieces.length >= MAX_IMAGES) {
-            truncated = true;
-            continue;
-          }
-          stage("آماده‌سازی فایل‌ها…", 4 + Math.round(((i + 1) / files.length) * 30));
-          const img = await imageFileToJpeg(file);
-          const origin = file.name || "تصویر.jpg";
-          originals.push({ dataUrl: img, origin });
-          pieces.push({ dataUrl: img, origin, groupId: originals.length - 1 });
-        }
-      }
-      if (pieces.length === 0) {
-        setRun({
-          t: "error",
-          message:
-            blankSkipped > 0
-              ? "همه صفحه‌ها خالی بودند — فایل دیگری امتحان کنید."
-              : "از این فایل‌ها هیچ تصویری ساخته نشد — فایل دیگری امتحان کنید.",
-        });
-        return;
-      }
-
-      /* ---- 2) cut combined scans apart (front+back on one page) ---- */
-      stage("بررسی صفحات ترکیبی…", 36);
-      const expanded: SortPiece[] = [];
-      for (const piece of pieces) {
-        const report = await splitCombinedImage(piece.dataUrl);
-        if (report.images.length === 1) {
-          expanded.push(piece);
-        } else {
-          const base = piece.origin.replace(/\.[a-z0-9]+$/i, "");
-          for (let n = 0; n < report.images.length; n++) {
-            if (expanded.length >= MAX_IMAGES) {
-              truncated = true;
-              break;
-            }
-            expanded.push({
-              dataUrl: report.images[n],
-              origin: `${base}-بخش${n + 1}.jpg`,
-              groupId: piece.groupId,
-            });
-          }
-        }
-      }
-
-      /* ---- 3) classify in chunks (a cut group never straddles chunks) ---- */
-      const docTypes = (await db.docTypes.toArray())
-        .filter((d) => !d.archivedAt)
-        .sort((a, b) => a.order - b.order);
-      const slots = docTypes.map((d) => ({ id: d.id, label: d.label }));
-
-      const chunks: number[][] = [];
-      {
-        let cur: number[] = [];
-        for (let i = 0; i < expanded.length; i++) {
-          const start = i;
-          while (i + 1 < expanded.length && expanded[i + 1].groupId === expanded[start].groupId) i++;
-          const groupRun = Array.from({ length: i - start + 1 }, (_, k) => start + k);
-          if (cur.length > 0 && cur.length + groupRun.length > CHUNK) {
-            chunks.push(cur);
-            cur = [];
-          }
-          cur.push(...groupRun);
-        }
-        if (cur.length > 0) chunks.push(cur);
-      }
-
-      const results: DocSortResult[] = [];
-      for (let c = 0; c < chunks.length; c++) {
-        const chunk = chunks[c];
-        const slice = chunk.map((idx) => expanded[idx].dataUrl);
-        // Grouped pieces (cut from one page) → local 1-based indexes for the hint.
-        const localGroups: number[][] = [];
-        for (let k = 0; k < chunk.length; k++) {
-          const gid = expanded[chunk[k]].groupId;
-          const run: number[] = [k + 1];
-          while (k + 1 < chunk.length && expanded[chunk[k + 1]].groupId === gid) {
-            k++;
-            run.push(k + 1);
-          }
-          if (run.length >= 2) localGroups.push(run);
-        }
-        const { text } = await aiChat(buildDocSortMessages(slice, slots, localGroups), {
-          maxTokens: 1024,
-          temperature: 0.1,
-          onAttempt: ({ worker, index, total }) =>
-            stage(
-              total > 1 && index > 0
-                ? `حساب قبلی خطا داد — تلاش با «${worker.label}»…`
-                : `ارسال به هوش مصنوعی (${worker.label})…`,
-              40 + Math.round(((c + 0.6) / chunks.length) * 45),
-            ),
-        });
-        const part = parseDocSortReply(text, slots, slice.length);
-        results.push(...part.map((r) => ({ ...r, index: r.index + chunk[0] - 1 })));
-      }
-
-      /* ---- 4) collapse same-destination cut groups, then apply ---- */
-      stage("ذخیره مدارک…", 90);
-      const customer = await db.customers.get(customerId);
-      const customerName = customer ? customerFullName(customer) : "مشتری";
-      const actions = resolveActions(expanded, originals, results);
-
-      // Create AI-proposed slots first (dedupe by label).
-      const newLabels: string[] = [];
-      const newIdByLabel = new Map<string, string>();
-      for (const a of actions) {
-        if (a.target.kind !== "new") continue;
-        const key = a.target.label;
-        if (newIdByLabel.has(key)) continue;
-        const existing = docTypes.find((d) => d.label === key);
-        if (existing) {
-          newIdByLabel.set(key, existing.id);
-          continue;
-        }
-        const dt = await createDocType({ label: key });
-        newIdByLabel.set(key, dt.id);
-        newLabels.push(key);
-      }
-
-      let skippedPhoto = false;
-      for (const a of actions) {
-        if (a.target.kind === "photo") {
-          if (customer && !customer.photo) {
-            const square = await dataUrlToSquareDataUrl(a.image);
-            await setCustomerPhoto(customerId, square, customerName);
-          } else {
-            // Profile photo already exists — keep the user's choice, keep the image.
-            await saveAttachmentDataUrl(customerId, "other", a.image, "عکس شخصی.jpg");
-            skippedPhoto = true;
-          }
-        } else if (a.target.kind === "slot") {
-          await saveAttachmentDataUrl(customerId, a.target.slotId, a.image, `${a.target.label}.jpg`);
-        } else if (a.target.kind === "new") {
-          const slotId = newIdByLabel.get(a.target.label);
-          await saveAttachmentDataUrl(
-            customerId,
-            slotId ?? "other",
-            a.image,
-            slotId ? `${a.target.label}.jpg` : a.origin,
-          );
-        } else {
-          await saveAttachmentDataUrl(customerId, "other", a.image, a.origin);
-        }
-      }
-
-      setRun({
-        t: "done",
-        outcome: { actions, newSlots: newLabels, skippedPhoto, truncated, blankSkipped },
-      });
-      toast.success("مدارک ثبت شد");
+      const job = await prepareJob(files);
+      if (cancelledRef.current) return;
+      jobRef.current = job;
+      await runJob(job);
     } catch (e) {
-      if (e instanceof AiAllWorkersFailedError) {
-        setRun({
-          t: "error",
-          message:
-            e.attempts.length === 0
-              ? "هیچ ورکر فعالی تنظیم نشده است."
-              : `همه حساب‌ها ناموفق بودند:\n${e.attempts.map((a) => `• ${a.label}: ${a.message}`).join("\n")}`,
-          needsSetup: e.attempts.length === 0,
-        });
-      } else {
-        setRun({
-          t: "error",
-          message: e instanceof Error ? e.message : "افزودن هوشمند مدارک با خطا متوقف شد.",
-        });
-      }
+      if (cancelledRef.current) return;
+      const { message, needsSetup } = formatError(e);
+      setRun({
+        t: "error",
+        message,
+        needsSetup,
+        canRetry: !(e instanceof DeterministicError) && (jobRef.current !== null || !!filesRef.current),
+      });
     }
   };
 
+  /** Continue a failed run exactly where it stopped (no re-conversion, no
+   *  re-classification of finished chunks, no duplicate saves). */
+  const retry = async () => {
+    if (run.t === "busy") return;
+    const job = jobRef.current;
+    const resumable =
+      job !== null &&
+      (job.nextChunk < job.chunks.length || !job.actions || job.appliedIdx < job.actions.length);
+    if (job && resumable) {
+      cancelledRef.current = false;
+      setRun({ t: "busy", label: "ادامه از همان مرحله…", percent: 40 });
+      try {
+        await runJob(job);
+      } catch (e) {
+        if (cancelledRef.current) return;
+        const { message, needsSetup } = formatError(e);
+        setRun({ t: "error", message, needsSetup, canRetry: true });
+      }
+    } else if (filesRef.current && filesRef.current.length > 0) {
+      void start(filesRef.current);
+    }
+  };
+
+  const cancel = () => {
+    cancelledRef.current = true;
+    abortRef.current?.abort();
+    setRun({ t: "idle" });
+  };
+
   const busy = run.t === "busy";
+
+  // Dropping files straight onto the AI button starts the smart filing.
+  const aiDrop = useDropTarget((files) => {
+    if (!busy) void start(files);
+  });
 
   return (
     <>
@@ -320,9 +428,13 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
       {hasWorker ? (
         <button
           type="button"
-          className="group inline-flex items-center gap-1.5 rounded-full bg-gradient-to-l from-[#6366f1] via-[#8b5cf6] to-[#d946ef] px-3.5 py-1.5 text-[12.5px] font-bold text-white shadow-lg shadow-[#6366f1]/35 transition-all hover:shadow-[#6366f1]/55 hover:brightness-110 active:scale-95 disabled:cursor-wait disabled:opacity-70"
+          className={`group inline-flex items-center gap-1.5 rounded-full bg-gradient-to-l from-[#6366f1] via-[#8b5cf6] to-[#d946ef] px-3.5 py-1.5 text-[12.5px] font-bold text-white shadow-lg shadow-[#6366f1]/35 transition-all hover:shadow-[#6366f1]/55 hover:brightness-110 active:scale-95 disabled:cursor-wait disabled:opacity-70 ${
+            aiDrop.hovering ? "scale-105 ring-2 ring-white/80 ring-offset-2 ring-offset-transparent brightness-110" : ""
+          }`}
           onClick={pick}
           disabled={busy}
+          title="انتخاب فایل — یا فایل‌ها را همین‌جا رها کنید"
+          {...aiDrop.dropHandlers}
         >
           {busy ? (
             <Loader2 size={15} className="animate-spin" />
@@ -341,8 +453,20 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
         </Link>
       )}
 
-      {/* ---- progress ---- */}
-      <Modal open={busy} onClose={() => undefined} title="افزودن هوشمند مدارک" size="sm">
+      {/* ---- progress (with cancel) ---- */}
+      <Modal
+        open={busy}
+        onClose={() => undefined}
+        title="افزودن هوشمند مدارک"
+        size="sm"
+        footer={
+          <div className="flex justify-end">
+            <button className="btn btn-glass btn-sm" onClick={cancel}>
+              <X size={14} /> لغو
+            </button>
+          </div>
+        }
+      >
         <div className="flex flex-col gap-4 py-1">
           <div className="flex items-center gap-2.5 text-[13px] font-semibold">
             <Loader2 size={16} className="animate-spin text-[#6366f1]" />
@@ -376,6 +500,9 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
             {run.outcome.newSlots.length > 0 && (
               <div className="rounded-2xl bg-brand-500/8 px-3.5 py-2.5 text-[12px] leading-5">
                 بخش جدید: <b>{run.outcome.newSlots.join("، ")}</b>
+                <span className="text-ink-500 dark:text-ink-400">
+                  {" "}— فقط برای همین مشتری اضافه شد؛ بقیهٔ پروفایل‌ها تغییری نمی‌کنند.
+                </span>
               </div>
             )}
             {(run.outcome.truncated || run.outcome.blankSkipped > 0 || run.outcome.skippedPhoto) && (
@@ -409,7 +536,7 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
         )}
       </Modal>
 
-      {/* ---- error ---- */}
+      {/* ---- error (with retry) ---- */}
       <Modal
         open={run.t === "error"}
         onClose={() => setRun({ t: "idle" })}
@@ -424,16 +551,33 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
             ) : (
               <span />
             )}
-            <button className="btn btn-primary" onClick={() => setRun({ t: "idle" })}>
-              بستن
-            </button>
+            <div className="flex items-center gap-2">
+              {run.t === "error" && run.canRetry && (
+                <button className="btn btn-primary" onClick={() => void retry()}>
+                  <RotateCcw size={14} /> تلاش دوباره
+                </button>
+              )}
+              <button
+                className={run.t === "error" && run.canRetry ? "btn btn-glass" : "btn btn-primary"}
+                onClick={() => setRun({ t: "idle" })}
+              >
+                بستن
+              </button>
+            </div>
           </div>
         }
       >
         {run.t === "error" && (
-          <div className="flex items-start gap-2.5 rounded-2xl bg-[#ef4444]/8 px-3.5 py-3 text-[12.5px] leading-6 text-[#b91c1c] dark:text-[#f87171]">
-            <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-            <span className="whitespace-pre-line">{run.message}</span>
+          <div className="flex flex-col gap-2.5">
+            <div className="flex items-start gap-2.5 rounded-2xl bg-[#ef4444]/8 px-3.5 py-3 text-[12.5px] leading-6 text-[#b91c1c] dark:text-[#f87171]">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+              <span className="whitespace-pre-line">{run.message}</span>
+            </div>
+            {run.canRetry && (
+              <p className="text-[11px] leading-5 text-ink-500 dark:text-ink-400">
+                با «تلاش دوباره» از همان‌جایی که خطا داد ادامه می‌دهد — کارهای انجام‌شده تکرار نمی‌شود.
+              </p>
+            )}
           </div>
         )}
       </Modal>

@@ -24,6 +24,7 @@ import { useConfirm } from "../hooks/useConfirm";
 import { useToast } from "../hooks/useToast";
 import { formatJalali, isoFromDate, toPersianDigits } from "../utils/jalali";
 import type { Customer, ListFolder, Representative, Tag, VisaRequest } from "../types";
+import { requestStatusFa } from "../types";
 
 function ArchiveRow({
   title,
@@ -184,7 +185,7 @@ export function ArchivePage() {
                     <ArchiveRow
                       key={r.id}
                       title={r.visaType ?? "درخواست ویزا"}
-                      subtitle={r.issued ? "صادر شده" : "در حال کار"}
+                      subtitle={requestStatusFa(r)}
                       archivedAt={r.archivedAt}
                       onRestore={async () => {
                         await restoreReq(r.id, r.visaType);

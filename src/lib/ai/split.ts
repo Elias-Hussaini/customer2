@@ -42,16 +42,25 @@ export const DEFAULT_GUTTER_OPTIONS: GutterOptions = {
   centerMax: 0.8,
 };
 
+/** One detected blank band, in fractions of the split dimension. */
+export interface GutterRun {
+  /** Fraction where the cut should go (band center). */
+  center: number;
+  /** Band start/end fractions (the blank region itself). */
+  start: number;
+  end: number;
+}
+
 /**
- * Find gutter-band centers (as fractions of the dimension) from per-line
- * luminance profiles. Pure — no canvas, no DOM.
+ * Find gutter bands (as fractions of the dimension) from per-line luminance
+ * profiles. Pure — no canvas, no DOM.
  *
  * Returns at most 2 positions (→ at most 3 pieces) in ascending order.
  */
-export function findGutterBands(
+export function findGutterRuns(
   profiles: LineProfile[],
   opts: GutterOptions = DEFAULT_GUTTER_OPTIONS,
-): number[] {
+): GutterRun[] {
   const n = profiles.length;
   if (n < 8) return [];
   const minLen = Math.max(2, Math.round(opts.minBandFrac * n));
@@ -84,19 +93,27 @@ export function findGutterBands(
     i = j;
   }
 
-  const centers: number[] = [];
+  const out: GutterRun[] = [];
   for (const run of runs) {
     const len = run.end - run.start + 1;
     if (len < minLen || len > maxLen) continue;
     const center = (run.start + run.end) / 2;
     const frac = center / n;
     if (frac < opts.centerMin || frac > opts.centerMax) continue;
-    centers.push(frac);
-    if (centers.length >= 2) break;
+    out.push({ center: frac, start: run.start / n, end: (run.end + 1) / n });
+    if (out.length >= 2) break;
   }
   // Two bands must be separated enough to leave three usable pieces.
-  if (centers.length === 2 && centers[1] - centers[0] < 0.15) return centers.slice(0, 1);
-  return centers;
+  if (out.length === 2 && out[1].center - out[0].center < 0.15) return out.slice(0, 1);
+  return out;
+}
+
+/** Backwards-compatible wrapper: just the cut positions. */
+export function findGutterBands(
+  profiles: LineProfile[],
+  opts: GutterOptions = DEFAULT_GUTTER_OPTIONS,
+): number[] {
+  return findGutterRuns(profiles, opts).map((r) => r.center);
 }
 
 /* ------------------------------- canvas part ------------------------------ */
@@ -110,7 +127,8 @@ async function dataUrlToBitmap(dataUrl: string): Promise<ImageBitmap> {
   return createImageBitmap(blob);
 }
 
-interface GrayImage {
+/** Grayscale buffer used by all local image analysis (exported for tests). */
+export interface GrayImage {
   data: Uint8ClampedArray; // w*h luminance
   w: number;
   h: number;
@@ -186,6 +204,176 @@ function regionHasContent(img: GrayImage, from: number, to: number, vertical: bo
   return max - min > 45 && dark / Math.max(1, total) > 0.01;
 }
 
+/* -------------------- cut-through-content guard (the halving bug) --------- */
+
+/** Width of the strips checked beside a candidate band (fraction of dim). */
+const EDGE_STRIP_FRAC = 0.02;
+/** Pixels darker than this count as ink in the strips. */
+const INK_DARK = 140;
+/** Strip ink fraction above which content is sliced → not a gutter. */
+const STRIP_INK_LIMIT = 0.015;
+/** One line crossing ≥ this share of the strip = a sliced box border. */
+const RULE_LINE_FRAC = 0.85;
+
+export interface StripStats {
+  /** Fraction of ink pixels in the strip. */
+  ink: number;
+  /** True when a solid line (box border) runs through the strip. */
+  rule: boolean;
+}
+
+/**
+ * Measure ink inside one narrow strip [from, to) of the split axis.
+ * Pure — works on the gray buffer, no canvas.
+ */
+export function stripInkStats(
+  img: GrayImage,
+  from: number,
+  to: number,
+  vertical: boolean,
+): StripStats {
+  if (to - from < 1) return { ink: 0, rule: false };
+  const inner = vertical ? img.h : img.w;
+  const stepInner = Math.max(1, Math.floor(inner / 200));
+  let dark = 0;
+  let total = 0;
+  let rule = false;
+  for (let j = 0; j < inner; j += stepInner) {
+    let d = 0;
+    let n = 0;
+    for (let k = from; k < to; k++) {
+      const p = vertical ? img.data[j * img.w + k] : img.data[k * img.w + j];
+      n++;
+      if (p < INK_DARK) d++;
+    }
+    if (n > 0 && d / n >= RULE_LINE_FRAC) rule = true;
+    dark += d;
+    total += n;
+  }
+  return { ink: total > 0 ? dark / total : 0, rule };
+}
+
+/**
+ * A REAL gutter between two documents is blank paper/bed on BOTH sides of the
+ * band — documents never have ink touching the gap. When ink or a box border
+ * sits right beside the "blank" band, the band is INSIDE one document (an
+ * internal white area, e.g. the middle of a paper تذکره back) and cutting
+ * there would slice that document in half. Such bands are rejected here.
+ */
+export function bandSlicesContent(
+  img: GrayImage,
+  run: { start: number; end: number },
+  vertical: boolean,
+): boolean {
+  const outer = vertical ? img.w : img.h;
+  const strip = Math.max(2, Math.round(outer * EDGE_STRIP_FRAC));
+  const a = Math.max(0, Math.round(run.start * outer));
+  const b = Math.min(outer, Math.round(run.end * outer));
+  const left = stripInkStats(img, Math.max(0, a - strip), a, vertical);
+  if (left.ink >= STRIP_INK_LIMIT || left.rule) return true;
+  const right = stripInkStats(img, b, Math.min(outer, b + strip), vertical);
+  if (right.ink >= STRIP_INK_LIMIT || right.rule) return true;
+  return false;
+}
+
+/* ------------------- sheet-edge rescue (combined scans) -------------------- */
+
+/** How many levels below the background a paper/shadow column must be. */
+const SHEET_EDGE_DROP = 10;
+/** A paper run must span at least this share of the width to count. */
+const SHEET_EDGE_MIN_RUN = 0.3;
+/** The physical gutter between two sheets must be at least this wide. */
+const SHEET_EDGE_MIN_GAP = 0.03;
+
+/**
+ * When ink touches a band's edges, the band may still be a REAL gutter
+ * between two sheets whose blank paper margins merged into the band (light
+ * paper on a light bed passes the blank-line test). Inside such a band:
+ *
+ *   - rows that still show the SHEET (paper tone or its edge shadow, a long
+ *     run of pixels darker than the bed) are "covered";
+ *   - the physical gutter rows show NOTHING (pure bed) — "uncovered".
+ *
+ * ONE document with an internal white gap keeps the paper visible through
+ * the whole band → a single covered block → never cut. TWO separate sheets
+ * produce covered-block / uncovered-gutter / covered-block → cut through the
+ * gutter. Returns the cut fraction, or null when this is one document.
+ */
+export function findSheetEdgeCut(
+  img: GrayImage,
+  run: { start: number; end: number },
+  vertical: boolean,
+): number | null {
+  const outer = vertical ? img.w : img.h;
+  const inner = vertical ? img.h : img.w;
+  const a = Math.max(0, Math.round(run.start * outer));
+  const b = Math.min(outer, Math.round(run.end * outer));
+  if (b - a < 6) return null;
+
+  const stepInner = Math.max(1, Math.floor(inner / 128));
+
+  // Background = the bed/gutter level (bright percentile of the band).
+  const samples: number[] = [];
+  const stepOuter = Math.max(1, Math.floor((b - a) / 64));
+  for (let k = a; k < b; k += stepOuter) {
+    for (let j = 0; j < inner; j += stepInner) {
+      samples.push(vertical ? img.data[j * img.w + k] : img.data[k * img.w + j]);
+    }
+  }
+  samples.sort((x, y) => x - y);
+  const bg = samples[Math.min(samples.length - 1, Math.floor(samples.length * 0.95))];
+  const paperLimit = bg - SHEET_EDGE_DROP;
+
+  // Per line: longest contiguous run of paper/shadow columns.
+  const cols = Math.ceil(inner / stepInner);
+  const minRun = Math.ceil(SHEET_EDGE_MIN_RUN * cols);
+  const covered: boolean[] = [];
+  for (let k = a; k < b; k++) {
+    let best = 0;
+    let cur = 0;
+    for (let j = 0; j < inner; j += stepInner) {
+      const p = vertical ? img.data[j * img.w + k] : img.data[k * img.w + j];
+      if (p <= paperLimit) {
+        cur++;
+        if (cur > best) best = cur;
+      } else {
+        cur = 0;
+      }
+    }
+    covered.push(best >= minRun && best < cols * 0.98);
+  }
+
+  // Contiguous covered blocks = sheet extents inside the band.
+  const blocks: { start: number; end: number }[] = [];
+  let i = 0;
+  while (i < covered.length) {
+    if (!covered[i]) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < covered.length && covered[j]) j++;
+    blocks.push({ start: a + i, end: a + j - 1 });
+    i = j;
+  }
+  if (blocks.length < 2) return null;
+
+  // Cut through the widest uncovered gap (the physical gutter).
+  let bestGap = 0;
+  let cut = -1;
+  for (let k = 0; k + 1 < blocks.length; k++) {
+    const gapStart = blocks[k].end;
+    const gapEnd = blocks[k + 1].start;
+    const gap = (gapEnd - gapStart) / outer;
+    if (gap > bestGap) {
+      bestGap = gap;
+      cut = (gapStart + gapEnd) / 2 / outer;
+    }
+  }
+  if (bestGap < SHEET_EDGE_MIN_GAP) return null;
+  return cut;
+}
+
 function cropToJpeg(
   bitmap: ImageBitmap,
   vertical: boolean,
@@ -238,7 +426,22 @@ export async function splitCombinedImage(dataUrl: string): Promise<SplitReport> 
         for (let x = 0; x < lines; x += step) {
           profiles.push(lineProfile(gray, x, vertical, 1));
         }
-        const bands = findGutterBands(profiles);
+        const runs = findGutterRuns(profiles);
+        if (runs.length === 0) continue;
+        // A band whose edges touch ink/box-borders is usually INSIDE one
+        // document (e.g. the white middle of a paper تذکره back) — cutting
+        // there would halve the document. The only exception: two separate
+        // sheets whose blank margins merged into the band leave thin shadow
+        // edges inside it (findSheetEdgeCut) — a true combined scan.
+        const bands: number[] = [];
+        for (const run of runs) {
+          if (!bandSlicesContent(gray, run, vertical)) {
+            bands.push(run.center); // clean gutter margins — safe to cut
+          } else {
+            const rescued = findSheetEdgeCut(gray, run, vertical);
+            if (rescued !== null) bands.push(rescued);
+          }
+        }
         if (bands.length === 0) continue;
         // Validate that every resulting piece actually has content.
         const cuts = [0, ...bands, 1];

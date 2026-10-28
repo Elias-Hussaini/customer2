@@ -7,6 +7,7 @@ import { MoreSheet } from "./MoreSheet";
 import { QuickModals } from "../domain/QuickModals";
 import { GlobalHotkeys } from "./GlobalHotkeys";
 import { useRegisterPwaUpdate } from "../../pwa/usePwaUpdate";
+import { forceUnlockBodyScroll } from "../ui/Modal";
 
 /** Application shell: background, top bar, routed content and floating dock. */
 export function AppShell() {
@@ -14,7 +15,10 @@ export function AppShell() {
   useRegisterPwaUpdate();
 
   // Scroll to top on navigation (dock + bottom sheets assume top-anchored pages).
+  // Also self-heal the body scroll lock: even if some dialog ever left it stuck,
+  // moving between sections always brings the scrollbar back (no refresh needed).
   useEffect(() => {
+    forceUnlockBodyScroll();
     window.scrollTo({ top: 0 });
   }, [location.pathname]);
 

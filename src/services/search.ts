@@ -6,6 +6,7 @@ import type {
   Tag,
   VisaRequest,
 } from "../types";
+import { requestStatusFa } from "../types";
 import { normalizeFa, normalizePassport, normalizePhone } from "../utils/normalize";
 import { customerFullName } from "../db/customers";
 
@@ -96,6 +97,8 @@ export interface SearchFilters {
   listId?: string | null;
   visaType?: string | null;
   issued?: boolean | null;
+  /** "rejected" status filter — when set, overrides `issued` for status semantics. */
+  rejected?: boolean | null;
   tagId?: string | null;
   currency?: string | null;
   dateFrom?: string | null;
@@ -106,7 +109,8 @@ function requestPassesFilters(r: VisaRequest, ds: SearchDataset, f: SearchFilter
   if (f.representativeId && r.representativeId !== f.representativeId) return false;
   if (f.listId && r.listId !== f.listId) return false;
   if (f.visaType && r.visaType !== f.visaType) return false;
-  if (f.issued != null && r.issued !== f.issued) return false;
+  if (f.rejected != null && Boolean(r.rejected) !== f.rejected) return false;
+  if (f.rejected == null && f.issued != null && r.issued !== f.issued) return false;
   if (f.tagId && !r.tags.includes(f.tagId)) return false;
   if (f.currency && r.currency !== f.currency) return false;
   if (f.dateFrom && r.registrationDate < f.dateFrom) return false;
@@ -201,7 +205,7 @@ export function searchDataset(query: string, ds: SearchDataset, filters: SearchF
           title: customer ? customerFullName(customer) : "درخواست",
           subtitle: [
             r.visaType,
-            r.issued ? "صادر شده" : "در حال کار",
+            requestStatusFa(r),
             ds.repsById.get(r.representativeId ?? "")?.name,
           ]
             .filter(Boolean)

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { FileBarChart, FileDown, Wallet } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { CalendarRange, FileBarChart, FileDown, Wallet } from "lucide-react";
 import { PageHeader } from "../components/ui/StatCard";
 import { DataTable, type Column } from "../components/ui/DataTable";
 import { EmptyState } from "../components/ui/EmptyState";
@@ -10,8 +11,18 @@ import { ExportDialog } from "../components/exports/ExportDialog";
 import { useCustomers, useLists, usePayments, useRepresentatives, useRequests, useTags } from "../hooks/useData";
 import { computeBalances } from "../services/stats";
 import { formatJalali, toPersianDigits } from "../utils/jalali";
+import {
+  REQUEST_DATE_BASIS_OPTIONS,
+  basisRangePlaceholders,
+  isRequestDateBasis,
+  quickDateRanges,
+  requestBasisLabel,
+  requestWithinRange,
+  type RequestDateBasis,
+} from "../utils/requestDateFilter";
 import { formatMoney } from "../utils/num";
 import { customerFullName } from "../db/customers";
+import { requestStatusFa } from "../types";
 import type { Representative } from "../types";
 
 type ReportKind = "requests" | "payments" | "balances";
@@ -28,6 +39,7 @@ interface BalanceRow {
 }
 
 export function ReportsPage() {
+  const navigate = useNavigate();
   const requests = useRequests();
   const payments = usePayments();
   const customers = useCustomers();
@@ -40,6 +52,8 @@ export function ReportsPage() {
   const [listId, setListId] = useState("");
   const [status, setStatus] = useState("");
   const [tagId, setTagId] = useState("");
+  /** Which request date (registration / issuance / rejection) the range applies to. */
+  const [dateBasis, setDateBasis] = useState<RequestDateBasis>("registration");
   const [from, setFrom] = useState<string | null>(null);
   const [to, setTo] = useState<string | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
@@ -49,13 +63,13 @@ export function ReportsPage() {
       if (repId && r.representativeId !== repId) return false;
       if (listId && r.listId !== listId) return false;
       if (status === "issued" && !r.issued) return false;
-      if (status === "pending" && r.issued) return false;
+      if (status === "pending" && (r.issued || r.rejected)) return false;
+      if (status === "rejected" && !r.rejected) return false;
       if (tagId && !r.tags.includes(tagId)) return false;
-      if (from && r.registrationDate < from) return false;
-      if (to && r.registrationDate > to) return false;
+      if (!requestWithinRange(r, dateBasis, from, to)) return false;
       return true;
     });
-  }, [requests, repId, listId, status, tagId, from, to]);
+  }, [requests, repId, listId, status, tagId, dateBasis, from, to]);
 
   const filteredPayments = useMemo(() => {
     return (payments ?? []).filter((p) => {
@@ -100,6 +114,7 @@ export function ReportsPage() {
     { key: "registrationDate", header: "تاریخ ثبت" },
     { key: "status", header: "وضعیت" },
     { key: "issuedAt", header: "تاریخ صدور" },
+    { key: "rejectedAt", header: "تاریخ رد" },
     { key: "notes", header: "توضیحات" },
   ];
 
@@ -114,8 +129,9 @@ export function ReportsPage() {
       amount: r.quotedAmount ?? "",
       currency: r.currency === "USD" ? "دلار" : r.currency === "IRT" ? "تومان" : "",
       registrationDate: formatJalali(r.registrationDate),
-      status: r.issued ? "صادر شده" : "در حال کار",
+      status: requestStatusFa(r),
       issuedAt: r.issuedAt ? formatJalali(r.issuedAt) : "",
+      rejectedAt: r.rejectedAt ? formatJalali(r.rejectedAt) : "",
       notes: r.notes ?? "",
     };
   });
@@ -175,8 +191,22 @@ export function ReportsPage() {
             : (row: BalanceRow) => <span className="num">{toPersianDigits(row[c.key as "total" | "issued"])}</span>,
   }));
 
+  const rangePlaceholders = basisRangePlaceholders(dateBasis);
+  const quickRanges = useMemo(() => quickDateRanges(), []);
+
+  const clearAllFilters = () => {
+    setRepId("");
+    setListId("");
+    setStatus("");
+    setTagId("");
+    setDateBasis("registration");
+    setFrom(null);
+    setTo(null);
+  };
+
   const filtersBar = (
-    <div className="glass flex flex-wrap items-center gap-2 rounded-3xl p-3.5">
+    <div className="glass flex flex-col gap-2.5 rounded-3xl p-3.5">
+      <div className="flex flex-wrap items-center gap-2">
       <FilterSelect
         ariaLabel="نماینده"
         value={repId}
@@ -186,55 +216,97 @@ export function ReportsPage() {
           ...(representatives ?? []).map((r) => ({ value: r.id, label: r.name })),
         ]}
       />
-      {kind === "requests" && (
+      {kind !== "payments" && (
         <>
-          <FilterSelect
-            ariaLabel="لیست"
-            value={listId}
-            onChange={setListId}
-            options={[
-              { value: "", label: "همه لیست‌ها" },
-              ...(lists ?? []).map((l) => ({ value: l.id, label: l.name })),
-            ]}
-          />
-          <FilterSelect
-            ariaLabel="وضعیت"
-            value={status}
-            onChange={setStatus}
-            options={[
-              { value: "", label: "همه وضعیت‌ها" },
-              { value: "issued", label: "صادر شده" },
-              { value: "pending", label: "در حال کار" },
-            ]}
-          />
-          <FilterSelect
-            ariaLabel="تگ"
-            value={tagId}
-            onChange={setTagId}
-            options={[
-              { value: "", label: "همه تگ‌ها" },
-              ...(tags ?? []).map((t) => ({ value: t.id, label: t.name })),
-            ]}
-          />
+          {kind === "requests" && (
+            <>
+              <FilterSelect
+                ariaLabel="لیست"
+                value={listId}
+                onChange={setListId}
+                options={[
+                  { value: "", label: "همه لیست‌ها" },
+                  ...(lists ?? []).map((l) => ({ value: l.id, label: l.name })),
+                ]}
+              />
+              <FilterSelect
+                ariaLabel="وضعیت"
+                value={status}
+                onChange={setStatus}
+                options={[
+                  { value: "", label: "همه وضعیت‌ها" },
+                  { value: "issued", label: "صادر شده" },
+                  { value: "pending", label: "در حال کار" },
+                  { value: "rejected", label: "رد شده" },
+                ]}
+              />
+              <FilterSelect
+                ariaLabel="تگ"
+                value={tagId}
+                onChange={setTagId}
+                options={[
+                  { value: "", label: "همه تگ‌ها" },
+                  ...(tags ?? []).map((t) => ({ value: t.id, label: t.name })),
+                ]}
+              />
+            </>
+          )}
+          <div className="flex items-center gap-1.5">
+            <span className="hidden shrink-0 text-[11px] font-bold text-ink-400 sm:inline">مبنای بازه:</span>
+            <FilterSelect
+              ariaLabel="مبنای بازه تاریخ"
+              value={dateBasis}
+              onChange={(v) => setDateBasis(isRequestDateBasis(v) ? v : "registration")}
+              options={REQUEST_DATE_BASIS_OPTIONS}
+            />
+          </div>
         </>
       )}
-      <JalaliDatePicker value={from} onChange={setFrom} placeholder="از تاریخ" className="w-40" />
-      <JalaliDatePicker value={to} onChange={setTo} placeholder="تا تاریخ" className="w-40" />
+      <JalaliDatePicker
+        value={from}
+        onChange={setFrom}
+        placeholder={kind === "payments" ? "از تاریخ" : rangePlaceholders.from}
+        className="w-40"
+      />
+      <JalaliDatePicker
+        value={to}
+        onChange={setTo}
+        placeholder={kind === "payments" ? "تا تاریخ" : rangePlaceholders.to}
+        className="w-40"
+      />
       {(repId || listId || status || tagId || from || to) && (
-        <button
-          className="btn btn-ghost btn-sm mr-auto"
-          onClick={() => {
-            setRepId("");
-            setListId("");
-            setStatus("");
-            setTagId("");
-            setFrom(null);
-            setTo(null);
-          }}
-        >
+        <button className="btn btn-ghost btn-sm mr-auto" onClick={clearAllFilters}>
           پاک‌کردن فیلترها
         </button>
       )}
+      </div>
+      {/* One-click ranges — applied to the basis date (ثبت/صدور/رد) on request reports */}
+      <div className="flex flex-wrap items-center gap-1.5 border-t border-ink-900/5 pt-2 dark:border-white/5">
+        <span className="shrink-0 text-[11px] font-bold text-ink-400">بازه سریع:</span>
+        {quickRanges.map((q) => {
+          const active = from === q.from && to === q.to;
+          return (
+            <button
+              key={q.key}
+              type="button"
+              className={`rounded-full px-3 py-1 text-[11px] font-bold transition-all ${
+                active
+                  ? "bg-brand-500 text-white shadow-[0_4px_12px_-4px_rgba(99,91,255,0.5)]"
+                  : "bg-ink-900/5 text-ink-500 hover:bg-brand-500/12 hover:text-brand-600 dark:bg-white/5 dark:text-ink-400 dark:hover:text-brand-300"
+              }`}
+              onClick={() => {
+                setFrom(q.from);
+                setTo(q.to);
+              }}
+            >
+              {q.label}
+            </button>
+          );
+        })}
+        {kind !== "payments" && dateBasis !== "registration" && (from || to) && (
+          <span className="text-[11px] text-ink-400">بازه بر اساس «{requestBasisLabel(dateBasis)}» اعمال می‌شود</span>
+        )}
+      </div>
     </div>
   );
 
@@ -244,15 +316,39 @@ export function ReportsPage() {
     return acc;
   }, [filteredPayments]);
 
+  /** Human-readable summary of the active filters — printed on PDF/PNG exports. */
+  const repName = (id: string) => (representatives ?? []).find((r) => r.id === id)?.name ?? "";
+  const rangeText = from || to ? `${from ? formatJalali(from) : "…"} تا ${to ? formatJalali(to) : "…"}` : null;
+  const statusLabel =
+    status === "issued" ? "صادر شده" : status === "pending" ? "در حال کار" : status === "rejected" ? "رد شده" : "";
+  const exportSubtitle =
+    kind === "payments"
+      ? [repId ? `نماینده: ${repName(repId)}` : null, rangeText ? `تاریخ پرداخت: ${rangeText}` : null]
+          .filter(Boolean)
+          .join(" • ")
+      : [
+          repId ? `نماینده: ${repName(repId)}` : null,
+          listId ? `لیست: ${lists?.find((l) => l.id === listId)?.name ?? ""}` : null,
+          status ? `وضعیت: ${statusLabel}` : null,
+          rangeText ? `${requestBasisLabel(dateBasis)}: ${rangeText}` : null,
+        ]
+          .filter(Boolean)
+          .join(" • ");
+
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
         title="گزارش‌ها"
         subtitle="گزارش بگیرید و در قالب اکسل، CSV، PDF یا تصویر خروجی بگیرید"
         actions={
-          <button className="btn btn-primary btn-sm" onClick={() => setExportOpen(true)}>
-            <FileDown size={14} /> خروجی گزارش
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button className="btn btn-glass btn-sm" onClick={() => navigate("/stats")}>
+              <CalendarRange size={14} /> آمار ماهانه
+            </button>
+            <button className="btn btn-primary btn-sm" onClick={() => setExportOpen(true)}>
+              <FileDown size={14} /> خروجی گزارش
+            </button>
+          </div>
         }
       />
 
@@ -308,17 +404,59 @@ export function ReportsPage() {
               render: (r) => <span className="num">{formatJalali(r.registrationDate)}</span>,
             },
             {
+              key: "issuedAt",
+              header: "تاریخ صدور",
+              sortValue: (r) => r.issuedAt ?? "",
+              render: (r) =>
+                r.issuedAt ? <span className="num font-semibold text-[#0b9e6e]">{formatJalali(r.issuedAt)}</span> : "—",
+            },
+            {
+              key: "rejectedAt",
+              header: "تاریخ رد",
+              sortValue: (r) => r.rejectedAt ?? "",
+              render: (r) =>
+                r.rejectedAt ? (
+                  <span className="num font-semibold text-[#dc3535] dark:text-[#f87b7b]">{formatJalali(r.rejectedAt)}</span>
+                ) : (
+                  "—"
+                ),
+            },
+            {
               key: "status",
               header: "وضعیت",
               align: "center",
-              sortValue: (r) => (r.issued ? 1 : 0),
-              render: (r) => <StatusPill issued={r.issued} />,
+              sortValue: (r) => (r.rejected && !r.issued ? 2 : r.issued ? 1 : 0),
+              render: (r) => <StatusPill issued={r.issued} rejected={r.rejected} />,
             },
           ]}
           rows={filteredRequests}
           rowKey={(r) => r.id}
           loading={requests === undefined}
           initialSort={{ key: "registrationDate", dir: "desc" }}
+          mobileCard={(r) => {
+            const c = (customers ?? []).find((x) => x.id === r.customerId);
+            return (
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate text-[13px] font-bold">{c ? customerFullName(c) : "—"}</span>
+                  <StatusPill issued={r.issued} rejected={r.rejected} />
+                </div>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-ink-500 dark:text-ink-400">
+                  <span>
+                    ثبت: <span className="num">{formatJalali(r.registrationDate)}</span>
+                  </span>
+                  <span>
+                    صدور: <span className="num">{r.issuedAt ? formatJalali(r.issuedAt) : "—"}</span>
+                  </span>
+                  {r.rejectedAt && (
+                    <span className="text-[#dc3535] dark:text-[#f87b7b]">
+                      رد: <span className="num">{formatJalali(r.rejectedAt)}</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          }}
           empty={<EmptyState icon={FileBarChart} title="داده‌ای برای گزارش نیست" compact />}
         />
       )}
@@ -383,6 +521,7 @@ export function ReportsPage() {
         title={
           kind === "requests" ? "گزارش درخواست‌ها" : kind === "payments" ? "گزارش پرداخت‌ها" : "گزارش مانده نمایندگان"
         }
+        subtitle={exportSubtitle || undefined}
         rows={
           kind === "requests" ? requestExportRows : kind === "payments" ? paymentExportRows : balanceExportRows
         }

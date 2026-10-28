@@ -1,5 +1,4 @@
-import type { ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Archive, FileDown, FilePenLine, FilePlus2, Trash2 } from "lucide-react";
 import { PageHeader } from "../components/ui/StatCard";
@@ -13,6 +12,8 @@ import { CustomerFormModal } from "../components/domain/CustomerFormModal";
 import { ProfilePhotoCard } from "../components/domain/ProfilePhotoCard";
 import { RequestsTable } from "../components/domain/RequestsTable";
 import { ExportDialog } from "../components/exports/ExportDialog";
+import { DroppedFilesModal } from "../components/domain/DroppedFilesModal";
+import { FileDropOverlay, useDropTarget, useFilesDragging } from "../components/ui/DropZone";
 import { EmptyState } from "../components/ui/EmptyState";
 import { archiveCustomer, deleteCustomer, customerFullName } from "../db/customers";
 import {
@@ -30,6 +31,7 @@ import { useToast } from "../hooks/useToast";
 import { formatJalali, formatDateByMode } from "../utils/jalali";
 import { uiActions } from "../components/layout/uiStore";
 import { toPersianDigits } from "../utils/jalali";
+import { requestStatusFa } from "../types";
 
 interface BaseFieldDef {
   key: keyof import("../types").Customer;
@@ -71,6 +73,15 @@ export function CustomerDetailPage() {
 
   const [editOpen, setEditOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  /** Files dropped anywhere on the profile — waiting for a destination. */
+  const [droppedFiles, setDroppedFiles] = useState<File[] | null>(null);
+
+  // Full-profile drag & drop: overlay + window navigation guard + a
+  // page-level fallback target that opens the destination picker.
+  const filesDragging = useFilesDragging();
+  const pageDrop = useDropTarget((files) =>
+    setDroppedFiles((prev) => (prev ? [...prev, ...files] : files)),
+  );
 
   const customerRequests = useMemo(
     () => (requests ?? []).filter((r) => r.customerId === id),
@@ -105,13 +116,18 @@ export function CustomerDetailPage() {
     amount: r.quotedAmount ?? "",
     currency: r.currency === "USD" ? "دلار" : r.currency === "IRT" ? "تومان" : "",
     registrationDate: formatJalali(r.registrationDate),
-    status: r.issued ? "صادر شده" : "در حال کار",
+    status: requestStatusFa(r),
     issuedAt: r.issuedAt ? formatJalali(r.issuedAt) : "",
+    rejectedAt: r.rejectedAt ? formatJalali(r.rejectedAt) : "",
     notes: r.notes ?? "",
   }));
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-5" data-profile-root {...pageDrop.dropHandlers}>
+      <FileDropOverlay
+        active={filesDragging}
+        hint="روی هر بخش مشخص رها کنید، روی دکمه هوش مصنوعی — یا همین‌جا برای انتخاب مقصد"
+      />
       <PageHeader
         back
         title={name}
@@ -310,6 +326,16 @@ export function CustomerDetailPage() {
             label: "صادر شده",
             value: toPersianDigits(customerRequests.filter((r) => r.issued).length),
           },
+          ...(customerRequests.some((r) => r.rejected && !r.issued)
+            ? [
+                {
+                  label: "رد شده",
+                  value: toPersianDigits(
+                    customerRequests.filter((r) => r.rejected && !r.issued).length,
+                  ),
+                },
+              ]
+            : []),
         ]}
         columns={[
           { key: "visaType", header: "نوع ویزا" },
@@ -320,9 +346,19 @@ export function CustomerDetailPage() {
           { key: "registrationDate", header: "تاریخ ثبت" },
           { key: "status", header: "وضعیت" },
           { key: "issuedAt", header: "تاریخ صدور" },
+          { key: "rejectedAt", header: "تاریخ رد" },
           { key: "notes", header: "توضیحات" },
         ]}
       />
+
+      {/* Destination picker for files dropped on the profile (not a slot) */}
+      {customer && (
+        <DroppedFilesModal
+          files={droppedFiles}
+          customerId={customer.id}
+          onClose={() => setDroppedFiles(null)}
+        />
+      )}
     </div>
   );
 }

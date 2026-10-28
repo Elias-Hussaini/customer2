@@ -69,12 +69,24 @@ export interface VisaRequest {
   registrationDate: string;
   issued: boolean;
   issuedAt?: string | null;
+  /** The visa application was REJECTED by the embassy. Mutually exclusive with issued. */
+  rejected?: boolean;
+  /** ISO date the rejection was recorded. */
+  rejectedAt?: string | null;
   notes?: string;
   customValues?: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;
   archivedAt?: number | null;
 }
+
+/** Persian status label of a request — single source of truth for UI, exports & search. */
+export function requestStatusFa(r: Pick<VisaRequest, "issued" | "rejected">): string {
+  if (r.rejected && !r.issued) return "رد شده";
+  return r.issued ? "صادر شده" : "در حال کار";
+}
+
+export type VisaRequestStatus = "issued" | "pending" | "rejected";
 
 export interface ListFolder {
   id: string;
@@ -148,6 +160,8 @@ export type ActivityType =
   | "restore"
   | "issue"
   | "unissue"
+  | "reject"
+  | "unreject"
   | "payment"
   | "backup"
   | "restore"
@@ -201,12 +215,20 @@ export interface Attachment {
   size: number;
   blob: Blob;
   createdAt: number;
+  /** Timestamp of the last at-rest compression attempt (background pass marker). */
+  opt?: number;
 }
 
 /** A user-definable document slot shown on the customer page (مدارک و تصاویر). */
 export interface DocType {
   id: string;
   label: string;
+  /**
+   * Set when this slot belongs to ONE customer only (created by the AI smart
+   * filing for that specific profile). Undefined/null = a global slot that
+   * Settings manages and every customer shows.
+   */
+  customerId?: string | null;
   /**
    * Short one-line description — legacy field kept for data compatibility.
    * No longer shown or edited anywhere in the UI.
@@ -234,7 +256,27 @@ export interface AppPreferences {
   docHintsStripped?: boolean;
   /** Internal: bogus AI-created «کد ملی» doc slots purged once. */
   nidJunkPurged?: boolean;
+  /** Internal: legacy shared AI doc slots re-scoped to their single owner once. */
+  docOwnerScoped?: boolean;
   updatedAt: number;
+}
+
+/**
+ * Attachment metadata without the binary payload. The ZIP full backup stores
+ * these in data/database.json while the actual bytes travel in assets/.
+ */
+export interface AttachmentMeta {
+  id: string;
+  /** Owning customer — null for payment receipt photos. */
+  customerId: string | null;
+  paymentId?: string | null;
+  kind: AttachmentKind;
+  name: string;
+  mime: string;
+  size: number;
+  createdAt: number;
+  /** Last at-rest compression timestamp — survives the ZIP round trip. */
+  opt?: number;
 }
 
 /** JSON backup file (attachments excluded by design). */
@@ -263,6 +305,14 @@ export interface BackupFile {
      *  full backups never include accounting; it has its own separate backup
      *  inside the حسابداری section. Kept optional so old files still restore. */
     acc?: import("../accounting/types").AccBackupData;
+    /** ZIP full backup only: attachment metadata (bytes live in assets/).
+     *  A legacy JSON restore refuses files carrying this field — the
+     *  complete ZIP archive must be used instead. */
+    attachments?: AttachmentMeta[];
+    /** ZIP full backup (encrypted) only: AI worker accounts. API keys are
+     *  only ever exported inside a password-encrypted archive. */
+    aiWorkers?: import("../lib/ai/types").AiWorker[];
+    aiMeta?: import("../lib/ai/types").AiSettings | null;
   };
 }
 

@@ -1,15 +1,10 @@
 /**
- * Accounting backup & restore.
+ * Accounting backup & restore — LEGACY JSON path.
  *
- * Two complementary safety nets:
- *  1. This module: accounting-only backup (JSON, optionally AES-GCM encrypted)
- *     + accounting documents ZIP + restore with preview / merge / replace.
- *  2. The MAIN app backup (utils/backup.ts) transparently embeds the same
- *     accounting data, so the existing پشتیبان‌گیری flow keeps the whole app
- *     consistent (see buildAccBackupData / applyAccBackupData below).
- *
- * Backups contain document METADATA only (like the visa module); the actual
- * files travel in the ZIP archives — by design, to keep JSON small.
+ * The complete system lives in zipbackup.ts (single ZIP with every record +
+ * every document FILE + settings + checksums, optional AES-GCM password,
+ * verified atomic restore). This module keeps the legacy JSON export/import
+ * working for compatibility: metadata only, no document files.
  */
 
 import { db } from "../db/schema";
@@ -110,7 +105,7 @@ export async function buildAccRestorePreview(backup: AccBackupFile): Promise<Acc
   if (backup.schemaVersion > db.verno) {
     warnings.push("این پشتیبان با نسخه جدیدتری از ساختار داده ساخته شده است.");
   }
-  warnings.push("متادیتای اسناد بازیابی می‌شود؛ خود فایل‌ها فقط در بایگانی ZIP ذخیره شده‌اند.");
+  warnings.push("پشتیبان JSON قدیمی فقط متادیتای اسناد را دارد — فایل‌های اسناد فقط در پشتیبان کامل ZIP موجودند.");
   return { backup, duplicates, existingCounts, warnings };
 }
 
@@ -172,18 +167,6 @@ export async function applyAccBackup(
     detail: `${inserted} رکورد جدید، ${updated} رکورد به‌روزرسانی شد`,
   });
   return { inserted, updated };
-}
-
-/** Safety snapshot before a replace-style restore. */
-export async function createAccSafetyBackup(): Promise<AccBackupFile | null> {
-  const counts = await Promise.all([
-    db.accParties.count(),
-    db.accAccounts.count(),
-    db.accTransactions.count(),
-    db.accOutstanding.count(),
-  ]);
-  if (counts.every((c) => c === 0)) return null;
-  return buildAccBackup();
 }
 
 /* --------------------------- Documents archive ---------------------------- */
