@@ -18,9 +18,9 @@ import { saveAs } from "file-saver";
 
 /* ------------------------------- types ---------------------------------- */
 
-export type ArchiveFileKind = "issuedVisa" | "doc" | "profilePhoto";
+export type ArchiveFileKind = "issuedVisa" | "doc" | "profilePhoto" | "external";
 
-export type FolderMode = "perCustomer" | "single" | "flat";
+export type FolderMode = "perCustomer" | "single" | "flat" | "perFile";
 export type FileNaming = "customerName" | "docLabel" | "sequence" | "original";
 
 /** One candidate file for the archive (original bytes, never mutated). */
@@ -47,6 +47,8 @@ export interface PlanOptions {
   fileNaming: FileNaming;
   /** perCustomer mode: separate «مدارک» / «ویزاها» subfolders inside each customer folder. */
   docSubfolders: boolean;
+  /** Extra folder paths to include in the ZIP even when EMPTY ("a/b" nests). */
+  extraFolders: string[];
 }
 
 export interface PlanItem {
@@ -65,6 +67,8 @@ export interface PlanIssue {
 
 export interface ArchivePlan {
   items: PlanItem[];
+  /** Sanitized extra folder paths to create in the ZIP even when empty. */
+  emptyFolders: string[];
   issues: PlanIssue[];
   stats: {
     /** candidate files found for the current scope */
@@ -125,6 +129,11 @@ function extOf(name: string, mime: string): string {
   return "bin";
 }
 
+/** File name without its extension ("علی.pdf" → "علی"). */
+function baseWithoutExt(name: string): string {
+  return name.replace(/\.[a-z0-9]{1,6}$/i, "");
+}
+
 /** Short, clean names for the built-in slots when naming by document type. */
 const BUILTIN_DOC_LABELS: Record<string, string> = {
   passport: "پاسپورت",
@@ -153,6 +162,8 @@ export function buildPlan(
 
   // sequence numbering runs per customer (all their files, oldest→newest)
   const seqByCustomer = new Map<string, number>();
+  // perFile mode: one folder per file — counter per owner name
+  const perFileIdx = new Map<string, number>();
 
   for (const e of entries) {
     const ov = overrides[e.id];
@@ -166,7 +177,12 @@ export function buildPlan(
     }
 
     const ext = extOf(ov?.fileName ?? e.originalName, e.mime);
-    const customer = sanitizeSegment(e.customerName, "بدون نام");
+    const isExternal = e.kind === "external";
+    // folder/naming "owner" — the customer, or the file's own base name for
+    // externally imported files (they have no customer record).
+    const customer = isExternal
+      ? sanitizeSegment(baseWithoutExt(e.originalName), "فایل")
+      : sanitizeSegment(e.customerName, "بدون نام");
     // Built-in slots get the user's requested short names (پاسپورت / id روی /
     // id پشت); custom slots use their own label.
     const docLabel = sanitizeSegment(
@@ -180,11 +196,17 @@ export function buildPlan(
       folder = "";
     } else if (options.folderMode === "single") {
       folder = sanitizeSegment(options.singleFolderName.trim(), "بایگانی");
+    } else if (options.folderMode === "perFile") {
+      // «هر فایل داخل یک پوشه» — each file wrapped in its own folder named
+      // after its owner; a second file of the same owner gets ۲، ۳…
+      const n = (perFileIdx.get(customer) ?? 0) + 1;
+      perFileIdx.set(customer, n);
+      folder = n === 1 ? customer : `${customer} ${toFaDigits(n)}`;
     } else {
-      folder = customer;
+      folder = isExternal ? "فایل‌های اضافی" : customer;
       if (options.docSubfolders) {
-        if (e.kind === "doc") folder = `${customer}/مدارک`;
-        else if (e.kind === "issuedVisa") folder = `${customer}/ویزاها`;
+        if (e.kind === "doc") folder = `${folder}/مدارک`;
+        else if (e.kind === "issuedVisa") folder = `${folder}/ویزاها`;
       }
     }
 
@@ -195,7 +217,13 @@ export function buildPlan(
         base = customer;
         break;
       case "docLabel":
-        base = e.kind === "issuedVisa" ? "ویزا" : docLabel;
+        base =
+          e.kind === "issuedVisa"
+            ? "ویزا"
+            : // an external file without a label falls back to its own base name
+              e.kind === "external" && !e.docLabel
+              ? customer
+              : docLabel;
         break;
       case "sequence": {
         const n = (seqByCustomer.get(e.customerId) ?? 0) + 1;
@@ -205,7 +233,7 @@ export function buildPlan(
       }
       case "original":
       default:
-        base = sanitizeSegment(e.originalName.replace(/\.[a-z0-9]{1,6}$/i, ""), "فایل");
+        base = sanitizeSegment(baseWithoutExt(e.originalName), "فایل");
         break;
     }
 
@@ -272,9 +300,31 @@ export function buildPlan(
     }
   }
 
+  // ---- user-added empty folders (sanitized, deduped, nested "a/b" kept) ----
+  const emptyFolders: string[] = [];
+  const seenFolders = new Set<string>();
+  for (const raw of options.extraFolders ?? []) {
+    const path = raw
+      .split(/[/\\]+/)
+      // drop empty / dot-only segments — "../x" must never climb anywhere
+      .filter((seg) => {
+        const t = seg.trim();
+        return t !== "" && t !== "." && t !== "..";
+      })
+      .map((seg) => sanitizeSegment(seg, "پوشه"))
+      .join("/")
+      .trim();
+    if (path && !seenFolders.has(path.toLowerCase())) {
+      seenFolders.add(path.toLowerCase());
+      emptyFolders.push(path);
+    }
+  }
+
   const folders = new Set(items.map((i) => i.folder).filter(Boolean));
+  for (const f of emptyFolders) folders.add(f);
   return {
     items,
+    emptyFolders,
     issues,
     stats: {
       total: entries.length,
@@ -323,9 +373,11 @@ export async function generateAndSave(
   items: PlanItem[],
   fileName: string,
   onProgress?: (pct: number) => void,
+  emptyFolders: string[] = [],
 ): Promise<{ via: "picker" | "download" }> {
   const { default: JSZip } = await import("jszip");
   const zip = new JSZip();
+  for (const f of emptyFolders) zip.folder(f); // keep user-added folders even when empty
   for (const it of items) {
     zip.file(zipPath(it), it.entry.blob);
   }

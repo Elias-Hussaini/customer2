@@ -27,6 +27,7 @@ const OPTS: PlanOptions = {
   singleFolderName: "بایگانی",
   fileNaming: "docLabel",
   docSubfolders: false,
+  extraFolders: [],
 };
 
 describe("sanitizeSegment", () => {
@@ -114,6 +115,72 @@ describe("buildPlan", () => {
   it("flat mode puts files at the ZIP root", () => {
     const plan = buildPlan([e1], { ...OPTS, folderMode: "flat" });
     expect(plan.items[0].folder).toBe("");
+  });
+
+  it("perFile mode wraps EVERY file in its own folder named after its owner", () => {
+    const plan = buildPlan([e1, e2, e3, e4], { ...OPTS, folderMode: "perFile" });
+    const paths = plan.items.map((i) => `${i.folder}/${i.fileName}`);
+    // علی has 3 files → three folders; مریم has 1 → one folder
+    expect(paths).toContain("علی رضایی/پاسپورت.pdf");
+    expect(paths).toContain("علی رضایی ۲/id روی.jpg");
+    expect(paths).toContain("علی رضایی ۳/ویزا.pdf");
+    expect(paths).toContain("مریم حسینی/ویزا.pdf");
+    expect(plan.stats.folders).toBe(4);
+  });
+
+  it("external files: perCustomer mode puts them together in «فایل‌های اضافی»", () => {
+    const x1 = entry({
+      id: "x1",
+      customerId: "external",
+      customerName: "",
+      kind: "external",
+      originalName: "قرارداد آلمان.pdf",
+      docLabel: "قرارداد آلمان",
+    });
+    const x2 = entry({
+      id: "x2",
+      customerId: "external",
+      customerName: "",
+      kind: "external",
+      originalName: "Scan.JPG",
+      mime: "image/jpeg",
+      docLabel: "Scan",
+    });
+    const plan = buildPlan([e1, x1, x2], OPTS);
+    const paths = plan.items.map((i) => `${i.folder}/${i.fileName}`);
+    expect(paths).toContain("علی رضایی/پاسپورت.pdf");
+    expect(paths).toContain("فایل‌های اضافی/قرارداد آلمان.pdf");
+    expect(paths).toContain("فایل‌های اضافی/Scan.jpg");
+  });
+
+  it("external files: perFile mode gives each one its own folder (by file name)", () => {
+    const x1 = entry({
+      id: "x1",
+      customerId: "external",
+      customerName: "",
+      kind: "external",
+      originalName: "قرارداد.pdf",
+    });
+    const plan = buildPlan([x1, e4], { ...OPTS, folderMode: "perFile" });
+    const paths = plan.items.map((i) => `${i.folder}/${i.fileName}`);
+    expect(paths).toContain("قرارداد/قرارداد.pdf");
+    expect(paths).toContain("مریم حسینی/ویزا.pdf");
+  });
+
+  it("extraFolders: sanitized, deduped, nested — and counted in stats.folders", () => {
+    const plan = buildPlan([e1], {
+      ...OPTS,
+      extraFolders: ["مدارک اضافی/۱۴۰۴", "مدارک اضافی/۱۴۰۴", "  ", "../سند"],
+    });
+    expect(plan.emptyFolders).toEqual(["مدارک اضافی/۱۴۰۴", "سند"]);
+    // 1 file folder + 2 empty folders
+    expect(plan.stats.folders).toBe(3);
+  });
+
+  it("emptyFolders never collide with file destinations (both coexist in the ZIP)", () => {
+    const plan = buildPlan([e1], { ...OPTS, extraFolders: ["علی رضایی"] });
+    expect(plan.emptyFolders).toContain("علی رضایی");
+    expect(plan.items[0].folder).toBe("علی رضایی");
   });
 
   it("docSubfolders separates docs and visas inside each customer folder", () => {

@@ -8,9 +8,13 @@ import {
   FileText,
   Folder,
   FolderOpen,
+  FolderPlus,
   Inbox,
   Loader2,
+  Paperclip,
+  PenLine,
   RotateCcw,
+  Upload,
   UserRound,
   Users,
 } from "lucide-react";
@@ -79,6 +83,7 @@ const MODE_DEFAULTS: Record<
 
 const FOLDER_MODES: { value: FolderMode; label: string; hint: string }[] = [
   { value: "perCustomer", label: "هر مشتری یک پوشه", hint: "فایل‌های هر مشتری داخل پوشه‌ای به نام خودش" },
+  { value: "perFile", label: "هر فایل یک پوشه", hint: "هر فایل داخل پوشه‌ای به نام صاحبش — مناسب ارسال تک‌به‌تک" },
   { value: "single", label: "همه در یک پوشه", hint: "نام پوشه را خودتان تعیین می‌کنید" },
   { value: "flat", label: "بدون پوشه", hint: "همه فایل‌ها در ریشه ZIP" },
 ];
@@ -133,6 +138,19 @@ export function SmartArchivePage() {
   const [fileNaming, setFileNaming] = useState<FileNaming>("customerName");
   const [docSubfolders, setDocSubfolders] = useState(false);
   const [zipName, setZipName] = useState(MODE_DEFAULTS.visas.zipName);
+
+  /* --------------------- extra (user-added) empty folders ----------------- */
+  const [extraFolders, setExtraFolders] = useState<string[]>([]);
+  const [newFolderName, setNewFolderName] = useState("");
+
+  /* ---------------------- externally imported files ------------------------ */
+  const [externalFiles, setExternalFiles] = useState<ArchiveEntry[]>([]);
+  const [dragOver, setDragOver] = useState(false);
+  const externalInputRef = useRef<HTMLInputElement>(null);
+
+  /* --------------------- folder bulk-rename in the tree -------------------- */
+  const [renamingFolder, setRenamingFolder] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
 
   /* ------------------------- entries + overrides -------------------------- */
   const [entries, setEntries] = useState<ArchiveEntry[] | null>(null);
@@ -208,15 +226,21 @@ export function SmartArchivePage() {
   ]);
 
   /* --------------------------------- plan --------------------------------- */
+  /** DB entries + externally imported files — one candidate list. */
+  const allEntries = useMemo(
+    () => [...(entries ?? []), ...externalFiles],
+    [entries, externalFiles],
+  );
   const plan = useMemo(
     () =>
-      buildPlan(entries ?? [], {
+      buildPlan(allEntries, {
         folderMode,
         singleFolderName,
         fileNaming,
         docSubfolders,
+        extraFolders,
       }, overrides),
-    [entries, folderMode, singleFolderName, fileNaming, docSubfolders, overrides],
+    [allEntries, folderMode, singleFolderName, fileNaming, docSubfolders, extraFolders, overrides],
   );
 
   const tree = useMemo(() => {
@@ -227,6 +251,8 @@ export function SmartArchivePage() {
       if (arr) arr.push(it);
       else m.set(key, [it]);
     }
+    // user-added empty folders appear in the preview too (zero files)
+    for (const f of plan.emptyFolders) if (!m.has(f)) m.set(f, []);
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], "fa"));
   }, [plan]);
 
@@ -266,6 +292,62 @@ export function SmartArchivePage() {
     setPickedIds(new Set());
   };
 
+  /** Import files from the device (file picker or drag & drop) — any type,
+   *  any count. Original bytes are kept; nothing is uploaded anywhere. */
+  const addExternalFiles = (files: FileList | File[]) => {
+    const arr = Array.from(files);
+    if (arr.length === 0) return;
+    const stamp = Date.now();
+    const added: ArchiveEntry[] = arr.map((f, i) => ({
+      id: `ext-${stamp}-${i}-${Math.random().toString(36).slice(2, 8)}`,
+      blob: f,
+      originalName: f.name || `فایل ${i + 1}`,
+      mime: f.type || "application/octet-stream",
+      size: f.size,
+      customerId: "external",
+      customerName: "",
+      kind: "external",
+      docLabel: (f.name || "فایل").replace(/\.[a-z0-9]{1,6}$/i, ""),
+    }));
+    setExternalFiles((prev) => [...prev, ...added]);
+    toast.success(
+      `${toPersianDigits(added.length)} فایل اضافه شد — مقصدشان را در پیش‌نمایش عوض کنید`,
+    );
+  };
+
+  const removeExternal = (id: string) =>
+    setExternalFiles((prev) => prev.filter((e) => e.id !== id));
+
+  /** Add a custom (possibly nested "a/b") folder — kept in the ZIP even when empty. */
+  const addExtraFolder = () => {
+    const v = newFolderName.trim().replace(/^[/\s]+|[/\s]+$/g, "");
+    if (!v) return;
+    if (!extraFolders.some((f) => f.toLowerCase() === v.toLowerCase())) {
+      setExtraFolders((prev) => [...prev, v]);
+    }
+    setNewFolderName("");
+  };
+
+  /** Bulk-rename a folder in the preview — moves EVERY file inside it. */
+  const applyFolderRename = () => {
+    const key = renamingFolder;
+    if (key === null) return;
+    const old = key === "—" ? "" : key;
+    const next = renameValue.trim().replace(/^\/+|\/+$/g, "");
+    if (next !== old) {
+      setOverrides((prev) => {
+        const nextOv = { ...prev };
+        for (const it of plan.items) {
+          if (it.folder === old) {
+            nextOv[it.entry.id] = { ...nextOv[it.entry.id], folder: next };
+          }
+        }
+        return nextOv;
+      });
+    }
+    setRenamingFolder(null);
+  };
+
   const setOverride = (id: string, patch: PlanOverride) => {
     setOverrides((prev) => {
       const next = { ...prev, [id]: { ...prev[id], ...patch } };
@@ -277,11 +359,17 @@ export function SmartArchivePage() {
   };
 
   const download = async () => {
-    if (plan.items.length === 0 || busy) return;
+    if (plan.items.length === 0 && plan.emptyFolders.length === 0) return;
+    if (busy) return;
     setBusy(true);
     setProgress(0);
     try {
-      const res = await generateAndSave(plan.items, zipName, setProgress);
+      const res = await generateAndSave(
+        plan.items,
+        zipName,
+        setProgress,
+        plan.emptyFolders,
+      );
       toast.success(
         res.via === "picker"
           ? `بایگانی ZIP با ${toPersianDigits(plan.items.length)} فایل در محل انتخاب‌شده ذخیره شد`
@@ -332,7 +420,7 @@ export function SmartArchivePage() {
           <button
             className="btn btn-primary btn-sm"
             onClick={() => void download()}
-            disabled={busy || plan.items.length === 0}
+            disabled={busy || (plan.items.length === 0 && plan.emptyFolders.length === 0)}
           >
             {busy ? <Loader2 size={15} className="animate-spin" /> : <FileArchive size={15} />}
             {busy
@@ -560,12 +648,103 @@ export function SmartArchivePage() {
         </SectionCard>
       )}
 
+      {/* Extra files from the device — both modes */}
+      <SectionCard
+        title="فایل‌های اضافی از دستگاه (اختیاری)"
+        icon={<Paperclip size={15} className="text-brand-500" />}
+        action={
+          externalFiles.length > 0 ? (
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => setExternalFiles([])}
+            >
+              حذف همه ({toPersianDigits(externalFiles.length)})
+            </button>
+          ) : undefined
+        }
+      >
+        <div className="flex flex-col gap-2.5">
+          <input
+            ref={externalInputRef}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              if (e.target.files) addExternalFiles(e.target.files);
+              e.target.value = "";
+            }}
+          />
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label="افزودن فایل"
+            onClick={() => externalInputRef.current?.click()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") externalInputRef.current?.click();
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              addExternalFiles(e.dataTransfer.files);
+            }}
+            className={`cursor-pointer rounded-2xl border-2 border-dashed p-4 text-center transition-all ${
+              dragOver
+                ? "border-brand-500 bg-brand-500/8"
+                : "border-ink-900/15 hover:border-brand-400 hover:bg-brand-500/4 dark:border-white/15"
+            }`}
+          >
+            <Upload
+              size={20}
+              className={`mx-auto mb-1.5 ${dragOver ? "text-brand-500" : "text-ink-400"}`}
+            />
+            <p className="text-[12px] font-bold">
+              انتخاب فایل — یا همین‌جا رها کنید (Drag & Drop)
+            </p>
+            <p className="mt-0.5 text-[10.5px] leading-4 text-ink-400">
+              هر نوع فایلی و هر تعداد — PDF، عکس، آفیس و… محتوا تغییر نمی‌کند و جایی آپلود نمی‌شود
+            </p>
+          </div>
+          {externalFiles.length > 0 && (
+            <ul className="max-h-40 divide-y divide-ink-900/5 overflow-y-auto rounded-2xl border border-ink-900/8 dark:divide-white/5 dark:border-white/10">
+              {externalFiles.map((f) => (
+                <li key={f.id} className="flex items-center gap-2 px-3 py-1.5">
+                  <Paperclip size={13} className="shrink-0 text-brand-500" />
+                  <span className="min-w-0 flex-1 truncate text-[12px]" dir="auto" title={f.originalName}>
+                    {f.originalName}
+                  </span>
+                  <span className="shrink-0 text-[10.5px] text-ink-400">{formatBytes(f.size)}</span>
+                  <button
+                    type="button"
+                    className="icon-btn !h-6 !w-6 shrink-0 hover:!text-[#ef4444]"
+                    title="حذف"
+                    aria-label={`حذف ${f.originalName}`}
+                    onClick={() => removeExternal(f.id)}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-[10.5px] leading-5 text-ink-400">
+            فایل‌های اضافه‌شده در حالت «هر مشتری یک پوشه» داخل پوشه «فایل‌های اضافی» و در
+            حالت «هر فایل یک پوشه» هر کدام در پوشه خودشان قرار می‌گیرند؛ بعداً مقصد و نام
+            هر کدام را در پیش‌نمایش عوض کنید.
+          </p>
+        </div>
+      </SectionCard>
+
       {/* Structure + naming */}
       <SectionCard title="ساختار پوشه‌ها و نام‌گذاری" icon={<FolderOpen size={15} className="text-brand-500" />}>
         <div className="flex flex-col gap-4">
           <div>
             <p className="mb-1.5 text-[12px] font-bold">پوشه‌بندی</p>
-            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
+            <div className="grid grid-cols-2 gap-1.5 lg:grid-cols-4">
               {FOLDER_MODES.map((f) => (
                 <button
                   key={f.value}
@@ -604,6 +783,49 @@ export function SmartArchivePage() {
                 />
               </div>
             )}
+          </div>
+          <div>
+            <p className="mb-1.5 text-[12px] font-bold">پوشه‌های خالی دلخواه (اختیاری)</p>
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {extraFolders.map((f) => (
+                  <span key={f} className="chip num !gap-1 !py-1">
+                    <Folder size={11} className="inline" /> {f}
+                    <button
+                      type="button"
+                      className="mr-0.5 rounded-full px-1 text-[12px] leading-none hover:text-[#ef4444]"
+                      aria-label={`حذف پوشه ${f}`}
+                      onClick={() => setExtraFolders((p) => p.filter((x) => x !== f))}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+                {extraFolders.length === 0 && (
+                  <span className="text-[10.5px] text-ink-400">
+                    پوشه‌ای اضافه نشده — برای ساخت پوشه خالی در ZIP، نامش را بنویسید
+                  </span>
+                )}
+              </div>
+              <form
+                className="flex flex-wrap items-center gap-1.5"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  addExtraFolder();
+                }}
+              >
+                <Input
+                  dir="auto"
+                  className="min-w-0 flex-1 !py-1.5 text-[12px] sm:!w-56 sm:flex-none"
+                  value={newFolderName}
+                  onChange={(e) => setNewFolderName(e.target.value)}
+                  placeholder='مثلا: مدارک اضافی/۱۴۰۴ (با / تو در تو می‌شود)'
+                />
+                <button type="submit" className="btn btn-glass btn-sm">
+                  <FolderPlus size={13} /> افزودن پوشه
+                </button>
+              </form>
+            </div>
           </div>
           <div>
             <p className="mb-1.5 text-[12px] font-bold">نام‌گذاری فایل‌ها</p>
@@ -650,7 +872,7 @@ export function SmartArchivePage() {
           <div className="flex items-center justify-center gap-2 py-10 text-sm text-ink-400">
             <Loader2 size={17} className="animate-spin" /> در حال جمع‌آوری فایل‌ها…
           </div>
-        ) : plan.items.length === 0 && plan.stats.excluded === 0 ? (
+        ) : plan.items.length === 0 && plan.stats.excluded === 0 && plan.emptyFolders.length === 0 ? (
           scopeCustomerIds.length === 0 ? (
             <EmptyState
               icon={FileArchive}
@@ -684,6 +906,16 @@ export function SmartArchivePage() {
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="chip num">{toPersianDigits(plan.stats.included)} فایل</span>
               <span className="chip num">{toPersianDigits(plan.stats.folders)} پوشه</span>
+              {externalFiles.length > 0 && (
+                <span className="chip num !bg-brand-500/12 !text-brand-600">
+                  {toPersianDigits(externalFiles.length)} فایل اضافی
+                </span>
+              )}
+              {plan.emptyFolders.length > 0 && (
+                <span className="chip num">
+                  {toPersianDigits(plan.emptyFolders.length)} پوشه خالی
+                </span>
+              )}
               <span className="chip num">{formatBytes(plan.stats.bytes)}</span>
               {plan.stats.excluded > 0 && (
                 <span className="chip num !bg-[#fdeaea] !text-[#c0392b]">
@@ -714,20 +946,27 @@ export function SmartArchivePage() {
               {tree.map(([folder, items]) => {
                 const isRoot = folder === "—";
                 const collapsedNow = collapsed.has(folder);
+                const renamingNow = renamingFolder === folder;
+                const toggleCollapse = () =>
+                  setCollapsed((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(folder)) next.delete(folder);
+                    else next.add(folder);
+                    return next;
+                  });
                 return (
                   <div key={folder} data-folder={folder}>
-                    <button
-                      type="button"
-                      className="sticky top-0 z-10 flex w-full items-center gap-2 border-b border-ink-900/6 bg-white/85 px-3 py-2 text-right backdrop-blur dark:border-white/8 dark:bg-ink-950/80"
-                      onClick={() =>
-                        setCollapsed((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(folder)) next.delete(folder);
-                          else next.add(folder);
-                          return next;
-                        })
-                      }
+                    <div
+                      role="button"
+                      tabIndex={renamingNow ? -1 : 0}
                       aria-expanded={!collapsedNow}
+                      aria-label={isRoot ? "ریشه ZIP" : folder}
+                      onClick={renamingNow ? undefined : toggleCollapse}
+                      onKeyDown={(e) => {
+                        if (renamingNow) return;
+                        if (e.key === "Enter" || e.key === " ") toggleCollapse();
+                      }}
+                      className="sticky top-0 z-10 flex w-full cursor-pointer items-center gap-2 border-b border-ink-900/6 bg-white/85 px-3 py-2 text-right backdrop-blur dark:border-white/8 dark:bg-ink-950/80"
                     >
                       <ChevronDown
                         size={14}
@@ -738,15 +977,62 @@ export function SmartArchivePage() {
                       ) : (
                         <Folder size={15} className="shrink-0 text-brand-500" />
                       )}
-                      <span className="min-w-0 truncate text-[12px] font-bold" dir="auto">
-                        {isRoot ? "ریشه ZIP (بدون پوشه)" : folder}
-                      </span>
+                      {renamingNow ? (
+                        <Input
+                          dir="auto"
+                          className="min-w-0 flex-1 !py-1 text-[12px]"
+                          value={renameValue}
+                          autoFocus
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            e.stopPropagation();
+                            if (e.key === "Enter") applyFolderRename();
+                            if (e.key === "Escape") setRenamingFolder(null);
+                          }}
+                          onBlur={applyFolderRename}
+                          placeholder="نام جدید پوشه (خالی = ریشه ZIP)"
+                          aria-label="نام جدید پوشه"
+                        />
+                      ) : (
+                        <span className="min-w-0 truncate text-[12px] font-bold" dir="auto">
+                          {isRoot ? "ریشه ZIP (بدون پوشه)" : folder}
+                        </span>
+                      )}
                       <span className="chip-soft num mr-auto shrink-0 rounded-full px-2 py-0.5 text-[10px]">
                         {toPersianDigits(items.length)}
                       </span>
-                    </button>
+                      {!renamingNow && (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          aria-label="تغییر نام پوشه"
+                          title="تغییر نام پوشه — همه فایل‌های داخلش جابه‌جا می‌شوند"
+                          className="icon-btn !h-6 !w-6 shrink-0"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setRenamingFolder(folder);
+                            setRenameValue(isRoot ? "" : folder);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.stopPropagation();
+                              setRenamingFolder(folder);
+                              setRenameValue(isRoot ? "" : folder);
+                            }
+                          }}
+                        >
+                          <PenLine size={12} />
+                        </span>
+                      )}
+                    </div>
                     {!collapsedNow && (
                       <ul className="divide-y divide-ink-900/5 dark:divide-white/5">
+                        {items.length === 0 && (
+                          <li className="px-3 py-2.5 text-center text-[11px] text-ink-400">
+                            پوشه خالی — در ZIP ساخته می‌شود
+                          </li>
+                        )}
                         {items.map((it) => {
                           const ov = overrides[it.entry.id];
                           const excluded = ov?.excluded === true;
@@ -758,7 +1044,9 @@ export function SmartArchivePage() {
                               }`}
                             >
                               <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-500/10 text-brand-600 dark:text-brand-300">
-                                {it.entry.kind === "issuedVisa" ? (
+                                {it.entry.kind === "external" ? (
+                                  <Paperclip size={15} />
+                                ) : it.entry.kind === "issuedVisa" ? (
                                   <BadgeCheck size={15} />
                                 ) : it.entry.mime.startsWith("image/") ? (
                                   <FileImage size={15} />
@@ -772,6 +1060,7 @@ export function SmartArchivePage() {
                                 value={ov?.fileName ?? it.fileName}
                                 onChange={(e) => setOverride(it.entry.id, { fileName: e.target.value })}
                                 aria-label="نام فایل"
+                                title={`نام اصلی: ${it.entry.originalName}`}
                               />
                               {!isRoot && (
                                 <Input
@@ -782,8 +1071,17 @@ export function SmartArchivePage() {
                                   aria-label="پوشه مقصد"
                                 />
                               )}
-                              <span className="shrink-0 text-[10.5px] text-ink-400" title={it.entry.customerName}>
-                                {it.entry.customerName}
+                              <span
+                                className="shrink-0 text-[10.5px] text-ink-400"
+                                title={
+                                  it.entry.kind === "external"
+                                    ? `فایل اضافی — ${it.entry.originalName}`
+                                    : it.entry.customerName
+                                }
+                              >
+                                {it.entry.kind === "external"
+                                  ? "فایل اضافی"
+                                  : it.entry.customerName}
                               </span>
                               <span className="shrink-0 text-[10.5px] text-ink-400">
                                 {formatBytes(it.entry.size)}
@@ -807,8 +1105,9 @@ export function SmartArchivePage() {
               })}
             </div>
             <p className="text-[10.5px] leading-5 text-ink-400">
-              نام هر فایل و پوشه مقصدش قابل ویرایش است؛ نام‌های تکراری خودکار شماره می‌خورند تا
-              هیچ فایلی جای دیگری را نگیرد. محتوای فایل‌ها هرگز تغییر نمی‌کند.
+              نام هر فایل و پوشه مقصدش قابل ویرایش است؛ با دکمه مداد کنار هر پوشه، کل
+              پوشه را یک‌جا تغییر نام دهید. نام‌های تکراری خودکار شماره می‌خورند تا هیچ
+              فایلی جای دیگری را نگیرد. محتوای فایل‌ها هرگز تغییر نمی‌کند.
             </p>
           </div>
         )}
