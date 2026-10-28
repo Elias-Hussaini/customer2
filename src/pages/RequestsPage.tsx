@@ -18,6 +18,7 @@ import { normalizeFa } from "../utils/normalize";
 import { formatJalali } from "../utils/jalali";
 import { formatMoney } from "../utils/num";
 import { customerFullName } from "../db/customers";
+import { requestStatusFa } from "../types";
 import { loadPageFilter, savePageFilter } from "../utils/pageFilters";
 import type { VisaRequest } from "../types";
 
@@ -35,7 +36,7 @@ export function RequestsPage() {
   const [repId, setRepId] = useState<string>(() => loadPageFilter<string>("requests", "rep", "", () => true));
   const [listId, setListId] = useState<string>(() => loadPageFilter<string>("requests", "list", "", () => true));
   const [status, setStatus] = useState<string>(() =>
-    loadPageFilter<string>("requests", "status", "", (v) => v === "issued" || v === "pending"),
+    loadPageFilter<string>("requests", "status", "", (v) => v === "issued" || v === "pending" || v === "rejected"),
   );
   const [visaType, setVisaType] = useState<string>(() => loadPageFilter<string>("requests", "visaType", "", () => true));
   const [tagId, setTagId] = useState<string>(() => loadPageFilter<string>("requests", "tag", "", () => true));
@@ -103,7 +104,8 @@ export function RequestsPage() {
       if (activeRepId && r.representativeId !== activeRepId) return false;
       if (activeListId && r.listId !== activeListId) return false;
       if (status === "issued" && !r.issued) return false;
-      if (status === "pending" && r.issued) return false;
+      if (status === "pending" && (r.issued || r.rejected)) return false;
+      if (status === "rejected" && !r.rejected) return false;
       if (activeVisaType && r.visaType !== activeVisaType) return false;
       if (activeTagId && !r.tags.includes(activeTagId)) return false;
       if (from && r.registrationDate < from) return false;
@@ -138,8 +140,9 @@ export function RequestsPage() {
           amount: r.quotedAmount ?? "",
           currency: r.currency === "USD" ? "دلار" : r.currency === "IRT" ? "تومان" : "",
           registrationDate: formatJalali(r.registrationDate),
-          issued: r.issued ? "صادر شده" : "در حال کار",
+          issued: requestStatusFa(r),
           issuedAt: r.issuedAt ? formatJalali(r.issuedAt) : "",
+          rejectedAt: r.rejectedAt ? formatJalali(r.rejectedAt) : "",
           notes: r.notes ?? "",
         };
       }),
@@ -186,6 +189,7 @@ export function RequestsPage() {
               { value: "", label: "همه وضعیت‌ها" },
               { value: "issued", label: "صادر شده" },
               { value: "pending", label: "در حال کار" },
+              { value: "rejected", label: "رد شده" },
             ]}
           />
           <button
@@ -281,6 +285,7 @@ export function RequestsPage() {
           { key: "registrationDate", header: "تاریخ ثبت" },
           { key: "issued", header: "وضعیت" },
           { key: "issuedAt", header: "تاریخ صدور" },
+          { key: "rejectedAt", header: "تاریخ رد" },
           { key: "notes", header: "توضیحات" },
         ]}
       />

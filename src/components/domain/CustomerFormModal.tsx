@@ -658,6 +658,8 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
             registrationDate: input.registrationDate,
             issued: false,
             issuedAt: null,
+            rejected: false,
+            rejectedAt: null,
           });
           toast.success(`مشتری «${customerFullName(created)}» با درخواست «${reqVisaType}» ثبت شد`);
         } else {

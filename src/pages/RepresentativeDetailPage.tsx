@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   Banknote,
   CheckCircle2,
+  CircleX,
   Clock3,
   FileDown,
   FilePenLine,
@@ -44,6 +45,7 @@ import { deleteRepresentative } from "../db/reps";
 import { useConfirm } from "../hooks/useConfirm";
 import { useToast } from "../hooks/useToast";
 import type { Attachment, Payment } from "../types";
+import { requestStatusFa } from "../types";
 
 export function RepresentativeDetailPage() {
   const { id } = useParams();
@@ -224,6 +226,16 @@ export function RepresentativeDetailPage() {
         <StatCard icon={Clock3} label="در حال کار" value={toPersianDigits(stats.inProgress)} tone="warning" />
         <StatCard icon={Users} label="مشتریان" value={toPersianDigits(repCustomers.length)} tone="info" />
       </div>
+      {stats.rejected > 0 && (
+        <div className="glass flex items-center gap-3 rounded-2xl border border-[#ef4444]/20 px-4 py-3 dark:border-[#ef4444]/25">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#ef4444]/12 text-[#dc3535] dark:text-[#f87b7b]">
+            <CircleX size={17} />
+          </span>
+          <p className="text-[12.5px] leading-5">
+            <b className="num">{toPersianDigits(stats.rejected)}</b> درخواست این نماینده «رد شده» علامت خورده است.
+          </p>
+        </div>
+      )}
 
       {/* Financial summary */}
       <SectionCard title="وضعیت مالی" icon={<Banknote size={15} className="text-brand-500" />}>
@@ -381,8 +393,9 @@ export function RepresentativeDetailPage() {
             amount: r.quotedAmount ?? "",
             currency: r.currency === "USD" ? "دلار" : r.currency === "IRT" ? "تومان" : "",
             registrationDate: formatJalali(r.registrationDate),
-            status: r.issued ? "صادر شده" : "در حال کار",
+            status: requestStatusFa(r),
             issuedAt: r.issuedAt ? formatJalali(r.issuedAt) : "",
+            rejectedAt: r.rejectedAt ? formatJalali(r.rejectedAt) : "",
             notes: r.notes ?? "",
           };
         })}
@@ -391,6 +404,9 @@ export function RepresentativeDetailPage() {
           { label: "نماینده", value: rep.name },
           { label: "درخواست‌ها", value: toPersianDigits(stats.total) },
           { label: "صادر شده", value: toPersianDigits(stats.issued) },
+          ...(stats.rejected > 0
+            ? [{ label: "رد شده", value: toPersianDigits(stats.rejected) }]
+            : []),
           ...balances.map((b) => ({
             label: b.currency === "USD" ? "مانده دلار" : "مانده تومان",
             value: formatMoney(b.balance, b.currency),
@@ -406,6 +422,7 @@ export function RepresentativeDetailPage() {
           { key: "registrationDate", header: "تاریخ ثبت" },
           { key: "status", header: "وضعیت" },
           { key: "issuedAt", header: "تاریخ صدور" },
+          { key: "rejectedAt", header: "تاریخ رد" },
           { key: "notes", header: "توضیحات" },
         ]}
       />

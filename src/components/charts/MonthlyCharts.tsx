@@ -43,12 +43,15 @@ export interface BarMonth {
   a: number;
   /** Secondary series (e.g. issued visas). */
   b: number;
+  /** Optional tertiary series (e.g. rejected applications) — rose bar. */
+  c?: number;
 }
 
 export function MonthlyBars({
   months,
   aLabel = "درخواست جدید",
   bLabel = "ویزای صادر شده",
+  cLabel = "رد شده",
   selectedKey,
   onSelect,
   height = 200,
@@ -56,26 +59,32 @@ export function MonthlyBars({
   months: BarMonth[];
   aLabel?: string;
   bLabel?: string;
+  cLabel?: string;
   selectedKey?: string | null;
   onSelect?: (key: string) => void;
   height?: number;
 }) {
   const gid = useId().replace(/:/g, "");
   const mounted = useMounted();
-  if (months.length === 0 || months.every((m) => m.a === 0 && m.b === 0)) {
+  if (months.length === 0 || months.every((m) => m.a === 0 && m.b === 0 && !(m.c ?? 0))) {
     return <ChartEmpty height={height} />;
   }
 
-  const max = Math.max(1, ...months.map((m) => Math.max(m.a, m.b)));
+  // Third series only takes space when at least one rejection exists.
+  const hasC = months.some((m) => (m.c ?? 0) > 0);
+  const nBars = hasC ? 3 : 2;
+  const max = Math.max(1, ...months.map((m) => Math.max(m.a, m.b, m.c ?? 0)));
   const labelH = 26;
   const plotH = height - labelH;
-  const groupW = 46;
   const barW = 13;
+  const barGap = 5;
+  const contentW = barW * nBars + barGap * (nBars - 1);
+  const groupW = contentW + 14;
   const width = Math.max(320, months.length * groupW + 16);
   const scale = (v: number) => (v / max) * (plotH - 14);
 
   // RTL: index 0 (oldest) renders at the RIGHT edge.
-  const xOf = (i: number) => width - 8 - (i + 1) * groupW + (groupW - barW * 2 - 6) / 2;
+  const xOf = (i: number) => width - 8 - (i + 1) * groupW + (groupW - contentW) / 2;
 
   return (
     <div className="w-full overflow-x-auto" dir="rtl">
@@ -96,6 +105,10 @@ export function MonthlyBars({
             <stop offset="0%" stopColor="#34d399" />
             <stop offset="100%" stopColor="#10b981" />
           </linearGradient>
+          <linearGradient id={`bc-${gid}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#f87171" />
+            <stop offset="100%" stopColor="#ef4444" />
+          </linearGradient>
         </defs>
         {[0.25, 0.5, 0.75, 1].map((f) => (
           <line
@@ -113,6 +126,7 @@ export function MonthlyBars({
           const x = xOf(i);
           const aH = Math.max(m.a > 0 ? 4 : 0, scale(m.a));
           const bH = Math.max(m.b > 0 ? 4 : 0, scale(m.b));
+          const cH = hasC ? Math.max((m.c ?? 0) > 0 ? 4 : 0, scale(m.c ?? 0)) : 0;
           const active = selectedKey === m.key;
           return (
             <g
@@ -121,10 +135,13 @@ export function MonthlyBars({
               opacity={selectedKey && !active ? 0.45 : 1}
               onClick={() => onSelect?.(m.key)}
             >
-              <title>{`${m.label}\n${aLabel}: ${toPersianDigits(m.a)}\n${bLabel}: ${toPersianDigits(m.b)}`}</title>
+              <title>
+                {`${m.label}\n${aLabel}: ${toPersianDigits(m.a)}\n${bLabel}: ${toPersianDigits(m.b)}` +
+                  (hasC ? `\n${cLabel}: ${toPersianDigits(m.c ?? 0)}` : "")}
+              </title>
               {active && (
                 <rect
-                  x={x - 8}
+                  x={x - 7}
                   y={2}
                   width={groupW - 4}
                   height={height - 6}
@@ -144,7 +161,7 @@ export function MonthlyBars({
                 }}
               />
               <rect
-                x={x + barW + 6}
+                x={x + barW + barGap}
                 y={plotH - (mounted ? bH : 0)}
                 width={barW}
                 height={mounted ? bH : 0}
@@ -154,8 +171,21 @@ export function MonthlyBars({
                   transition: `y .55s cubic-bezier(.22,1,.36,1) ${i * 28 + 70}ms, height .55s cubic-bezier(.22,1,.36,1) ${i * 28 + 70}ms`,
                 }}
               />
+              {hasC && (
+                <rect
+                  x={x + (barW + barGap) * 2}
+                  y={plotH - (mounted ? cH : 0)}
+                  width={barW}
+                  height={mounted ? cH : 0}
+                  rx={4}
+                  fill={`url(#bc-${gid})`}
+                  style={{
+                    transition: `y .55s cubic-bezier(.22,1,.36,1) ${i * 28 + 140}ms, height .55s cubic-bezier(.22,1,.36,1) ${i * 28 + 140}ms`,
+                  }}
+                />
+              )}
               <text
-                x={x + barW + 3}
+                x={x + contentW / 2}
                 y={height - 9}
                 textAnchor="middle"
                 className={active ? "fill-brand-600 dark:fill-brand-300" : "fill-ink-500 dark:fill-ink-400"}
@@ -170,7 +200,7 @@ export function MonthlyBars({
         {/* baseline */}
         <line x1={0} x2={width} y1={plotH} y2={plotH} className="stroke-ink-900/15 dark:stroke-white/15" />
       </svg>
-      <div className="mt-1 flex items-center justify-center gap-4 text-[11px] font-bold">
+      <div className="mt-1 flex flex-wrap items-center justify-center gap-4 text-[11px] font-bold">
         <span className="flex items-center gap-1.5 text-brand-600 dark:text-brand-300">
           <span className="h-2.5 w-2.5 rounded-full bg-brand-500" />
           {aLabel}
@@ -179,6 +209,12 @@ export function MonthlyBars({
           <span className="h-2.5 w-2.5 rounded-full bg-[#10b981]" />
           {bLabel}
         </span>
+        {hasC && (
+          <span className="flex items-center gap-1.5 text-[#dc3535] dark:text-[#f87b7b]">
+            <span className="h-2.5 w-2.5 rounded-full bg-[#ef4444]" />
+            {cLabel}
+          </span>
+        )}
       </div>
     </div>
   );

@@ -65,7 +65,8 @@ export function SearchPage() {
       types: types.length > 0 ? types : undefined,
       representativeId: repId || null,
       listId: listId || null,
-      issued: status === "" ? null : status === "issued",
+      issued: status === "" || status === "rejected" ? null : status === "issued",
+      rejected: status === "rejected" ? true : status === "pending" ? false : null,
       tagId: tagId || null,
       dateFrom: from,
       dateTo: to,
@@ -153,6 +154,7 @@ export function SearchPage() {
               { value: "", label: "همه وضعیت‌ها" },
               { value: "issued", label: "صادر شده" },
               { value: "pending", label: "در حال کار" },
+              { value: "rejected", label: "رد شده" },
             ]}
           />
           <FilterSelect

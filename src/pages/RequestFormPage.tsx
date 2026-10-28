@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Banknote, CalendarDays, CircleCheck, FilePlus2, Layers, Save, Tags, UserRound, X } from "lucide-react";
+import { Banknote, CalendarDays, CircleCheck, CircleX, FilePlus2, Layers, Save, Tags, UserRound, X } from "lucide-react";
 import { PageHeader } from "../components/ui/StatCard";
 import { SectionCard, SearchSelect } from "../components/ui/inputs";
 import { Button } from "../components/ui/Button";
@@ -41,6 +41,8 @@ interface FormState {
   registrationDate: string | null;
   issued: boolean;
   issuedAt: string | null;
+  rejected: boolean;
+  rejectedAt: string | null;
   notes: string;
   customValues: Record<string, unknown>;
 }
@@ -75,6 +77,8 @@ export function RequestFormPage() {
     registrationDate: todayIso(),
     issued: false,
     issuedAt: null,
+    rejected: false,
+    rejectedAt: null,
     notes: "",
     customValues: {},
   });
@@ -108,6 +112,8 @@ export function RequestFormPage() {
           registrationDate: existing.registrationDate,
           issued: existing.issued,
           issuedAt: existing.issuedAt ?? null,
+          rejected: existing.rejected ?? false,
+          rejectedAt: existing.rejectedAt ?? null,
           notes: existing.notes ?? "",
           customValues: { ...(existing.customValues ?? {}) },
         });
@@ -217,6 +223,8 @@ export function RequestFormPage() {
         registrationDate: form.registrationDate || todayIso(),
         issued: form.issued,
         issuedAt: form.issued ? form.issuedAt || todayIso() : null,
+        rejected: form.rejected && !form.issued,
+        rejectedAt: form.rejected && !form.issued ? form.rejectedAt || todayIso() : null,
         notes: form.notes,
         customValues: form.customValues,
       };
@@ -415,7 +423,7 @@ export function RequestFormPage() {
             </div>
           </SectionCard>
 
-          <SectionCard title="وضعیت صدور" icon={<CircleCheck size={15} className="text-brand-500" />}>
+          <SectionCard title="وضعیت درخواست" icon={<CircleCheck size={15} className="text-brand-500" />}>
             <div className="flex flex-col gap-4">
               <div className="flex items-center justify-between gap-4 rounded-2xl bg-[#10b981]/8 px-4 py-3">
                 <div>
@@ -427,7 +435,11 @@ export function RequestFormPage() {
                 <Toggle
                   checked={form.issued}
                   onChange={(v) =>
-                    patch({ issued: v, issuedAt: v ? form.issuedAt || todayIso() : null })
+                    patch({
+                      issued: v,
+                      issuedAt: v ? form.issuedAt || todayIso() : null,
+                      ...(v ? { rejected: false, rejectedAt: null } : {}),
+                    })
                   }
                 />
               </div>
@@ -436,6 +448,36 @@ export function RequestFormPage() {
                   <JalaliDatePicker
                     value={form.issuedAt}
                     onChange={(d) => patch({ issuedAt: d })}
+                    clearable={false}
+                  />
+                </FormField>
+              )}
+              <div className="flex items-center justify-between gap-4 rounded-2xl bg-[#ef4444]/8 px-4 py-3">
+                <div>
+                  <p className="flex items-center gap-1.5 text-[13px] font-bold">
+                    <CircleX size={14} className="text-[#dc3535] dark:text-[#f87b7b]" />
+                    درخواست رد شده
+                  </p>
+                  <p className="text-[11px] text-ink-500 dark:text-ink-400">
+                    اگر سفارت درخواست را رد کرده باشد فعال کنید — تاریخ رد ثبت می‌شود و در گزارش‌ها مشخص است
+                  </p>
+                </div>
+                <Toggle
+                  checked={form.rejected}
+                  onChange={(v) =>
+                    patch({
+                      rejected: v,
+                      rejectedAt: v ? form.rejectedAt || todayIso() : null,
+                      ...(v ? { issued: false, issuedAt: null } : {}),
+                    })
+                  }
+                />
+              </div>
+              {form.rejected && (
+                <FormField label="تاریخ رد شدن">
+                  <JalaliDatePicker
+                    value={form.rejectedAt}
+                    onChange={(d) => patch({ rejectedAt: d })}
                     clearable={false}
                   />
                 </FormField>
@@ -479,6 +521,7 @@ export function RequestFormPage() {
               <li>• ساخت سریع مشتری، او را در لیست و زیر نماینده همین فرم ثبت می‌کند.</li>
               <li>• تگ «فوری» برای پیگیری سریع در داشبورد استفاده می‌شود.</li>
               <li>• مبالغ دلار و تومان جداگانه جمع می‌شوند.</li>
+              <li>• «رد شده» و «صادر شده» همزمان نمی‌توانند فعال باشند — یکی را روشن کنید.</li>
             </ul>
           </SectionCard>
           {isEdit && (

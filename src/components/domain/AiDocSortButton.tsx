@@ -60,6 +60,7 @@ import { saveAttachmentDataUrl } from "../../db/attachments";
 import { dataUrlToSquareDataUrl, setCustomerPhoto } from "../../db/photos";
 import { customerFullName } from "../../db/customers";
 import { Modal } from "../ui/Modal";
+import { useDropTarget } from "../ui/DropZone";
 import { useToast } from "../../hooks/useToast";
 import { toPersianDigits } from "../../utils/jalali";
 
@@ -404,6 +405,11 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
 
   const busy = run.t === "busy";
 
+  // Dropping files straight onto the AI button starts the smart filing.
+  const aiDrop = useDropTarget((files) => {
+    if (!busy) void start(files);
+  });
+
   return (
     <>
       <input
@@ -422,9 +428,13 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
       {hasWorker ? (
         <button
           type="button"
-          className="group inline-flex items-center gap-1.5 rounded-full bg-gradient-to-l from-[#6366f1] via-[#8b5cf6] to-[#d946ef] px-3.5 py-1.5 text-[12.5px] font-bold text-white shadow-lg shadow-[#6366f1]/35 transition-all hover:shadow-[#6366f1]/55 hover:brightness-110 active:scale-95 disabled:cursor-wait disabled:opacity-70"
+          className={`group inline-flex items-center gap-1.5 rounded-full bg-gradient-to-l from-[#6366f1] via-[#8b5cf6] to-[#d946ef] px-3.5 py-1.5 text-[12.5px] font-bold text-white shadow-lg shadow-[#6366f1]/35 transition-all hover:shadow-[#6366f1]/55 hover:brightness-110 active:scale-95 disabled:cursor-wait disabled:opacity-70 ${
+            aiDrop.hovering ? "scale-105 ring-2 ring-white/80 ring-offset-2 ring-offset-transparent brightness-110" : ""
+          }`}
           onClick={pick}
           disabled={busy}
+          title="انتخاب فایل — یا فایل‌ها را همین‌جا رها کنید"
+          {...aiDrop.dropHandlers}
         >
           {busy ? (
             <Loader2 size={15} className="animate-spin" />

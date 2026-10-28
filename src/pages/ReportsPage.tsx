@@ -13,6 +13,7 @@ import { computeBalances } from "../services/stats";
 import { formatJalali, toPersianDigits } from "../utils/jalali";
 import { formatMoney } from "../utils/num";
 import { customerFullName } from "../db/customers";
+import { requestStatusFa } from "../types";
 import type { Representative } from "../types";
 
 type ReportKind = "requests" | "payments" | "balances";
@@ -51,7 +52,8 @@ export function ReportsPage() {
       if (repId && r.representativeId !== repId) return false;
       if (listId && r.listId !== listId) return false;
       if (status === "issued" && !r.issued) return false;
-      if (status === "pending" && r.issued) return false;
+      if (status === "pending" && (r.issued || r.rejected)) return false;
+      if (status === "rejected" && !r.rejected) return false;
       if (tagId && !r.tags.includes(tagId)) return false;
       if (from && r.registrationDate < from) return false;
       if (to && r.registrationDate > to) return false;
@@ -102,6 +104,7 @@ export function ReportsPage() {
     { key: "registrationDate", header: "تاریخ ثبت" },
     { key: "status", header: "وضعیت" },
     { key: "issuedAt", header: "تاریخ صدور" },
+    { key: "rejectedAt", header: "تاریخ رد" },
     { key: "notes", header: "توضیحات" },
   ];
 
@@ -116,8 +119,9 @@ export function ReportsPage() {
       amount: r.quotedAmount ?? "",
       currency: r.currency === "USD" ? "دلار" : r.currency === "IRT" ? "تومان" : "",
       registrationDate: formatJalali(r.registrationDate),
-      status: r.issued ? "صادر شده" : "در حال کار",
+      status: requestStatusFa(r),
       issuedAt: r.issuedAt ? formatJalali(r.issuedAt) : "",
+      rejectedAt: r.rejectedAt ? formatJalali(r.rejectedAt) : "",
       notes: r.notes ?? "",
     };
   });
@@ -207,6 +211,7 @@ export function ReportsPage() {
               { value: "", label: "همه وضعیت‌ها" },
               { value: "issued", label: "صادر شده" },
               { value: "pending", label: "در حال کار" },
+              { value: "rejected", label: "رد شده" },
             ]}
           />
           <FilterSelect
@@ -318,8 +323,8 @@ export function ReportsPage() {
               key: "status",
               header: "وضعیت",
               align: "center",
-              sortValue: (r) => (r.issued ? 1 : 0),
-              render: (r) => <StatusPill issued={r.issued} />,
+              sortValue: (r) => (r.rejected && !r.issued ? 2 : r.issued ? 1 : 0),
+              render: (r) => <StatusPill issued={r.issued} rejected={r.rejected} />,
             },
           ]}
           rows={filteredRequests}

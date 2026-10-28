@@ -69,12 +69,24 @@ export interface VisaRequest {
   registrationDate: string;
   issued: boolean;
   issuedAt?: string | null;
+  /** The visa application was REJECTED by the embassy. Mutually exclusive with issued. */
+  rejected?: boolean;
+  /** ISO date the rejection was recorded. */
+  rejectedAt?: string | null;
   notes?: string;
   customValues?: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;
   archivedAt?: number | null;
 }
+
+/** Persian status label of a request — single source of truth for UI, exports & search. */
+export function requestStatusFa(r: Pick<VisaRequest, "issued" | "rejected">): string {
+  if (r.rejected && !r.issued) return "رد شده";
+  return r.issued ? "صادر شده" : "در حال کار";
+}
+
+export type VisaRequestStatus = "issued" | "pending" | "rejected";
 
 export interface ListFolder {
   id: string;
@@ -148,6 +160,8 @@ export type ActivityType =
   | "restore"
   | "issue"
   | "unissue"
+  | "reject"
+  | "unreject"
   | "payment"
   | "backup"
   | "restore"

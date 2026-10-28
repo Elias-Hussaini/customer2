@@ -15,6 +15,8 @@ import { useToast } from "../../hooks/useToast";
 import { todayIso } from "../../utils/jalali";
 import { customerFullName } from "../../db/customers";
 import type { Attachment, Currency, Payment } from "../../types";
+import { requestStatusFa } from "../../types";
+import { useDropTarget } from "../ui/DropZone";
 
 interface Props {
   open: boolean;
@@ -43,6 +45,19 @@ export function PaymentFormModal({ open, onClose, payment, defaultRepresentative
   // Optional receipt photo — picked locally (new/replace) or existing.
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [receiptRemoved, setReceiptRemoved] = useState(false);
+
+  // Receipt area is a drop zone: replace / attach by dragging a file onto it.
+  const receiptDrop = useDropTarget((files) => {
+    const f = files[0];
+    if (!f) return;
+    const ok = f.type.startsWith("image/") || f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+    if (!ok) {
+      toast.error("برای رسید فقط عکس یا PDF مجاز است");
+      return;
+    }
+    setReceiptFile(f);
+    setReceiptRemoved(false);
+  });
   const [previewAtt, setPreviewAtt] = useState<Pick<Attachment, "name" | "mime" | "blob"> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -94,7 +109,7 @@ export function PaymentFormModal({ open, onClose, payment, defaultRepresentative
         return {
           id: r.id,
           title: customer ? customerFullName(customer) : "درخواست",
-          subtitle: [r.visaType, r.issued ? "صادر شده" : "در حال کار"].filter(Boolean).join(" • "),
+          subtitle: [r.visaType, requestStatusFa(r)].filter(Boolean).join(" • "),
         };
       });
   }, [requests, customers, representativeId]);
@@ -204,9 +219,16 @@ export function PaymentFormModal({ open, onClose, payment, defaultRepresentative
           />
         </FormField>
 
-        {/* Optional receipt photo */}
+        {/* Optional receipt photo — click or DROP a file here */}
         <FormField label="عکس رسید" hint="اختیاری — رسید پرداخت را همراه همین ثبت پیوست کنید">
-          <div className="flex flex-wrap items-center gap-2.5">
+          <div
+            className={`flex flex-wrap items-center gap-2.5 rounded-2xl border border-dashed p-2 transition-all duration-150 ${
+              receiptDrop.hovering
+                ? "border-brand-400 bg-brand-500/10 ring-2 ring-brand-400/40"
+                : "border-transparent"
+            }`}
+            {...receiptDrop.dropHandlers}
+          >
             {receiptFile ? (
               <>
                 <button

@@ -118,7 +118,7 @@ export function exportStatsLine(stats: ExportStats): string {
   if (stats.hasStatus) {
     parts.push(`${toFaDigits(stats.issued)} صادر شده`);
     parts.push(`${toFaDigits(stats.inProgress)} در حال کار`);
-    if (stats.rejected > 0) parts.push(`${toFaDigits(stats.rejected)} لغو شده`);
+    if (stats.rejected > 0) parts.push(`${toFaDigits(stats.rejected)} رد شده`);
   }
   return parts.join(" — ");
 }

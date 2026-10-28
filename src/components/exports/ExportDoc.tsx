@@ -408,7 +408,7 @@ export const ExportDoc = forwardRef<
               />
               {stats.rejected > 0 && (
                 <FooterChip
-                  label="لغو شده"
+                  label="رد شده"
                   value={toPersianDigits(stats.rejected)}
                   bg="#fdeaea"
                   fg="#c0392b"

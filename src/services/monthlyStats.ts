@@ -84,6 +84,8 @@ export interface MonthAgg {
   newRequests: number;
   /** Visas ISSUED in this month (issuedAt; falls back to registration month). */
   issued: number;
+  /** Applications REJECTED in this month (rejectedAt; falls back to registration month). */
+  rejected: number;
   /** Documents/receipts created in this month (timestamps). */
   newDocs: number;
   /** Payments received this month — currencies never mix. */
@@ -94,7 +96,7 @@ export interface MonthAgg {
 export interface AggregateInput {
   months: MonthKey[];
   customers: Pick<Customer, "registrationDate">[];
-  requests: Pick<VisaRequest, "registrationDate" | "issued" | "issuedAt">[];
+  requests: Pick<VisaRequest, "registrationDate" | "issued" | "issuedAt" | "rejected" | "rejectedAt">[];
   payments: Pick<Payment, "date" | "amount" | "currency">[];
   /** Attachment createdAt timestamps (documents + receipts). */
   attachmentDates?: number[];
@@ -118,6 +120,7 @@ export function aggregateMonthly(input: AggregateInput): MonthAgg[] {
         newCustomers: 0,
         newRequests: 0,
         issued: 0,
+        rejected: 0,
         newDocs: 0,
         paidUSD: 0,
         paidIRT: 0,
@@ -137,6 +140,11 @@ export function aggregateMonthly(input: AggregateInput): MonthAgg[] {
       const issuedKey = r.issuedAt ? isoToMonthKey(r.issuedAt) : isoToMonthKey(r.registrationDate);
       const ib = bucket(issuedKey);
       if (ib) ib.issued++;
+    }
+    if (r.rejected && !r.issued) {
+      const rejKey = r.rejectedAt ? isoToMonthKey(r.rejectedAt) : isoToMonthKey(r.registrationDate);
+      const rb = bucket(rejKey);
+      if (rb) rb.rejected++;
     }
   }
   const minorByBucket = new Map<string, { usd: number; irt: number }>();

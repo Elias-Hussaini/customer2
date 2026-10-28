@@ -1,9 +1,12 @@
 import { db } from "./schema";
 import { logActivity } from "./activities";
 import type { VisaRequest } from "../types";
+import { requestStatusFa } from "../types";
 import { uid } from "../utils/id";
 import { todayIso, formatJalali } from "../utils/jalali";
 import { normalizeAmount } from "../utils/num";
+
+export { requestStatusFa };
 
 export interface RequestInput {
   customerId: string;
@@ -16,6 +19,8 @@ export interface RequestInput {
   registrationDate: string;
   issued: boolean;
   issuedAt?: string | null;
+  rejected?: boolean;
+  rejectedAt?: string | null;
   notes?: string;
   customValues?: Record<string, unknown>;
 }
@@ -35,8 +40,11 @@ export async function createRequest(input: RequestInput): Promise<VisaRequest> {
         : undefined,
     currency: input.quotedAmount != null ? input.currency : undefined,
     registrationDate: input.registrationDate || todayIso(),
+    // issued and rejected are mutually exclusive — issuing clears any rejection.
     issued: input.issued,
     issuedAt: input.issued ? input.issuedAt || todayIso() : null,
+    rejected: input.issued ? false : input.rejected === true,
+    rejectedAt: input.issued || !input.rejected ? null : input.rejectedAt || todayIso(),
     notes: input.notes?.trim() || undefined,
     customValues: input.customValues ?? {},
     createdAt: now,
@@ -66,8 +74,11 @@ export async function updateRequest(id: string, input: RequestInput): Promise<vo
         : undefined,
     currency: input.quotedAmount != null ? input.currency : undefined,
     registrationDate: input.registrationDate,
+    // issued and rejected are mutually exclusive — issuing clears any rejection.
     issued: input.issued,
     issuedAt: input.issued ? input.issuedAt || todayIso() : null,
+    rejected: input.issued ? false : input.rejected === true,
+    rejectedAt: input.issued || !input.rejected ? null : input.rejectedAt || todayIso(),
     notes: input.notes?.trim() || undefined,
     customValues: input.customValues ?? {},
     updatedAt: Date.now(),
@@ -80,7 +91,7 @@ export async function updateRequest(id: string, input: RequestInput): Promise<vo
   });
 }
 
-/** Toggle the "visa issued" flag with an audit entry. */
+/** Toggle the "visa issued" flag with an audit entry. Issuing clears a rejection. */
 export async function setRequestIssued(
   id: string,
   issued: boolean,
@@ -89,6 +100,7 @@ export async function setRequestIssued(
   await db.requests.update(id, {
     issued,
     issuedAt: issued ? issuedAt || todayIso() : null,
+    ...(issued ? { rejected: false, rejectedAt: null } : {}),
     updatedAt: Date.now(),
   });
   await logActivity({
@@ -96,7 +108,32 @@ export async function setRequestIssued(
     entity: "request",
     entityId: id,
     title: issued ? "وضعیت به «صادر شده» تغییر کرد" : "وضعیت صدور لغو شد",
-    detail: issued ? `تاریخ صدور: ${formatJalali(issuedAt || todayIso())}` : "وضعیت به «در حال کار» برگشت",
+    detail: issued
+      ? `تاریخ صدور: ${formatJalali(issuedAt || todayIso())}`
+      : "وضعیت به «در حال کار» برگشت",
+  });
+}
+
+/** Toggle the "application REJECTED" flag with an audit entry. Rejecting un-issues. */
+export async function setRequestRejected(
+  id: string,
+  rejected: boolean,
+  rejectedAt?: string | null,
+): Promise<void> {
+  await db.requests.update(id, {
+    rejected,
+    rejectedAt: rejected ? rejectedAt || todayIso() : null,
+    ...(rejected ? { issued: false, issuedAt: null } : {}),
+    updatedAt: Date.now(),
+  });
+  await logActivity({
+    type: rejected ? "reject" : "unreject",
+    entity: "request",
+    entityId: id,
+    title: rejected ? "درخواست «رد شده» علامت خورد" : "وضعیت رد شدن لغو شد",
+    detail: rejected
+      ? `تاریخ رد: ${formatJalali(rejectedAt || todayIso())}`
+      : "وضعیت به «در حال کار» برگشت",
   });
 }
 

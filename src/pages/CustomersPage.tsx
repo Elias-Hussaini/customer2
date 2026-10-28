@@ -61,11 +61,12 @@ export function CustomersPage() {
   }, [activeRepFilter]);
 
   const statsByCustomer = useMemo(() => {
-    const map = new Map<string, { total: number; issued: number }>();
+    const map = new Map<string, { total: number; issued: number; rejected: number }>();
     for (const r of requests ?? []) {
-      const entry = map.get(r.customerId) ?? { total: 0, issued: 0 };
+      const entry = map.get(r.customerId) ?? { total: 0, issued: 0, rejected: 0 };
       entry.total++;
       if (r.issued) entry.issued++;
+      else if (r.rejected) entry.rejected++;
       map.set(r.customerId, entry);
     }
     return map;
@@ -205,6 +206,9 @@ export function CustomersPage() {
           <span className="chip-soft num inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px]">
             {toPersianDigits(s.total)}
             <span className="text-[#10b981]">({toPersianDigits(s.issued)} صادر)</span>
+            {s.rejected > 0 && (
+              <span className="text-[#dc3535] dark:text-[#f87b7b]">({toPersianDigits(s.rejected)} رد)</span>
+            )}
           </span>
         );
       },

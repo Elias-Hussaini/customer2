@@ -6,6 +6,7 @@ import {
   CalendarRange,
   ChevronLeft,
   ChevronRight,
+  CircleX,
   FileImage,
   FilePlus2,
   Medal,
@@ -127,15 +128,16 @@ export function MonthlyStatsPage() {
     !loading &&
     window.every(
       (m) =>
-        m.newCustomers === 0 && m.newRequests === 0 && m.issued === 0 && m.newDocs === 0 && m.paidUSD === 0 && m.paidIRT === 0,
+        m.newCustomers === 0 && m.newRequests === 0 && m.issued === 0 && m.rejected === 0 && m.newDocs === 0 && m.paidUSD === 0 && m.paidIRT === 0,
     );
 
   const totals = useMemo(() => {
-    const t = { customers: 0, requests: 0, issued: 0, docs: 0, usd: 0, irt: 0 };
+    const t = { customers: 0, requests: 0, issued: 0, rejected: 0, docs: 0, usd: 0, irt: 0 };
     for (const m of window) {
       t.customers += m.newCustomers;
       t.requests += m.newRequests;
       t.issued += m.issued;
+      t.rejected += m.rejected;
       t.docs += m.newDocs;
       t.usd += m.paidUSD;
       t.irt += m.paidIRT;
@@ -265,6 +267,16 @@ export function MonthlyStatsPage() {
                     delta={pctDelta(selected.issued, baseline?.issued ?? 0)}
                     tone="bg-[#10b981]/12 text-[#0b9e6e] dark:text-[#3ddc9a]"
                   />
+                  {selected.rejected > 0 && (
+                    <KpiTile
+                      icon={CircleX}
+                      label="رد شده"
+                      value={toPersianDigits(selected.rejected)}
+                      prev={toPersianDigits(baseline?.rejected ?? 0)}
+                      delta={pctDelta(selected.rejected, baseline?.rejected ?? 0)}
+                      tone="bg-[#ef4444]/12 text-[#dc3535] dark:text-[#f87b7b]"
+                    />
+                  )}
                   <KpiTile
                     icon={FileImage}
                     label="مدارک ثبت‌شده"
@@ -299,7 +311,7 @@ export function MonthlyStatsPage() {
               icon={<CalendarRange size={15} className="text-brand-500" />}
             >
               <MonthlyBars
-                months={window.map((m) => ({ key: m.key, label: m.label, a: m.newRequests, b: m.issued }))}
+                months={window.map((m) => ({ key: m.key, label: m.label, a: m.newRequests, b: m.issued, c: m.rejected }))}
                 selectedKey={selected.key}
                 onSelect={setSelectedKey}
               />
@@ -396,6 +408,9 @@ export function MonthlyStatsPage() {
                 { label: "درخواست‌ها (۱۲ ماه)", value: toPersianDigits(totals.requests) },
                 { label: "ویزاهای صادر شده", value: toPersianDigits(totals.issued) },
                 { label: "مدارک ثبت‌شده", value: toPersianDigits(totals.docs) },
+                ...(totals.rejected > 0
+                  ? [{ label: "رد شده (۱۲ ماه)", value: toPersianDigits(totals.rejected) }]
+                  : []),
               ].map((t) => (
                 <GlassCard key={t.label} className="p-3.5 text-center">
                   <p className="text-[10.5px] text-ink-500 dark:text-ink-400">{t.label}</p>

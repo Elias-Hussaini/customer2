@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import {
   Banknote,
   CheckCircle2,
+  CircleX,
   Clock3,
   FilePlus2,
   Flame,
@@ -117,15 +118,16 @@ export function DashboardPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <StatCard icon={Users} label="مشتریان" value={toPersianDigits(stats?.customers ?? 0)} tone="brand" />
         <StatCard icon={UserRound} label="نمایندگان" value={toPersianDigits(stats?.representatives ?? 0)} tone="info" />
         <StatCard icon={ListChecks} label="کل درخواست‌ها" value={toPersianDigits(stats?.requests ?? 0)} tone="brand" />
         <StatCard icon={Flame} label="درخواست‌های فوری" value={toPersianDigits(stats?.urgent ?? 0)} tone="danger" />
         <StatCard icon={CheckCircle2} label="ویزاهای صادر شده" value={toPersianDigits(stats?.issued ?? 0)} tone="success" />
         <StatCard icon={Clock3} label="در حال کار" value={toPersianDigits(stats?.inProgress ?? 0)} tone="warning" />
+        <StatCard icon={CircleX} label="رد شده" value={toPersianDigits(stats?.rejected ?? 0)} tone="danger" />
         <StatCard icon={FolderOpen} label="لیست‌ها" value={toPersianDigits(stats?.lists ?? 0)} tone="neutral" />
-        <div className="glass flex flex-col justify-center gap-1.5 rounded-3xl p-4">
+        <div className="glass col-span-2 flex flex-col justify-center gap-1.5 rounded-3xl p-4">
           <p className="text-[11px] font-medium text-ink-500 dark:text-ink-400">مانده حساب‌ها</p>
           {stats && stats.balances.length > 0 ? (
             stats.balances.map((b) => (
@@ -174,7 +176,7 @@ export function DashboardPage() {
                           {r.visaType ?? "بدون نوع"} • {formatJalali(r.registrationDate)}
                         </span>
                       </span>
-                      <StatusPill issued={r.issued} />
+                      <StatusPill issued={r.issued} rejected={r.rejected} />
                     </Link>
                   </li>
                 );

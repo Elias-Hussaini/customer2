@@ -79,7 +79,33 @@ describe("aggregateMonthly", () => {
     expect(byKey["1404-11"].issued).toBe(1);
     expect(byKey["1405-01"].issued).toBe(2);
     expect(byKey["1404-11"].newDocs).toBe(1);
+    expect(byKey["1404-11"].rejected).toBe(0);
     expect(byKey["1404-12"].newCustomers).toBe(0);
+  });
+
+  it("buckets rejections by rejectedAt with registration-month fallback", () => {
+    const aggs = aggregateMonthly({
+      months,
+      customers: [],
+      requests: [
+        // رد شده در اسفند، ثبت در بهمن → به اسفند می‌رود
+        { registrationDate: "2026-02-10", issued: false, issuedAt: null, rejected: true, rejectedAt: "2026-03-10" },
+        // رد شده بدون تاریخ رد → ماه ثبت (بهمن)
+        { registrationDate: "2026-02-12", issued: false, issuedAt: null, rejected: true, rejectedAt: null },
+        // ثبت در بهمن، رد در فروردین
+        { registrationDate: "2026-02-14", issued: false, issuedAt: null, rejected: true, rejectedAt: "2026-03-24" },
+        // قدیمی‌ها بدون فیلد rejected → هیچ سهمی ندارند
+        { registrationDate: "2026-02-15", issued: false, issuedAt: null },
+        // issued و rejected هردو روشن (حالت نامعتبر) → شمرده نمی‌شود
+        { registrationDate: "2026-02-16", issued: true, issuedAt: "2026-03-25", rejected: true, rejectedAt: "2026-03-25" },
+      ],
+      payments: [],
+      attachmentDates: [],
+    });
+    const byKey = Object.fromEntries(aggs.map((a) => [a.key, a]));
+    expect(byKey["1404-11"].rejected).toBe(1); // فقط fallback بهمن
+    expect(byKey["1404-12"].rejected).toBe(1); // rejectedAt اسفند
+    expect(byKey["1405-01"].rejected).toBe(1); // rejectedAt فروردین
   });
 
   it("sums money per currency without mixing", () => {
@@ -145,6 +171,7 @@ describe("topIssuedMonths", () => {
       newCustomers: 0,
       newRequests: 0,
       issued,
+      rejected: 0,
       newDocs: 0,
       paidUSD: 0,
       paidIRT: 0,
