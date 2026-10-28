@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { FileSpreadsheet, FileText, FileType2, Image, Layers } from "lucide-react";
 import { Modal } from "../ui/Modal";
@@ -14,6 +14,7 @@ import {
 import { exportElementAsPdf, exportElementAsPng } from "../../utils/export/raster";
 import { ExportDoc, type ExportRowPhotos } from "./ExportDoc";
 import { useToast } from "../../hooks/useToast";
+import { loadPageFilter, savePageFilter } from "../../utils/pageFilters";
 
 type Format = "xlsx" | "csv" | "pdf" | "png";
 
@@ -23,6 +24,25 @@ const FORMATS: { key: Format; label: string; icon: typeof FileText }[] = [
   { key: "pdf", label: "PDF", icon: FileText },
   { key: "png", label: "تصویر PNG", icon: Image },
 ];
+
+function isFormat(v: string): v is Format {
+  return FORMATS.some((f) => f.key === v);
+}
+
+/** Saved column selection is a comma-joined key list; "!" = user chose none. */
+const NONE_SENTINEL = "!";
+
+/** Load the remembered column selection for a report type, intersected with
+ *  the columns that actually exist (unknown saved keys are dropped; a report
+ *  whose columns all vanished falls back to everything selected). */
+function loadColumnPrefs(allKeys: string[], page: string): string[] {
+  const saved = loadPageFilter<string>(page, "columns", "", () => true);
+  if (!saved) return allKeys;
+  if (saved === NONE_SENTINEL) return [];
+  const set = new Set(saved.split(",").filter(Boolean));
+  const kept = allKeys.filter((k) => set.has(k));
+  return kept.length > 0 ? kept : allKeys;
+}
 
 /** Grouping configuration — e.g. by representative with profile photos. */
 export interface ExportGrouping {
@@ -58,6 +78,10 @@ interface ExportDialogProps {
  * next to each name (XLSX embeds it as a real image; PDF/PNG render it).
  * When `rowPhotos` is set, every data row shows a small round photo beside
  * the matching name cell (customer photos) in all formats.
+ *
+ * The LAST choices (output columns like ارز/لیست, format, grouping) are
+ * remembered per report type — reopening the dialog restores them, so a
+ * habitual "same report, same columns" export is one click.
  */
 export function ExportDialog({
   open,
@@ -73,14 +97,48 @@ export function ExportDialog({
   extra,
 }: ExportDialogProps) {
   const toast = useToast();
-  const [selected, setSelected] = useState<string[]>(columns.map((c) => c.key));
-  const [format, setFormat] = useState<Format>("xlsx");
+  /** localStorage page key for this report type's export preferences. */
+  const prefsPage = `export-${defaultFilename}`;
+  const [selected, setSelected] = useState<string[]>(() =>
+    loadColumnPrefs(columns.map((c) => c.key), prefsPage),
+  );
+  const [format, setFormat] = useState<Format>(() => {
+    const saved = loadPageFilter<string>(prefsPage, "format", "xlsx", isFormat);
+    return isFormat(saved) ? saved : "xlsx";
+  });
   const [filename, setFilename] = useState(defaultFilename);
   const [busy, setBusy] = useState(false);
-  const [groupBy, setGroupBy] = useState(true);
+  const [groupBy, setGroupBy] = useState(
+    () => loadPageFilter<string>(prefsPage, "groupBy", "1", () => true) !== "0",
+  );
   const docRef = useRef<HTMLDivElement>(null);
   const [pendingDoc, setPendingDoc] = useState(false);
   const readyCb = useRef<(() => void) | null>(null);
+
+  // Switching report kind swaps the column set — reload that kind's saved
+  // preferences (via a ref so a new inline columns array per render does not
+  // reset the user's in-session tweaks) and refresh the default filename.
+  const columnsRef = useRef(columns);
+  columnsRef.current = columns;
+  useEffect(() => {
+    setSelected(loadColumnPrefs(columnsRef.current.map((c) => c.key), `export-${defaultFilename}`));
+    setFilename(defaultFilename);
+  }, [defaultFilename]);
+
+  // Remember every choice the moment it changes.
+  useEffect(() => {
+    savePageFilter(
+      `export-${defaultFilename}`,
+      "columns",
+      selected.length > 0 ? selected.join(",") : NONE_SENTINEL,
+    );
+  }, [selected, defaultFilename]);
+  useEffect(() => {
+    savePageFilter(`export-${defaultFilename}`, "format", format);
+  }, [format, defaultFilename]);
+  useEffect(() => {
+    savePageFilter(`export-${defaultFilename}`, "groupBy", groupBy ? "1" : "0");
+  }, [groupBy, defaultFilename]);
 
   const activeColumns = columns.filter((c) => selected.includes(c.key));
 

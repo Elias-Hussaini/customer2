@@ -181,11 +181,13 @@
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
-    border-radius: 0.85rem;
-    font-weight: 600;
+    /* Fully-rounded pill + generous height — tall & rounded reads friendlier
+       than the old wide/flat stretched look. */
+    border-radius: 999px;
+    font-weight: 700;
     font-size: 0.875rem;
     line-height: 1;
-    padding: 0.68rem 1.05rem;
+    padding: 0.78rem 1.35rem;
     cursor: pointer;
     border: 1px solid transparent;
     user-select: none;
@@ -269,23 +271,23 @@
   }
 
   .btn-sm {
-    padding: 0.45rem 0.75rem;
+    padding: 0.58rem 1.05rem;
     font-size: 0.8rem;
-    border-radius: 0.7rem;
+    border-radius: 999px;
   }
   .btn-lg {
-    padding: 0.85rem 1.5rem;
+    padding: 0.95rem 1.7rem;
     font-size: 0.95rem;
-    border-radius: 1rem;
+    border-radius: 999px;
   }
 
   .icon-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 2.5rem;
-    height: 2.5rem;
-    border-radius: 0.85rem;
+    width: 2.6rem;
+    height: 2.6rem;
+    border-radius: 999px;
     cursor: pointer;
     border: 1px solid transparent;
     background: transparent;

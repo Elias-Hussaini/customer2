@@ -75,28 +75,31 @@ export async function exportElementAsPdf(el: HTMLElement, filename: string): Pro
   const domToCanvas = (domBottom: number) =>
     ((domBottom - elRect.top) / elRect.width) * canvas.width;
 
-  // ---- Cut candidates: bottom edge of every row, the top of the summary
-  // footer (so it never gets sliced), both edges of every section band
-  // (so a band is never cut in half), and the document end ----
+  // ---- Cut candidates: top AND bottom edge of every row (a row is never
+  // sliced — the cut lands on its top so the whole row moves to the next
+  // page), the top of the summary footer (so it never gets sliced), both
+  // edges of every section band (so a band is never cut in half), and the
+  // document end ----
   const rowEls = Array.from(el.querySelectorAll<HTMLElement>("[data-export-row]"));
   const headEl = el.querySelector<HTMLElement>("[data-export-head]");
   const footerEl = el.querySelector<HTMLElement>("[data-export-footer]");
   const sectionEls = Array.from(el.querySelectorAll<HTMLElement>("[data-export-section]"));
   const cutSet = new Set<number>([canvas.height]);
-  for (const r of rowEls) {
-    const y = domToCanvas(r.getBoundingClientRect().bottom);
+  const addCut = (y: number) => {
     if (y > 2 && y < canvas.height - 2) cutSet.add(Math.round(y));
+  };
+  for (const r of rowEls) {
+    const rr = r.getBoundingClientRect();
+    addCut(domToCanvas(rr.top));
+    addCut(domToCanvas(rr.bottom));
   }
   for (const s of sectionEls) {
     const sr = s.getBoundingClientRect();
-    const top = domToCanvas(sr.top);
-    const bottom = domToCanvas(sr.bottom);
-    if (top > 2 && top < canvas.height - 2) cutSet.add(Math.round(top));
-    if (bottom > 2 && bottom < canvas.height - 2) cutSet.add(Math.round(bottom));
+    addCut(domToCanvas(sr.top));
+    addCut(domToCanvas(sr.bottom));
   }
   if (footerEl) {
-    const y = domToCanvas(footerEl.getBoundingClientRect().top);
-    if (y > 2 && y < canvas.height - 2) cutSet.add(Math.round(y));
+    addCut(domToCanvas(footerEl.getBoundingClientRect().top));
   }
   const cuts = [...cutSet].sort((a, b) => a - b);
 
@@ -122,12 +125,15 @@ export async function exportElementAsPdf(el: HTMLElement, filename: string): Pro
     }
   }
 
-  const headGapPt = headUrl ? 10 : 0;
+  const headGapPt = headUrl ? 12 : 0;
   const headerBlockPt = headUrl ? headHpx * k + headGapPt : 0;
+  // Bottom breathing room on every page — the last row never touches the
+  // page edge (names were getting visually clipped at the bottom of pages).
+  const guardPt = 16;
   // Canvas-px content budget per page: page 1 has the document header and
   // needs no repeated table head; continuation pages reserve room for it.
-  const H1 = Math.floor((pageH - margin * 2) / k);
-  const Hn = Math.floor((pageH - margin * 2 - headerBlockPt) / k);
+  const H1 = Math.floor((pageH - margin * 2 - guardPt) / k);
+  const Hn = Math.floor((pageH - margin * 2 - guardPt - headerBlockPt) / k);
 
   /** Largest cut position in (start, limit]. */
   const snap = (start: number, limit: number): number => {
@@ -146,9 +152,10 @@ export async function exportElementAsPdf(el: HTMLElement, filename: string): Pro
     let end = Math.min(start + budget, canvas.height);
     if (end < canvas.height) {
       const boundary = snap(start, end);
-      // Cut between rows when a boundary is reasonably close to the budget;
-      // a row taller than a page still falls back to a hard cut.
-      if (boundary > start + budget * 0.25) end = boundary;
+      // ALWAYS cut on a row boundary when one exists — a row/name is never
+      // sliced in half. Only a single element taller than a whole page falls
+      // back to the hard cut.
+      if (boundary > start) end = boundary;
     }
     const segH = end - start;
     if (segH <= 0) break;

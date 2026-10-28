@@ -65,6 +65,9 @@ function buildLayout(
   columns: ExportColumn[],
   rows: ExportRow[],
   photoColumnKey?: string,
+  /** Minimum table width (e.g. widest section band) — the table never gets
+   *  narrower, so band labels (rep names) always stay on ONE line. */
+  minTableWidth = 0,
 ): Layout {
   // Natural width of every column = widest content (header or any cell).
   // The photo column gets extra room for the small round photo.
@@ -91,6 +94,16 @@ function buildLayout(
     const scale = target / widths.reduce((a, b) => a + b, 0);
     widths = widths.map((w) => w * scale);
     docWidth = MAX_DOC_WIDTH;
+  }
+
+  // Section bands span the whole table — when their content (photo + rep
+  // name + count chip) is wider than the table, stretch every column
+  // proportionally so band text NEVER wraps to a second line.
+  const tableWidth = widths.reduce((a, b) => a + b, 0);
+  if (minTableWidth > 0 && tableWidth < minTableWidth) {
+    const scale = minTableWidth / tableWidth;
+    widths = widths.map((w) => w * scale);
+    docWidth = minTableWidth + PAGE_PAD * 2;
   }
 
   const headers = columns.map((c, i) =>
@@ -200,6 +213,29 @@ export const ExportDoc = forwardRef<
     return rows.map((r) => String(r[rowPhotos.columnKey] ?? "").trim().charAt(0) || "?");
   }, [rows, rowPhotos]);
 
+  /** Widest section-band content (photo + rep name + count chip + paddings).
+   *  The table must be at least this wide so band names never wrap. */
+  const minBandWidth = useMemo(() => {
+    if (!groups || groups.length === 0) return 0;
+    const what = groupMeta?.what ?? "نماینده";
+    let max = 0;
+    for (const g of groups) {
+      const label = groupLabel(g.value, what);
+      const chip = `${toPersianDigits(g.rows.length)} رکورد`;
+      const w =
+        27 /* photo */ +
+        9 + 9 /* gaps */ +
+        textWidth(label, "800 13px Vazirmatn") +
+        textWidth(chip, "700 10.5px Vazirmatn") +
+        22 /* chip padding + border */ +
+        24 /* cell padding */ +
+        4 /* safety */;
+      max = Math.max(max, Math.ceil(w));
+    }
+    return max;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groups, groupMeta]);
+
   // Measure in a layout effect (after Vazirmatn is guaranteed loaded) so the
   // captured pixels exactly match the measured widths.
   useLayoutEffect(() => {
@@ -215,7 +251,7 @@ export const ExportDoc = forwardRef<
         /* fall back to system metrics */
       }
       if (!alive) return;
-      setLayout(buildLayout(columns, rows, rowPhotos?.columnKey));
+      setLayout(buildLayout(columns, rows, rowPhotos?.columnKey, minBandWidth));
     })();
     return () => {
       alive = false;
@@ -242,19 +278,21 @@ export const ExportDoc = forwardRef<
         boxSizing: "border-box",
       }}
     >
-      {/* Header — the new app logo leads the document */}
+      {/* Header — the new app logo leads the document. Title, subtitle and
+          the date block each stay on ONE line (nowrap + ellipsis safety) so
+          nothing ever wraps onto or overlaps a neighbouring element. */}
       <div
         style={{
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          gap: "16px",
+          gap: "18px",
           paddingBottom: "15px",
           borderBottom: `2px solid ${BRAND}`,
-          marginBottom: "20px",
+          marginBottom: "22px",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "13px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "13px", minWidth: 0, overflow: "hidden" }}>
           <img
             src={LOGO_DATA_URL}
             alt="logo"
@@ -269,14 +307,44 @@ export const ExportDoc = forwardRef<
               objectFit: "cover",
             }}
           />
-          <div>
-            <div style={{ fontSize: "17px", fontWeight: 800 }}>{title}</div>
+          <div style={{ minWidth: 0, overflow: "hidden" }}>
+            <div
+              style={{
+                fontSize: "17px",
+                fontWeight: 800,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {title}
+            </div>
             {subtitle && (
-              <div style={{ fontSize: "11.5px", color: MUTED, marginTop: "2px" }}>{subtitle}</div>
+              <div
+                style={{
+                  fontSize: "11.5px",
+                  color: MUTED,
+                  marginTop: "3px",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {subtitle}
+              </div>
             )}
           </div>
         </div>
-        <div style={{ textAlign: "left", fontSize: "10.5px", color: MUTED }}>
+        <div
+          style={{
+            textAlign: "left",
+            fontSize: "10.5px",
+            color: MUTED,
+            flexShrink: 0,
+            whiteSpace: "nowrap",
+            lineHeight: "1.7",
+          }}
+        >
           <div dir="ltr">E-managment — Visa Management</div>
           <div>تاریخ گزارش: {formatJalali(todayIso(), "long")}</div>
         </div>
@@ -509,7 +577,7 @@ function DataRow({
           <td
             key={key}
             style={{
-              padding: "8px 10px",
+              padding: "8.5px 10px",
               fontSize: "12.5px",
               textAlign: "center",
               verticalAlign: "middle",
@@ -520,7 +588,17 @@ function DataRow({
               ...(last ? {} : { borderBottom: `1px solid ${ROW_BORDER}` }),
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "7px" }}>
+            {/* Photo cells hug the START of the cell (right in RTL) so every
+                photo + name pair lines up in ONE straight column — centered
+                content made them jump left/right row by row. */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: withPhoto ? "flex-start" : "center",
+                gap: "7px",
+              }}
+            >
               {withPhoto && (
                 <RoundPhoto
                   src={photo}
@@ -609,7 +687,9 @@ function RoundPhoto({
   );
 }
 
-/** Section band — [photo] نام نماینده + row count — starts a group. */
+/** Section band — [photo] نام نماینده + row count — starts a group.
+ *  Everything stays on ONE line (nowrap); buildLayout guarantees the table
+ *  is wide enough for the longest band. */
 function SectionBand({
   label,
   photo,
@@ -632,9 +712,20 @@ function SectionBand({
           borderTop: `1.5px solid #d9d6f2`,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "9px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "9px", flexWrap: "nowrap", whiteSpace: "nowrap" }}>
           <RoundPhoto src={photo} letter={label.trim().charAt(0)} size={27} />
-          <span style={{ fontSize: "13px", fontWeight: 800, color: "#3d35a8" }}>{label}</span>
+          <span
+            style={{
+              fontSize: "13px",
+              fontWeight: 800,
+              color: "#3d35a8",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {label}
+          </span>
           <span
             style={{
               fontSize: "10.5px",
@@ -645,6 +736,7 @@ function SectionBand({
               borderRadius: "999px",
               padding: "2px 10px",
               whiteSpace: "nowrap",
+              flexShrink: 0,
             }}
           >
             {toPersianDigits(count)} رکورد

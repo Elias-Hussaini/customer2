@@ -318,7 +318,7 @@ export function ReportsPage() {
             <button
               key={q.key}
               type="button"
-              className={`rounded-full px-3 py-1 text-[11px] font-bold transition-all ${
+              className={`rounded-full px-3 py-1.5 text-[11px] font-bold transition-all ${
                 active
                   ? "bg-brand-500 text-white shadow-[0_4px_12px_-4px_rgba(99,91,255,0.5)]"
                   : "bg-ink-900/5 text-ink-500 hover:bg-brand-500/12 hover:text-brand-600 dark:bg-white/5 dark:text-ink-400 dark:hover:text-brand-300"

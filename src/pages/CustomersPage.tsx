@@ -5,6 +5,7 @@ import { PageHeader } from "../components/ui/StatCard";
 import { DataTable, type Column } from "../components/ui/DataTable";
 import { EmptyState } from "../components/ui/EmptyState";
 import { SearchBox, FilterSelect } from "../components/ui/inputs";
+import { JalaliDatePicker } from "../components/ui/JalaliDatePicker";
 import { Menu } from "../components/ui/Menu";
 import { CustomerFormModal } from "../components/domain/CustomerFormModal";
 import { Avatar } from "../components/ui/Avatar";
@@ -13,16 +14,38 @@ import { useCustomers, useLists, useRepresentatives, useRequests } from "../hook
 import { useConfirm } from "../hooks/useConfirm";
 import { useToast } from "../hooks/useToast";
 import { formatJalali, toPersianDigits } from "../utils/jalali";
+import { quickDateRanges } from "../utils/requestDateFilter";
 import { uiActions } from "../components/layout/uiStore";
 import { loadPageFilter, savePageFilter } from "../utils/pageFilters";
 import type { Customer } from "../types";
 
-const CUSTOMERS_SORTS = ["newest", "oldest", "name"] as const;
+const CUSTOMERS_SORTS = ["newest", "oldest", "name", "mostRequests", "mostIssued"] as const;
 
 type CustomersSort = (typeof CUSTOMERS_SORTS)[number];
 
 function isCustomersSort(v: string): v is CustomersSort {
   return (CUSTOMERS_SORTS as readonly string[]).includes(v);
+}
+
+/** Visa-status filter for a customer (derived from their requests). */
+const STATUS_FILTERS = [
+  { value: "", label: "همه وضعیت‌ها" },
+  { value: "issued", label: "ویزا صادر شده" },
+  { value: "pending", label: "در حال کار" },
+  { value: "rejected", label: "رد شده" },
+  { value: "none", label: "بدون درخواست" },
+] as const;
+
+type StatusFilter = (typeof STATUS_FILTERS)[number]["value"];
+
+function isStatusFilter(v: string): v is StatusFilter {
+  return STATUS_FILTERS.some((o) => o.value === v);
+}
+
+/** Saved date filters are ISO strings; "" means not set. */
+function loadSavedDate(key: string): string | null {
+  const v = loadPageFilter<string>("customers", key, "", () => true);
+  return v ? v : null;
 }
 
 export function CustomersPage() {
@@ -37,10 +60,22 @@ export function CustomersPage() {
   // Last used filters are remembered across visits (validated on load).
   const [query, setQuery] = useState("");
   const [repFilter, setRepFilter] = useState<string>(() => loadPageFilter<string>("customers", "rep", "", () => true));
+  const [listFilter, setListFilter] = useState<string>(() => loadPageFilter<string>("customers", "list", "", () => true));
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
+    const saved = loadPageFilter<string>("customers", "status", "", () => true);
+    return isStatusFilter(saved) ? saved : "";
+  });
   const [sort, setSort] = useState<CustomersSort>(() => {
     const saved = loadPageFilter<string>("customers", "sort", "newest", () => true);
     return isCustomersSort(saved) ? saved : "newest";
   });
+  /** Issued-visa date range (ISO) — customer matches when ANY issued request
+   *  falls inside, e.g. "همه صادرشده‌های این هفته". */
+  const [issuedFrom, setIssuedFrom] = useState<string | null>(() => loadSavedDate("issuedFrom"));
+  const [issuedTo, setIssuedTo] = useState<string | null>(() => loadSavedDate("issuedTo"));
+  /** Customer registration-date range (ISO). */
+  const [regFrom, setRegFrom] = useState<string | null>(() => loadSavedDate("regFrom"));
+  const [regTo, setRegTo] = useState<string | null>(() => loadSavedDate("regTo"));
   const [editing, setEditing] = useState<Customer | null>(null);
   const [editOpen, setEditOpen] = useState(false);
 
@@ -59,6 +94,24 @@ export function CustomersPage() {
   useEffect(() => {
     savePageFilter("customers", "rep", activeRepFilter);
   }, [activeRepFilter]);
+  useEffect(() => {
+    savePageFilter("customers", "list", listFilter);
+  }, [listFilter]);
+  useEffect(() => {
+    savePageFilter("customers", "status", statusFilter);
+  }, [statusFilter]);
+  useEffect(() => {
+    savePageFilter("customers", "issuedFrom", issuedFrom ?? "");
+  }, [issuedFrom]);
+  useEffect(() => {
+    savePageFilter("customers", "issuedTo", issuedTo ?? "");
+  }, [issuedTo]);
+  useEffect(() => {
+    savePageFilter("customers", "regFrom", regFrom ?? "");
+  }, [regFrom]);
+  useEffect(() => {
+    savePageFilter("customers", "regTo", regTo ?? "");
+  }, [regTo]);
 
   const statsByCustomer = useMemo(() => {
     const map = new Map<string, { total: number; issued: number; rejected: number }>();
@@ -70,6 +123,20 @@ export function CustomersPage() {
       map.set(r.customerId, entry);
     }
     return map;
+  }, [requests]);
+
+  /** customerId → issuance dates of their issued visas (ISO) — powers the
+   *  "صادر شده از تاریخ تا تاریخ" range filter. */
+  const issuedDatesByCustomer = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const r of requests ?? []) {
+      if (r.issued && r.issuedAt) {
+        const arr = m.get(r.customerId);
+        if (arr) arr.push(r.issuedAt);
+        else m.set(r.customerId, [r.issuedAt]);
+      }
+    }
+    return m;
   }, [requests]);
 
   /** Fallback for customers registered before the required rule: derive rep/list
@@ -102,6 +169,9 @@ export function CustomersPage() {
     if (activeRepFilter) {
       list = list.filter((c) => displayRepId(c) === activeRepFilter);
     }
+    if (listFilter) {
+      list = list.filter((c) => displayListId(c) === listFilter);
+    }
     if (query.trim()) {
       const q = query.trim().toLowerCase();
       list = list.filter((c) =>
@@ -110,6 +180,35 @@ export function CustomersPage() {
           .includes(q),
       );
     }
+    // Visa-status filter — derived from the customer's requests.
+    if (statusFilter) {
+      list = list.filter((c) => {
+        const s = statsByCustomer.get(c.id);
+        switch (statusFilter) {
+          case "issued":
+            return !!s && s.issued > 0;
+          case "pending":
+            return !!s && s.total - s.issued - s.rejected > 0;
+          case "rejected":
+            return !!s && s.rejected > 0;
+          case "none":
+            return !s || s.total === 0;
+          default:
+            return true;
+        }
+      });
+    }
+    // Issued-visa date range — any issued visa inside [from, to] qualifies.
+    if (issuedFrom || issuedTo) {
+      list = list.filter((c) =>
+        (issuedDatesByCustomer.get(c.id) ?? []).some(
+          (d) => (!issuedFrom || d >= issuedFrom) && (!issuedTo || d <= issuedTo),
+        ),
+      );
+    }
+    // Registration-date range.
+    if (regFrom) list = list.filter((c) => c.registrationDate >= regFrom);
+    if (regTo) list = list.filter((c) => c.registrationDate <= regTo);
     switch (sort) {
       case "newest":
         list.sort((a, b) => b.createdAt - a.createdAt);
@@ -120,10 +219,36 @@ export function CustomersPage() {
       case "name":
         list.sort((a, b) => customerFullName(a).localeCompare(customerFullName(b), "fa"));
         break;
+      case "mostRequests":
+        list.sort(
+          (a, b) =>
+            (statsByCustomer.get(b.id)?.total ?? 0) - (statsByCustomer.get(a.id)?.total ?? 0) ||
+            b.createdAt - a.createdAt,
+        );
+        break;
+      case "mostIssued":
+        list.sort(
+          (a, b) =>
+            (statsByCustomer.get(b.id)?.issued ?? 0) - (statsByCustomer.get(a.id)?.issued ?? 0) ||
+            b.createdAt - a.createdAt,
+        );
+        break;
     }
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customers, requests, query, activeRepFilter, sort]);
+  }, [
+    customers,
+    requests,
+    query,
+    activeRepFilter,
+    listFilter,
+    statusFilter,
+    issuedFrom,
+    issuedTo,
+    regFrom,
+    regTo,
+    sort,
+  ]);
 
   const columns: Column<Customer>[] = [
     {
@@ -276,6 +401,23 @@ export function CustomersPage() {
     },
   ];
 
+  const quickRanges = useMemo(() => quickDateRanges(), []);
+
+  const anyFilterActive =
+    !!query.trim() || !!activeRepFilter || !!listFilter || !!statusFilter ||
+    !!issuedFrom || !!issuedTo || !!regFrom || !!regTo;
+
+  const clearAllFilters = () => {
+    setQuery("");
+    setRepFilter("");
+    setListFilter("");
+    setStatusFilter("");
+    setIssuedFrom(null);
+    setIssuedTo(null);
+    setRegFrom(null);
+    setRegTo(null);
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
@@ -288,51 +430,136 @@ export function CustomersPage() {
         }
       />
 
-      <div className="glass flex flex-wrap items-center gap-2 rounded-3xl p-3.5">
-        <SearchBox
-          value={query}
-          onChange={setQuery}
-          placeholder="نام، شماره پاسپورت یا معرف…"
-          className="min-w-[200px] flex-1"
-        />
-        <FilterSelect
-          ariaLabel="نماینده"
-          value={activeRepFilter}
-          onChange={setRepFilter}
-          options={[
-            { value: "", label: "همه مشتریان" },
-            ...(representatives ?? [])
-              .filter((r) =>
-                (customers ?? []).some(
-                  (c) =>
-                    c.representativeId === r.id ||
-                    derivedRepByCustomer.get(c.id) === r.id,
-                ),
-              )
-              .map((r) => ({ value: r.id, label: `مشتریان ${r.name}` })),
-          ]}
-        />
-        <FilterSelect
-          ariaLabel="مرتب‌سازی"
-          value={sort}
-          onChange={(v) => setSort(isCustomersSort(v) ? v : "newest")}
-          options={[
-            { value: "newest", label: "جدیدترین" },
-            { value: "oldest", label: "قدیمی‌ترین" },
-            { value: "name", label: "الفبا" },
-          ]}
-        />
-        {(query.trim() || activeRepFilter) && (
-          <button
-            className="btn btn-ghost btn-sm !text-rose-500 dark:!text-rose-400"
-            onClick={() => {
-              setQuery("");
-              setRepFilter("");
-            }}
-          >
-            <X size={14} /> پاک‌کردن فیلترها
-          </button>
-        )}
+      <div className="glass flex flex-col gap-2.5 rounded-3xl p-3.5">
+        {/* Row 1 — search + entity/status filters + sort */}
+        <div className="flex flex-wrap items-center gap-2">
+          <SearchBox
+            value={query}
+            onChange={setQuery}
+            placeholder="نام، شماره پاسپورت یا معرف…"
+            className="min-w-[200px] flex-1"
+          />
+          <FilterSelect
+            ariaLabel="نماینده"
+            value={activeRepFilter}
+            onChange={setRepFilter}
+            options={[
+              { value: "", label: "همه مشتریان" },
+              ...(representatives ?? [])
+                .filter((r) =>
+                  (customers ?? []).some(
+                    (c) =>
+                      c.representativeId === r.id ||
+                      derivedRepByCustomer.get(c.id) === r.id,
+                  ),
+                )
+                .map((r) => ({ value: r.id, label: `مشتریان ${r.name}` })),
+            ]}
+          />
+          <FilterSelect
+            ariaLabel="لیست"
+            value={listFilter}
+            onChange={setListFilter}
+            options={[
+              { value: "", label: "همه لیست‌ها" },
+              ...(lists ?? [])
+                .filter((l) =>
+                  (customers ?? []).some(
+                    (c) => c.listId === l.id || derivedListByCustomer.get(c.id) === l.id,
+                  ),
+                )
+                .map((l) => ({ value: l.id, label: l.name })),
+            ]}
+          />
+          <FilterSelect
+            ariaLabel="وضعیت ویزا"
+            value={statusFilter}
+            onChange={(v) => setStatusFilter(isStatusFilter(v) ? v : "")}
+            options={STATUS_FILTERS.map((s) => ({ value: s.value, label: s.label }))}
+          />
+          <FilterSelect
+            ariaLabel="مرتب‌سازی"
+            value={sort}
+            onChange={(v) => setSort(isCustomersSort(v) ? v : "newest")}
+            options={[
+              { value: "newest", label: "جدیدترین" },
+              { value: "oldest", label: "قدیمی‌ترین" },
+              { value: "name", label: "الفبا" },
+              { value: "mostRequests", label: "بیشترین درخواست" },
+              { value: "mostIssued", label: "بیشترین صدور" },
+            ]}
+          />
+          {anyFilterActive && (
+            <button
+              className="btn btn-ghost btn-sm !text-rose-500 dark:!text-rose-400"
+              onClick={clearAllFilters}
+            >
+              <X size={14} /> پاک‌کردن فیلترها
+            </button>
+          )}
+        </div>
+
+        {/* Row 2 — date ranges: visa issuance + customer registration */}
+        <div className="flex flex-wrap items-center gap-2 border-t border-ink-900/5 pt-2.5 dark:border-white/5">
+          <span className="shrink-0 text-[11px] font-bold text-ink-400">تاریخ صدور:</span>
+          <JalaliDatePicker
+            value={issuedFrom}
+            onChange={setIssuedFrom}
+            placeholder="از تاریخ صدور"
+            className="w-40"
+          />
+          <JalaliDatePicker
+            value={issuedTo}
+            onChange={setIssuedTo}
+            placeholder="تا تاریخ صدور"
+            className="w-40"
+          />
+          <span className="mx-1 hidden h-5 w-px bg-ink-900/10 dark:bg-white/10 sm:block" />
+          <span className="shrink-0 text-[11px] font-bold text-ink-400">تاریخ ثبت:</span>
+          <JalaliDatePicker
+            value={regFrom}
+            onChange={setRegFrom}
+            placeholder="از تاریخ ثبت"
+            className="w-40"
+          />
+          <JalaliDatePicker
+            value={regTo}
+            onChange={setRegTo}
+            placeholder="تا تاریخ ثبت"
+            className="w-40"
+          />
+        </div>
+
+        {/* Row 3 — one-click issuance ranges */}
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-ink-900/5 pt-2 dark:border-white/5">
+          <span className="shrink-0 text-[11px] font-bold text-ink-400">صدور سریع:</span>
+          {quickRanges.map((q) => {
+            const active = issuedFrom === q.from && issuedTo === q.to;
+            return (
+              <button
+                key={q.key}
+                type="button"
+                className={`rounded-full px-3 py-1.5 text-[11px] font-bold transition-all ${
+                  active
+                    ? "bg-brand-500 text-white shadow-[0_4px_12px_-4px_rgba(99,91,255,0.5)]"
+                    : "bg-ink-900/5 text-ink-500 hover:bg-brand-500/12 hover:text-brand-600 dark:bg-white/5 dark:text-ink-400 dark:hover:text-brand-300"
+                }`}
+                onClick={() => {
+                  setIssuedFrom(q.from);
+                  setIssuedTo(q.to);
+                }}
+              >
+                {q.label}
+              </button>
+            );
+          })}
+          {(issuedFrom || issuedTo) && (
+            <span className="text-[11px] text-ink-400">
+              مشتریانی که ویزایشان {issuedFrom ? `از ${formatJalali(issuedFrom)}` : ""}{" "}
+              {issuedTo ? `تا ${formatJalali(issuedTo)}` : ""} صادر شده
+            </span>
+          )}
+        </div>
       </div>
 
       <DataTable
@@ -345,7 +572,11 @@ export function CustomersPage() {
           <EmptyState
             icon={Users}
             title="مشتری‌ای یافت نشد"
-            description={query ? "عبارت جستجو را عوض کنید" : "اولین مشتری را ثبت کنید — حتی فقط با یک نام"}
+            description={
+              anyFilterActive
+                ? "فیلترها را عوض کنید یا پاک کنید"
+                : "اولین مشتری را ثبت کنید — حتی فقط با یک نام"
+            }
             action={
               <button className="btn btn-primary btn-sm" onClick={() => uiActions.openCustomerModal()}>
                 <UserPlus size={15} /> مشتری جدید

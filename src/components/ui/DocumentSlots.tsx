@@ -277,6 +277,20 @@ export function DocumentSlots({ customerId, customer }: { customerId: string; cu
     }
   };
 
+  /** The issued-visa slot is a drop zone too — dragging a PDF onto it adds
+   *  it directly (same as the file picker). Only PDFs and images are filed. */
+  const isVisaFile = (f: File) =>
+    f.type === "application/pdf" || /\.pdf$/i.test(f.name) || f.type.startsWith("image/");
+  const visaDrop = useDropTarget((files) => {
+    const ok = files.filter(isVisaFile);
+    if (ok.length === 0) {
+      toast.error("برای ویزا فقط فایل PDF یا تصویر مجاز است");
+      return;
+    }
+    if (ok.length < files.length) toast.info("فایل‌های غیر PDF/تصویر نادیده گرفته شدند");
+    void handleVisaFiles(ok);
+  });
+
   // The «سایر مدارک» block is itself a drop zone (multi-file).
   const otherDrop = useDropTarget((files) => void handleFiles("other", files));
 
@@ -322,11 +336,17 @@ export function DocumentSlots({ customerId, customer }: { customerId: string; cu
       </div>
 
       {/* ISSUED-VISA slot — activates only after a visa is issued; PDF files
-          are renamed to the customer's profile name (feeds بایگانی هوشمند). */}
+          are renamed to the customer's profile name (feeds بایگانی هوشمند).
+          Drag & drop works: dropping a PDF here adds it directly. */}
       {(hasIssuedVisa ?? 0) > 0 && customer && (
         <div
-          className="rounded-2xl border border-[#0b9e6e]/30 bg-[#0b9e6e]/6 p-3"
+          className={`rounded-2xl border p-3 transition-all duration-150 ${
+            visaDrop.hovering
+              ? "border-[#0b9e6e] bg-[#0b9e6e]/12 ring-2 ring-[#0b9e6e]/35"
+              : "border-[#0b9e6e]/30 bg-[#0b9e6e]/6"
+          }`}
           data-slot="issuedVisa"
+          {...visaDrop.dropHandlers}
         >
           <div className="mb-2 flex items-center justify-between gap-2">
             <p className="flex min-w-0 items-center gap-1.5 text-[13px] font-bold text-[#0b7a55] dark:text-[#3ddc9a]">
@@ -361,8 +381,14 @@ export function DocumentSlots({ customerId, customer }: { customerId: string; cu
             />
           </div>
           {visaFiles.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-[#0b9e6e]/35 px-3 py-2.5 text-center text-[11px] leading-5 text-[#0b7a55]/80 dark:text-[#3ddc9a]/80">
-              PDF ویزای صادرشده را همین‌جا بارگذاری کنید — فایل با نام مشتری ذخیره می‌شود
+            <p
+              className={`rounded-xl border border-dashed px-3 py-2.5 text-center text-[11px] leading-5 transition-colors ${
+                visaDrop.hovering
+                  ? "border-[#0b9e6e] bg-white/70 text-[#0b7a55] dark:bg-white/10 dark:text-[#3ddc9a]"
+                  : "border-[#0b9e6e]/35 text-[#0b7a55]/80 dark:text-[#3ddc9a]/80"
+              }`}
+            >
+              PDF ویزای صادرشده را همین‌جا بارگذاری کنید یا فایل را مستقیم روی همین کادر رها کنید — فایل با نام مشتری ذخیره می‌شود
             </p>
           ) : (
             <ul className="flex flex-col gap-1.5">
