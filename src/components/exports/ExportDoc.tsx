@@ -1,6 +1,6 @@
-import { forwardRef, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ExportColumn, ExportRow } from "../../utils/export/tabular";
-import { computeExportStats } from "../../utils/export/tabular";
+import { forwardRef, useLayoutEffect, useMemo, useRef, useState, Fragment } from "react";
+import type { ExportColumn, ExportGroup, ExportRow } from "../../utils/export/tabular";
+import { computeExportStats, groupLabel } from "../../utils/export/tabular";
 import { formatJalali, formatTimestamp, todayIso, toPersianDigits } from "../../utils/jalali";
 
 const BRAND = "#635bff";
@@ -118,12 +118,23 @@ function isStatusCell(s: string): boolean {
 
 /* -------------------------------- component ------------------------------- */
 
+export interface ExportDocGroupMeta {
+  /** group value → profile photo (data URL) shown small next to the name. */
+  photos?: Record<string, string | undefined>;
+  /** Persian word for what is grouped — «بدون …» label for empty cells. */
+  what?: string;
+}
+
 /**
  * Print-styled export document — RTL, Vazirmatn, pure inline styles with
  * hex/rgb colors only (html2canvas-safe).
  *
  * The page width auto-fits the content so every cell stays on ONE centered
  * line — no wrapping, no cramped columns. Long notes are trimmed with "…".
+ *
+ * When `groups` is set, rows are rendered section-by-section — one
+ * representative completely (with a small profile photo + name + row count
+ * band), then the next representative below it.
  */
 export const ExportDoc = forwardRef<
   HTMLDivElement,
@@ -133,10 +144,14 @@ export const ExportDoc = forwardRef<
     columns: ExportColumn[];
     rows: ExportRow[];
     summary?: { label: string; value: string }[];
+    /** Optional grouping (e.g. by representative) — see groupExportRows. */
+    groups?: ExportGroup[];
+    /** Photos + wording for the section bands. */
+    groupMeta?: ExportDocGroupMeta;
     /** Fired once the auto-width layout is measured and rendered. */
     onReady?: () => void;
   }
->(function ExportDoc({ title, subtitle, columns, rows, summary, onReady }, ref) {
+>(function ExportDoc({ title, subtitle, columns, rows, summary, groups, groupMeta, onReady }, ref) {
   const [layout, setLayout] = useState<Layout | null>(null);
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
@@ -288,67 +303,44 @@ export const ExportDoc = forwardRef<
               </tr>
             </thead>
             <tbody>
-              {layout.display.map((cells, r) => (
-                <tr
-                  key={r}
-                  data-export-row
-                  style={{
-                    backgroundColor: r % 2 === 1 ? ZEBRA : "#ffffff",
-                  }}
-                >
-                  {cells.map((s, i) => {
-                    const key = columns[i].key;
-                    const tone = isStatusCell(s) ? statusTone(s) : null;
+              {(() => {
+                if (groups && groups.length > 0) {
+                  // Sectioned layout: one representative fully, then the next.
+                  let idx = 0;
+                  return groups.map((g, gi) => {
+                    const first = idx;
+                    idx += g.rows.length;
                     return (
-                      <td
-                        key={key}
-                        style={{
-                          padding: "10px 10px",
-                          fontSize: "12.5px",
-                          textAlign: "center",
-                          verticalAlign: "middle",
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          color: s === "—" ? "#b6bbcd" : INK,
-                          ...(i > 0 ? { borderRight: `1px solid ${ROW_BORDER}` } : {}),
-                          ...(r < layout.display.length - 1
-                            ? { borderBottom: `1px solid ${ROW_BORDER}` }
-                            : {}),
-                        }}
-                      >
-                        {tone ? (
-                          /* html2canvas does not center inline-block children
-                           * via text-align — an explicit flex wrapper is the
-                           * reliable way to keep the pill centered in PDF/PNG. */
-                          <div
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                            }}
-                          >
-                            <span
-                              style={{
-                                padding: "3px 11px",
-                                borderRadius: "999px",
-                                backgroundColor: tone.bg,
-                                color: tone.fg,
-                                fontSize: "11px",
-                                fontWeight: 700,
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {s}
-                            </span>
-                          </div>
-                        ) : (
-                          <span style={BOLD_KEYS.has(key) ? { fontWeight: 700 } : undefined}>{s}</span>
-                        )}
-                      </td>
+                      <Fragment key={`g-${gi}-${g.value}`}>
+                        <SectionBand
+                          label={groupLabel(g.value, groupMeta?.what ?? "نماینده")}
+                          photo={groupMeta?.photos?.[g.value]}
+                          count={g.rows.length}
+                          colCount={columns.length}
+                        />
+                        {layout.display.slice(first, first + g.rows.length).map((cells, r) => (
+                          <DataRow
+                            key={`gr-${gi}-${r}`}
+                            cells={cells}
+                            columns={columns}
+                            r={r}
+                            last={first + r === layout.display.length - 1}
+                          />
+                        ))}
+                      </Fragment>
                     );
-                  })}
-                </tr>
-              ))}
+                  });
+                }
+                return layout.display.map((cells, r) => (
+                  <DataRow
+                    key={r}
+                    cells={cells}
+                    columns={columns}
+                    r={r}
+                    last={r === layout.display.length - 1}
+                  />
+                ));
+              })()}
               {rows.length === 0 && (
                 <tr>
                   <td
@@ -433,6 +425,153 @@ export const ExportDoc = forwardRef<
     </div>
   );
 });
+
+/** One data row of the export table (zebra + status pills). */
+function DataRow({
+  cells,
+  columns,
+  r,
+  last,
+}: {
+  cells: string[];
+  columns: ExportColumn[];
+  r: number;
+  last: boolean;
+}) {
+  return (
+    <tr data-export-row style={{ backgroundColor: r % 2 === 1 ? ZEBRA : "#ffffff" }}>
+      {cells.map((s, i) => {
+        const key = columns[i].key;
+        const tone = isStatusCell(s) ? statusTone(s) : null;
+        return (
+          <td
+            key={key}
+            style={{
+              padding: "10px 10px",
+              fontSize: "12.5px",
+              textAlign: "center",
+              verticalAlign: "middle",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              color: s === "—" ? "#b6bbcd" : INK,
+              ...(i > 0 ? { borderRight: `1px solid ${ROW_BORDER}` } : {}),
+              ...(last ? {} : { borderBottom: `1px solid ${ROW_BORDER}` }),
+            }}
+          >
+            {tone ? (
+              /* html2canvas does not center inline-block children
+               * via text-align — an explicit flex wrapper is the
+               * reliable way to keep the pill centered in PDF/PNG. */
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <span
+                  style={{
+                    padding: "3px 11px",
+                    borderRadius: "999px",
+                    backgroundColor: tone.bg,
+                    color: tone.fg,
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {s}
+                </span>
+              </div>
+            ) : (
+              <span style={BOLD_KEYS.has(key) ? { fontWeight: 700 } : undefined}>{s}</span>
+            )}
+          </td>
+        );
+      })}
+    </tr>
+  );
+}
+
+/** Section band — [photo] نام نماینده + row count — starts a group. */
+function SectionBand({
+  label,
+  photo,
+  count,
+  colCount,
+}: {
+  label: string;
+  photo?: string;
+  count: number;
+  colCount: number;
+}) {
+  return (
+    <tr data-export-section>
+      <td
+        colSpan={colCount}
+        style={{
+          padding: "9px 12px",
+          backgroundColor: "#f3f1ff",
+          borderBottom: `1.5px solid #d9d6f2`,
+          borderTop: "1.5px solid #d9d6f2",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "9px" }}>
+          {photo ? (
+            <img
+              src={photo}
+              alt=""
+              width={27}
+              height={27}
+              style={{
+                width: "27px",
+                height: "27px",
+                borderRadius: "999px",
+                objectFit: "cover",
+                border: "1.5px solid #ffffff",
+                boxShadow: "0 1px 4px rgba(27,33,56,0.25)",
+                flexShrink: 0,
+              }}
+            />
+          ) : (
+            <div
+              style={{
+                width: "27px",
+                height: "27px",
+                borderRadius: "999px",
+                backgroundColor: "#837aff",
+                color: "#ffffff",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "11px",
+                fontWeight: 800,
+                flexShrink: 0,
+              }}
+            >
+              {label.trim().charAt(0) || "?"}
+            </div>
+          )}
+          <span style={{ fontSize: "13px", fontWeight: 800, color: "#3d35a8" }}>{label}</span>
+          <span
+            style={{
+              fontSize: "10.5px",
+              fontWeight: 700,
+              color: "#6f76c9",
+              backgroundColor: "#ffffff",
+              border: "1px solid #d9d6f2",
+              borderRadius: "999px",
+              padding: "2px 10px",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {toPersianDigits(count)} رکورد
+          </span>
+        </div>
+      </td>
+    </tr>
+  );
+}
 
 /** A small summary chip for the smart footer. */
 function FooterChip({

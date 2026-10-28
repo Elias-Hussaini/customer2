@@ -1534,9 +1534,16 @@ function DataSection() {
 /* ---------------------------------- PWA ---------------------------------- */
 
 function PwaSection() {
+  const toast = useToast();
   const [installable, setInstallable] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
-  const [storage, setStorage] = useState<string>("");
+  const [storage, setStorage] = useState("");
+  const [storagePct, setStoragePct] = useState<number | null>(null);
+  const [persisted, setPersisted] = useState<boolean | null>(null);
+
+  const refreshPersisted = () => {
+    void navigator.storage?.persisted?.().then(setPersisted).catch(() => setPersisted(null));
+  };
 
   useEffect(() => {
     const onPrompt = (e: Event) => {
@@ -1550,10 +1557,14 @@ function PwaSection() {
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
     void navigator.storage?.estimate?.().then((est) => {
-      if (est.usage != null && est.quota != null) {
-        setStorage(`${(est.usage / 1024 / 1024).toFixed(1)} از ${(est.quota / 1024 / 1024 / 1024).toFixed(1)} گیگابایت`);
+      if (est.usage != null && est.quota != null && est.quota > 0) {
+        const mb = (est.usage / 1024 / 1024).toFixed(1);
+        const gb = (est.quota / 1024 / 1024 / 1024).toFixed(1);
+        setStorage(`${toPersianDigits(mb)} از ${toPersianDigits(gb)} گیگابایت`);
+        setStoragePct(Math.min(100, (est.usage / est.quota) * 100));
       }
     });
+    refreshPersisted();
     return () => {
       window.removeEventListener("beforeinstallprompt", onPrompt);
       window.removeEventListener("online", onOnline);
@@ -1579,9 +1590,74 @@ function PwaSection() {
           <b>{standalone ? "نصب شده به‌عنوان برنامه" : "در حال اجرا در مرورگر"}</b>
         </div>
         {storage && (
-          <div className="flex items-center justify-between rounded-2xl bg-brand-500/6 px-4 py-3 text-[12px]">
-            <span>فضای ذخیره‌سازی مرورگر</span>
-            <b className="num">{storage}</b>
+          <div className="flex flex-col gap-2.5 rounded-2xl bg-brand-500/6 px-4 py-3.5 text-[12px]">
+            <div className="flex items-center justify-between">
+              <span className="font-bold">فضای ذخیره‌سازی مرورگر برای این برنامه</span>
+              <b className="num">{storage}</b>
+            </div>
+            {/* usage bar */}
+            <div className="h-2 w-full overflow-hidden rounded-full bg-ink-900/8 dark:bg-white/10">
+              <div
+                className="h-full rounded-full transition-all"
+                style={{
+                  width: `${Math.max(storagePct != null ? storagePct : 0, 1.5)}%`,
+                  background:
+                    (storagePct ?? 0) > 85
+                      ? "linear-gradient(90deg, #f0a35e, #dc3535)"
+                      : "linear-gradient(90deg, #837aff, #5344d6)",
+                }}
+              />
+            </div>
+            <div className="flex items-center justify-between text-[10.5px] text-ink-400">
+              <span>
+                {storagePct != null
+                  ? `${toPersianDigits(storagePct.toFixed(1))}٪ استفاده شده`
+                  : ""}
+              </span>
+              <span>سهمیه‌ای که مرورگر به این سایت داده — نه حافظه کل دستگاه</span>
+            </div>
+            <div className="mt-1 flex flex-col gap-1.5 border-t border-ink-900/5 pt-2.5 leading-5 text-ink-500 dark:border-white/5 dark:text-ink-400">
+              <p className="text-[11px]">
+                حافظه برنامه <b>بی‌نهایت نیست</b> — مرورگر به هر سایت بخشی از فضای خالی دیسک را
+                اختصاص می‌دهد (معمولاً حدود نیمی از فضای آزاد). عدد بالا سهمیه فعلی همین
+                دستگاه است و روی هر دستگاه فرق می‌کند. با پر شدن سهمیه، هنگام ذخیره پیام خطا
+                می‌گیرید — با پشتیبان ZIP می‌توانید فضا را آزاد و هر وقت خواستید بازیابی کنید.
+              </p>
+              <p className="text-[11px]">
+                رکوردهای متنی فوق‌العاده کم‌حجم‌اند و عکس‌ها هنگام ذخیره خودکار فشرده می‌شوند،
+                پس در عمل پر شدن این فضا بعید است و برنامه هم با زیاد شدن داده کند نمی‌شود
+                — داده‌ها ایندکس‌شده ذخیره می‌شوند و فقط همان چیزی که باز می‌کنید بارگذاری می‌شود.
+              </p>
+            </div>
+            <div className="mt-1 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-ink-900/8 px-3 py-2.5 dark:border-white/10">
+              <div className="flex flex-col">
+                <span className="text-[11.5px] font-bold">ذخیره‌سازی پایدار</span>
+                <span className="text-[10.5px] text-ink-400">
+                  جلوگیری از پاک شدن خودکار داده‌های برنامه توسط مرورگر
+                </span>
+              </div>
+              {persisted ? (
+                <span className="rounded-full bg-[#0b9e6e]/10 px-3 py-1 text-[11px] font-bold text-[#0b9e6e]">
+                  فعال ✓
+                </span>
+              ) : (
+                <button
+                  className="btn btn-primary btn-sm !py-1.5"
+                  onClick={async () => {
+                    try {
+                      const ok = (await navigator.storage?.persist?.()) ?? false;
+                      setPersisted(ok);
+                      if (ok) toast.success("ذخیره‌سازی پایدار فعال شد — داده‌ها دیگر به‌صورت خودکار پاک نمی‌شوند");
+                      else toast.error("مرورگر فعلاً اجازه نداد — برنامه را نصب کنید و دوباره امتحان کنید");
+                    } catch {
+                      toast.error("مرورگر شما از ذخیره‌سازی پایدار پشتیبانی نمی‌کند");
+                    }
+                  }}
+                >
+                  فعال‌سازی
+                </button>
+              )}
+            </div>
           </div>
         )}
         {installable && !standalone && (

@@ -13,6 +13,7 @@
   "dependencies": {
     "dexie": "latest",
     "dexie-react-hooks": "^4.4.0",
+    "exceljs": "^4.4.0",
     "file-saver": "latest",
     "html2canvas": "latest",
     "jalaali-js": "latest",

@@ -194,6 +194,24 @@ export function ReportsPage() {
   const rangePlaceholders = basisRangePlaceholders(dateBasis);
   const quickRanges = useMemo(() => quickDateRanges(), []);
 
+  /** rep name → profile photo — small, next to each name in grouped exports. */
+  const repPhotos = useMemo(
+    () =>
+      Object.fromEntries(
+        (representatives ?? []).map((r) => [r.name, r.photo ?? undefined]),
+      ),
+    [representatives],
+  );
+  /** Section grouping for the export — by representative, with photos. */
+  const exportGrouping = useMemo(
+    () => ({
+      columnKey: kind === "balances" ? "repName" : "representative",
+      label: "نماینده",
+      photos: repPhotos,
+    }),
+    [kind, repPhotos],
+  );
+
   const clearAllFilters = () => {
     setRepId("");
     setListId("");
@@ -540,6 +558,7 @@ export function ReportsPage() {
               : balanceColumns
         }
         defaultFilename={`${kind}-report`}
+        grouping={exportGrouping}
         summary={
           kind === "payments"
             ? [

@@ -322,6 +322,13 @@ export function RequestsPage() {
           { key: "rejectedAt", header: "تاریخ رد" },
           { key: "notes", header: "توضیحات" },
         ]}
+        grouping={{
+          columnKey: "representative",
+          label: "نماینده",
+          photos: Object.fromEntries(
+            (representatives ?? []).map((r) => [r.name, r.photo ?? undefined]),
+          ),
+        }}
       />
     </div>
   );

@@ -265,6 +265,13 @@ export function PaymentsPage() {
           { key: "request", header: "درخواست مرتبط" },
           { key: "description", header: "توضیحات" },
         ]}
+        grouping={{
+          columnKey: "representative",
+          label: "نماینده",
+          photos: Object.fromEntries(
+            (representatives ?? []).map((r) => [r.name, r.photo ?? undefined]),
+          ),
+        }}
       />
     </div>
   );
