@@ -20,6 +20,14 @@ import { formatMoney } from "../utils/num";
 import { customerFullName } from "../db/customers";
 import { requestStatusFa } from "../types";
 import { loadPageFilter, savePageFilter } from "../utils/pageFilters";
+import {
+  REQUEST_DATE_BASIS_OPTIONS,
+  basisRangePlaceholders,
+  isRequestDateBasis,
+  requestBasisLabel,
+  requestWithinRange,
+  type RequestDateBasis,
+} from "../utils/requestDateFilter";
 import type { VisaRequest } from "../types";
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -45,6 +53,10 @@ export function RequestsPage() {
   );
   const [to, setTo] = useState<string | null>(
     () => loadPageFilter("requests", "to", "", (v) => ISO_DATE.test(v)) || null,
+  );
+  /** Which request date (registration / issuance / rejection) the range applies to. */
+  const [dateBasis, setDateBasis] = useState<RequestDateBasis>(() =>
+    loadPageFilter<RequestDateBasis>("requests", "dateBasis", "registration", isRequestDateBasis),
   );
   const [showFilters, setShowFilters] = useState(
     () => !!(listId || visaType || tagId || from || to),
@@ -75,7 +87,8 @@ export function RequestsPage() {
     savePageFilter("requests", "tag", activeTagId);
     savePageFilter("requests", "from", from);
     savePageFilter("requests", "to", to);
-  }, [activeRepId, activeListId, status, activeVisaType, activeTagId, from, to]);
+    savePageFilter("requests", "dateBasis", dateBasis);
+  }, [activeRepId, activeListId, status, activeVisaType, activeTagId, from, to, dateBasis]);
 
   const anyFilter = !!(
     query.trim() || activeRepId || activeListId || status || activeVisaType || activeTagId || from || to
@@ -90,6 +103,7 @@ export function RequestsPage() {
     setTagId("");
     setFrom(null);
     setTo(null);
+    setDateBasis("registration");
   };
 
   const customersById = useMemo(
@@ -108,8 +122,7 @@ export function RequestsPage() {
       if (status === "rejected" && !r.rejected) return false;
       if (activeVisaType && r.visaType !== activeVisaType) return false;
       if (activeTagId && !r.tags.includes(activeTagId)) return false;
-      if (from && r.registrationDate < from) return false;
-      if (to && r.registrationDate > to) return false;
+      if (!requestWithinRange(r, dateBasis, from, to)) return false;
       if (q) {
         const customer = customersById.get(r.customerId);
         const haystack = normalizeFa(
@@ -119,7 +132,7 @@ export function RequestsPage() {
       }
       return true;
     });
-  }, [requests, query, activeRepId, activeListId, status, activeVisaType, activeTagId, from, to, customersById]);
+  }, [requests, query, activeRepId, activeListId, status, activeVisaType, activeTagId, dateBasis, from, to, customersById]);
 
   const exportRows = useMemo(
     () =>
@@ -205,7 +218,7 @@ export function RequestsPage() {
           )}
         </div>
         {showFilters && (
-          <div className="grid grid-cols-2 gap-2.5 border-t border-ink-900/5 pt-3 dark:border-white/5 sm:grid-cols-3 lg:grid-cols-5">
+          <div className="grid grid-cols-2 gap-2.5 border-t border-ink-900/5 pt-3 dark:border-white/5 sm:grid-cols-3 lg:grid-cols-6">
             <FilterSelect
               ariaLabel="لیست"
               value={activeListId}
@@ -233,11 +246,25 @@ export function RequestsPage() {
                 ...(tags ?? []).map((t) => ({ value: t.id, label: t.name })),
               ]}
             />
+            <FilterSelect
+              ariaLabel="مبنای بازه تاریخ"
+              value={dateBasis}
+              onChange={(v) => setDateBasis(isRequestDateBasis(v) ? v : "registration")}
+              options={REQUEST_DATE_BASIS_OPTIONS.map((o) => ({ value: o.value, label: `مبنای بازه: ${o.label}` }))}
+            />
             <div>
-              <JalaliDatePicker value={from} onChange={setFrom} placeholder="از تاریخ" />
+              <JalaliDatePicker
+                value={from}
+                onChange={setFrom}
+                placeholder={basisRangePlaceholders(dateBasis).from}
+              />
             </div>
             <div>
-              <JalaliDatePicker value={to} onChange={setTo} placeholder="تا تاریخ" />
+              <JalaliDatePicker
+                value={to}
+                onChange={setTo}
+                placeholder={basisRangePlaceholders(dateBasis).to}
+              />
             </div>
           </div>
         )}
@@ -270,7 +297,14 @@ export function RequestsPage() {
         open={exportOpen}
         onClose={() => setExportOpen(false)}
         title="گزارش درخواست‌های ویزا"
-        subtitle={repName(repId || null) || "همه نمایندگان"}
+        subtitle={[
+          repName(repId || null) || "همه نمایندگان",
+          from || to
+            ? `${requestBasisLabel(dateBasis)}: ${from ? formatJalali(from) : "…"} تا ${to ? formatJalali(to) : "…"}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" • ")}
         rows={exportRows}
         defaultFilename="requests-report"
         columns={[

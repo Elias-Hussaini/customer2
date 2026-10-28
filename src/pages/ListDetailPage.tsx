@@ -22,6 +22,13 @@ import {
 import { useToast } from "../hooks/useToast";
 import { formatJalali, toPersianDigits } from "../utils/jalali";
 import { normalizeFa } from "../utils/normalize";
+import {
+  REQUEST_DATE_BASIS_OPTIONS,
+  basisRangePlaceholders,
+  isRequestDateBasis,
+  requestWithinRange,
+  type RequestDateBasis,
+} from "../utils/requestDateFilter";
 import { customerFullName } from "../db/customers";
 import { requestStatusFa } from "../types";
 import type { VisaRequest } from "../types";
@@ -39,6 +46,8 @@ export function ListDetailPage() {
 
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("");
+  /** Which request date (registration / issuance / rejection) the range applies to. */
+  const [dateBasis, setDateBasis] = useState<RequestDateBasis>("registration");
   const [from, setFrom] = useState<string | null>(null);
   const [to, setTo] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
@@ -68,8 +77,7 @@ export function ListDetailPage() {
       if (status === "issued" && !r.issued) return false;
       if (status === "pending" && (r.issued || r.rejected)) return false;
       if (status === "rejected" && !r.rejected) return false;
-      if (from && r.registrationDate < from) return false;
-      if (to && r.registrationDate > to) return false;
+      if (!requestWithinRange(r, dateBasis, from, to)) return false;
       if (q) {
         const c = (customers ?? []).find((x) => x.id === r.customerId);
         const hay = normalizeFa(`${c ? customerFullName(c) : ""} ${c?.passportNo ?? ""} ${r.visaType ?? ""}`);
@@ -77,7 +85,7 @@ export function ListDetailPage() {
       }
       return true;
     });
-  }, [inList, query, status, from, to, customers]);
+  }, [inList, query, status, dateBasis, from, to, customers]);
 
   if (!list) {
     return (
@@ -161,8 +169,24 @@ export function ListDetailPage() {
             { value: "rejected", label: "رد شده" },
           ]}
         />
-        <JalaliDatePicker value={from} onChange={setFrom} placeholder="از تاریخ" className="w-40" />
-        <JalaliDatePicker value={to} onChange={setTo} placeholder="تا تاریخ" className="w-40" />
+        <FilterSelect
+          ariaLabel="مبنای بازه تاریخ"
+          value={dateBasis}
+          onChange={(v) => setDateBasis(isRequestDateBasis(v) ? v : "registration")}
+          options={REQUEST_DATE_BASIS_OPTIONS.map((o) => ({ value: o.value, label: `مبنای بازه: ${o.label}` }))}
+        />
+        <JalaliDatePicker
+          value={from}
+          onChange={setFrom}
+          placeholder={basisRangePlaceholders(dateBasis).from}
+          className="w-40"
+        />
+        <JalaliDatePicker
+          value={to}
+          onChange={setTo}
+          placeholder={basisRangePlaceholders(dateBasis).to}
+          className="w-40"
+        />
       </div>
 
       {/* Customers registered in this list */}
