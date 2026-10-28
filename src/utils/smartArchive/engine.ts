@@ -15,13 +15,31 @@
  *    JSZip writes the UTF-8 flag so unzippers show them correctly.
  */
 import { saveAs } from "file-saver";
+import { isoToJalali, JALALI_MONTHS, todayIso, toPersianDigits } from "../jalali";
 
 /* ------------------------------- types ---------------------------------- */
 
 export type ArchiveFileKind = "issuedVisa" | "doc" | "profilePhoto" | "external";
 
-export type FolderMode = "perCustomer" | "single" | "flat" | "perFile";
-export type FileNaming = "customerName" | "docLabel" | "sequence" | "original";
+export type FolderMode =
+  | "perCustomer"
+  | "perAgentCustomer"
+  | "perAgent"
+  | "perFile"
+  | "single"
+  | "flat"
+  | "custom";
+
+export type FileNaming =
+  | "customerName"
+  | "customerDoc"
+  | "docCustomer"
+  | "docLabel"
+  | "passportNo"
+  | "customerOriginal"
+  | "sequence"
+  | "original"
+  | "custom";
 
 /** One candidate file for the archive (original bytes, never mutated). */
 export interface ArchiveEntry {
@@ -38,14 +56,24 @@ export interface ArchiveEntry {
   docTypeId?: string;
   /** Persian label of the slot («پاسپورت», «id روی», «ویزا», …). */
   docLabel?: string;
+  /** Owner's representative name — powers the نماینده/<…> folder modes. */
+  repName?: string;
+  /** Owner's passport number — powers the {پاسپورت} naming token. */
+  passportNo?: string;
+  /** File date (attachment creation) as ISO yyyy-mm-dd — powers {تاریخ}/{سال}/{ماه}. */
+  dateIso?: string;
 }
 
 export interface PlanOptions {
   folderMode: FolderMode;
   /** Custom folder name when folderMode = "single" (e.g. «ویزا های امروز صادر شده»). */
   singleFolderName: string;
+  /** Folder path pattern when folderMode = "custom" — e.g. «{نماینده}/{مشتری}». */
+  folderTemplate?: string;
   fileNaming: FileNaming;
-  /** perCustomer mode: separate «مدارک» / «ویزاها» subfolders inside each customer folder. */
+  /** File name pattern when fileNaming = "custom" — e.g. «{مشتری} - {مدرک}». */
+  nameTemplate?: string;
+  /** perCustomer/perAgentCustomer mode: separate «مدارک» / «ویزاها» subfolders. */
   docSubfolders: boolean;
   /** Extra folder paths to include in the ZIP even when EMPTY ("a/b" nests). */
   extraFolders: string[];
@@ -129,6 +157,79 @@ function extOf(name: string, mime: string): string {
   return "bin";
 }
 
+/* --------------------------- custom templates ---------------------------- */
+
+/** Persian label for a file's KIND (template token {نوع}/{kind}). */
+function kindLabel(kind: ArchiveFileKind): string {
+  switch (kind) {
+    case "issuedVisa":
+      return "ویزا";
+    case "doc":
+      return "مدرک";
+    case "profilePhoto":
+      return "پروفایل";
+    default:
+      return "فایل";
+  }
+}
+
+export interface TemplateContext {
+  rep?: string;
+  customer?: string;
+  doc?: string;
+  kind?: string;
+  seq?: string;
+  passport?: string;
+  date?: string;
+  year?: string;
+  month?: string;
+}
+
+/** Every token accepts its Persian and its English spelling. */
+const TOKENS: [RegExp, keyof TemplateContext][] = [
+  [/\{\s*(?:نماینده|rep)\s*\}/gi, "rep"],
+  [/\{\s*(?:مشتری|customer)\s*\}/gi, "customer"],
+  [/\{\s*(?:مدرک|doc)\s*\}/gi, "doc"],
+  [/\{\s*(?:نوع|kind)\s*\}/gi, "kind"],
+  [/\{\s*(?:شماره|نمبر|n|seq)\s*\}/gi, "seq"],
+  [/\{\s*(?:پاسپورت|passport)\s*\}/gi, "passport"],
+  [/\{\s*(?:تاریخ|date)\s*\}/gi, "date"],
+  [/\{\s*(?:سال|year)\s*\}/gi, "year"],
+  [/\{\s*(?:ماه|month)\s*\}/gi, "month"],
+];
+
+/** Resolve a user template against a context — unknown/empty tokens vanish
+ *  cleanly without leaving dangling separators behind. */
+export function resolveTemplate(tpl: string, ctx: TemplateContext): string {
+  let out = tpl;
+  for (const [re, key] of TOKENS) {
+    if (!re.test(out)) continue;
+    out = out.replace(re, ctx[key] ?? "");
+  }
+  // drop unknown {…} leftovers so typos can't leak into file names
+  out = out.replace(/\{[^{}]*\}/g, "");
+  // collapse doubled separators / spaces created by empty tokens
+  out = out
+    .replace(/\/{2,}/g, "/")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/(?:\s*[-–—،,]\s*)+(?=\/|$)/g, "")
+    .replace(/(^|\/)\s*[-–—،,]\s*/g, "$1")
+    .replace(/\s\/\s/g, "/")
+    .replace(/^\/+|\/+$/g, "");
+  return out.trim();
+}
+
+/** Folder template → sanitized folder path; empty segments are dropped so
+ *  «{نماینده}/{مشتری}» stays correct even for files without a representative. */
+function folderFromTemplate(tpl: string, ctx: TemplateContext): string {
+  return resolveTemplate(tpl, ctx)
+    .split("/")
+    .map((seg) => seg.trim())
+    .filter((seg) => seg !== "")
+    .map((seg) => sanitizeSegment(seg, "پوشه"))
+    .join("/");
+}
+
 /** File name without its extension ("علی.pdf" → "علی"). */
 function baseWithoutExt(name: string): string {
   return name.replace(/\.[a-z0-9]{1,6}$/i, "");
@@ -189,6 +290,28 @@ export function buildPlan(
       BUILTIN_DOC_LABELS[e.docTypeId ?? ""] ?? e.docLabel ?? "مدرک",
       "مدرک",
     );
+    // the owner's representative (agents) — «بدون نماینده» keeps the
+    // structure intact when a customer has no representative at all.
+    const rep = isExternal
+      ? "فایل‌های اضافی"
+      : sanitizeSegment(e.repName ?? "", "بدون نماینده") || "بدون نماینده";
+    // per-customer sequence — always advanced so {شماره} is stable in templates
+    const seq = (seqByCustomer.get(e.customerId) ?? 0) + 1;
+    seqByCustomer.set(e.customerId, seq);
+    // file date (Jalali) for the {تاریخ}/{سال}/{ماه} template tokens
+    const j = isoToJalali(e.dateIso ?? todayIso());
+    const faNum = (n: number | string) => toPersianDigits(n);
+    const tplCtx: TemplateContext = {
+      rep: isExternal ? "" : rep,
+      customer,
+      doc: e.kind === "issuedVisa" ? "ویزا" : docLabel,
+      kind: kindLabel(e.kind),
+      seq: faNum(seq),
+      passport: e.passportNo?.trim() || "",
+      date: j ? `${faNum(j.jy)}/${faNum(String(j.jm).padStart(2, "0"))}/${faNum(String(j.jd).padStart(2, "0"))}` : "",
+      year: j ? faNum(j.jy) : "",
+      month: j ? JALALI_MONTHS[j.jm - 1] ?? "" : "",
+    };
 
     // ---- folder rule ----
     let folder: string;
@@ -202,6 +325,24 @@ export function buildPlan(
       const n = (perFileIdx.get(customer) ?? 0) + 1;
       perFileIdx.set(customer, n);
       folder = n === 1 ? customer : `${customer} ${toFaDigits(n)}`;
+    } else if (options.folderMode === "perAgent") {
+      // «هر نماینده یک پوشه» — files of an agent's customers directly inside
+      // the agent folder (flat), so the file name should carry the customer.
+      folder = rep;
+      if (options.docSubfolders) {
+        if (e.kind === "doc") folder = `${folder}/مدارک`;
+        else if (e.kind === "issuedVisa") folder = `${folder}/ویزاها`;
+      }
+    } else if (options.folderMode === "perAgentCustomer") {
+      // «نماینده ← مشتری» — an agent folder, then one folder per customer
+      // inside it, then that customer's files (e.g. احمد/علی رضایی/ویزا.pdf).
+      folder = isExternal ? rep : `${rep}/${customer}`;
+      if (options.docSubfolders) {
+        if (e.kind === "doc") folder = `${folder}/مدارک`;
+        else if (e.kind === "issuedVisa") folder = `${folder}/ویزاها`;
+      }
+    } else if (options.folderMode === "custom") {
+      folder = folderFromTemplate(options.folderTemplate ?? "{مشتری}", tplCtx);
     } else {
       folder = isExternal ? "فایل‌های اضافی" : customer;
       if (options.docSubfolders) {
@@ -216,6 +357,22 @@ export function buildPlan(
       case "customerName":
         base = customer;
         break;
+      case "customerDoc":
+        // «علی رضایی - پاسپورت» — the classic archive style: whose document it is
+        base = e.kind === "issuedVisa" ? `${customer} - ویزا` : `${customer} - ${docLabel}`;
+        break;
+      case "docCustomer":
+        // «پاسپورت - علی رضایی» — doc-type first, sorted by type inside folders
+        base = e.kind === "issuedVisa" ? `ویزا - ${customer}` : `${docLabel} - ${customer}`;
+        break;
+      case "passportNo":
+        // name by passport number; falls back to the customer when missing
+        base = sanitizeSegment(e.passportNo ?? "", "") || customer;
+        break;
+      case "customerOriginal":
+        // «علی رضایی - scan» — customer prefix, original name suffix
+        base = `${customer} - ${sanitizeSegment(baseWithoutExt(e.originalName), "فایل")}`;
+        break;
       case "docLabel":
         base =
           e.kind === "issuedVisa"
@@ -226,9 +383,11 @@ export function buildPlan(
               : docLabel;
         break;
       case "sequence": {
-        const n = (seqByCustomer.get(e.customerId) ?? 0) + 1;
-        seqByCustomer.set(e.customerId, n);
-        base = toFaDigits(n);
+        base = toFaDigits(seq);
+        break;
+      }
+      case "custom": {
+        base = sanitizeSegment(resolveTemplate(options.nameTemplate ?? "{مشتری}", tplCtx), customer);
         break;
       }
       case "original":

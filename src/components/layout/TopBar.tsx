@@ -53,7 +53,7 @@ export function TopBar() {
           aria-label="خانه"
         >
           <img
-            src="icons/lo-192.png"
+            src={`${import.meta.env.BASE_URL}icons/lo-192.png?v=4`}
             alt=""
             className="h-9 w-9 rounded-[11px] shadow-[0_4px_14px_-4px_rgba(99,91,255,0.5)]"
           />

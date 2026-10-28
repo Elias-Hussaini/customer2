@@ -3,6 +3,7 @@ import {
   buildPlan,
   formatBytes,
   isValidZipPath,
+  resolveTemplate,
   sanitizeSegment,
   type ArchiveEntry,
   type PlanOptions,
@@ -188,6 +189,185 @@ describe("buildPlan", () => {
     const paths = plan.items.map((i) => `${i.folder}/${i.fileName}`);
     expect(paths).toContain("علی رضایی/مدارک/پاسپورت.pdf");
     expect(paths).toContain("علی رضایی/ویزاها/ویزا.pdf");
+  });
+
+  /* ---------------- representative (agent) folder modes ------------------ */
+
+  const a1 = entry({ id: "a1", repName: "احمدی", kind: "issuedVisa", docTypeId: "issuedVisa" });
+  const a2 = entry({
+    id: "a2",
+    customerId: "c2",
+    customerName: "مریم حسینی",
+    repName: "احمدی",
+    kind: "issuedVisa",
+    docTypeId: "issuedVisa",
+  });
+  const a3 = entry({
+    id: "a3",
+    customerId: "c3",
+    customerName: "کریم نوری",
+    repName: "رضایی",
+    kind: "issuedVisa",
+    docTypeId: "issuedVisa",
+  });
+  const noRep = entry({
+    id: "nr",
+    customerId: "c4",
+    customerName: "بی نماینده",
+    kind: "issuedVisa",
+    docTypeId: "issuedVisa",
+  });
+
+  it("perAgentCustomer: each representative gets a folder with one subfolder per customer", () => {
+    const plan = buildPlan([a1, a2, a3, noRep], {
+      ...OPTS,
+      folderMode: "perAgentCustomer",
+      fileNaming: "customerName",
+    });
+    const paths = plan.items.map((i) => `${i.folder}/${i.fileName}`);
+    expect(paths).toContain("احمدی/علی رضایی/علی رضایی.pdf");
+    expect(paths).toContain("احمدی/مریم حسینی/مریم حسینی.pdf");
+    expect(paths).toContain("رضایی/کریم نوری/کریم نوری.pdf");
+    // customers without a representative land in a dedicated folder
+    expect(paths).toContain("بدون نماینده/بی نماینده/بی نماینده.pdf");
+  });
+
+  it("perAgent: files sit directly inside the representative folder", () => {
+    const plan = buildPlan([a1, a2, a3], {
+      ...OPTS,
+      folderMode: "perAgent",
+      fileNaming: "customerName",
+    });
+    const paths = plan.items.map((i) => `${i.folder}/${i.fileName}`);
+    expect(paths).toContain("احمدی/علی رضایی.pdf");
+    expect(paths).toContain("احمدی/مریم حسینی.pdf");
+    expect(paths).toContain("رضایی/کریم نوری.pdf");
+  });
+
+  it("perAgent + docSubfolders nests مدارک/ویزاها inside the agent folder", () => {
+    const d1 = entry({ id: "d1", repName: "احمدی", docTypeId: "passport", docLabel: "عکس پاسپورت" });
+    const plan = buildPlan([d1, a1], {
+      ...OPTS,
+      folderMode: "perAgent",
+      fileNaming: "docLabel",
+      docSubfolders: true,
+    });
+    const paths = plan.items.map((i) => `${i.folder}/${i.fileName}`);
+    expect(paths).toContain("احمدی/مدارک/پاسپورت.pdf");
+    expect(paths).toContain("احمدی/ویزاها/ویزا.pdf");
+  });
+
+  it("external files go to «فایل‌های اضافی» in the agent modes", () => {
+    const x = entry({
+      id: "x",
+      customerId: "external",
+      customerName: "",
+      kind: "external",
+      originalName: "قرارداد.pdf",
+    });
+    const plan = buildPlan([x, a1], {
+      ...OPTS,
+      folderMode: "perAgentCustomer",
+      fileNaming: "customerName",
+    });
+    const paths = plan.items.map((i) => `${i.folder}/${i.fileName}`);
+    expect(paths).toContain("فایل‌های اضافی/قرارداد.pdf");
+  });
+
+  /* ------------------------------ templates ------------------------------- */
+
+  it("resolveTemplate replaces Persian and English tokens", () => {
+    expect(resolveTemplate("{نماینده}/{مشتری}", { rep: "احمدی", customer: "علی" })).toBe("احمدی/علی");
+    expect(resolveTemplate("{rep} - {customer}", { rep: "احمدی", customer: "علی" })).toBe("احمدی - علی");
+  });
+
+  it("resolveTemplate drops empty tokens without leaving dangling separators", () => {
+    expect(resolveTemplate("{نماینده}/{مشتری}", { customer: "علی" })).toBe("علی");
+    expect(resolveTemplate("{مشتری} - {مدرک}", { customer: "علی" })).toBe("علی");
+    expect(resolveTemplate("{مدرک} - {مشتری}", { customer: "علی" })).toBe("علی");
+  });
+
+  it("resolveTemplate removes unknown {…} tokens and collapses doubled slashes", () => {
+    expect(resolveTemplate("{غیرمعتبر}/{مشتری}", { customer: "علی" })).toBe("علی");
+    expect(resolveTemplate("{مشتری}//{مدرک}", { customer: "علی", doc: "ویزا" })).toBe("علی/ویزا");
+  });
+
+  it("custom folder template builds the path from tokens (empty segments dropped)", () => {
+    const noRepEntry = entry({ id: "t1", kind: "issuedVisa", docTypeId: "issuedVisa" });
+    const plan = buildPlan([a1, noRepEntry], {
+      ...OPTS,
+      folderMode: "custom",
+      folderTemplate: "{نماینده}/{مشتری}",
+      fileNaming: "customerName",
+    });
+    const paths = plan.items.map((i) => `${i.folder}/${i.fileName}`);
+    expect(paths).toContain("احمدی/علی رضایی/علی رضایی.pdf");
+    // consistent with the agent modes: no representative → «بدون نماینده»
+    expect(paths).toContain("بدون نماینده/علی رضایی/علی رضایی.pdf");
+  });
+
+  it("custom naming template supports doc type, passport, sequence and date tokens", () => {
+    const withPassport = entry({
+      id: "t2",
+      passportNo: "A12345678",
+      dateIso: "2025-10-28",
+      docTypeId: "passport",
+      docLabel: "عکس پاسپورت",
+    });
+    const plan = buildPlan([withPassport], {
+      ...OPTS,
+      fileNaming: "custom",
+      nameTemplate: "{مشتری} [{پاسپورت}] {مدرک}",
+    });
+    expect(plan.items[0].fileName).toBe("علی رضایی [A12345678] پاسپورت.pdf");
+  });
+
+  it("custom naming template strips leftover separators when a token is empty", () => {
+    const noPassport = entry({ id: "t3", docTypeId: "issuedVisa", kind: "issuedVisa" });
+    const plan = buildPlan([noPassport], {
+      ...OPTS,
+      fileNaming: "custom",
+      nameTemplate: "{مشتری} - {پاسپورت}",
+    });
+    expect(plan.items[0].fileName).toBe("علی رضایی.pdf");
+  });
+
+  /* --------------------------- new naming modes ---------------------------- */
+
+  it("customerDoc naming: «مشتری - نوع مدرک» and «مشتری - ویزا»", () => {
+    const plan = buildPlan([e1, e3], { ...OPTS, fileNaming: "customerDoc" });
+    const names = plan.items.map((i) => i.fileName);
+    expect(names).toContain("علی رضایی - پاسپورت.pdf");
+    expect(names).toContain("علی رضایی - ویزا.pdf");
+  });
+
+  it("docCustomer naming: «نوع مدرک - مشتری»", () => {
+    const plan = buildPlan([e1], { ...OPTS, fileNaming: "docCustomer" });
+    expect(plan.items[0].fileName).toBe("پاسپورت - علی رضایی.pdf");
+  });
+
+  it("passportNo naming uses the passport number, falling back to the customer", () => {
+    const p1 = entry({ id: "p1", passportNo: "B99887766", kind: "issuedVisa", docTypeId: "issuedVisa" });
+    const plan = buildPlan([p1, e4], { ...OPTS, fileNaming: "passportNo" });
+    const names = plan.items.map((i) => i.fileName);
+    expect(names).toContain("B99887766.pdf");
+    expect(names).toContain("مریم حسینی.pdf"); // no passport on file
+  });
+
+  it("customerOriginal naming: «مشتری - نام اصلی»", () => {
+    const scan = entry({ id: "co", originalName: "scan.jpg", mime: "image/jpeg", docTypeId: "other" });
+    const plan = buildPlan([scan], { ...OPTS, fileNaming: "customerOriginal" });
+    expect(plan.items[0].fileName).toBe("علی رضایی - scan.jpg");
+  });
+
+  it("changing the folder mode does not corrupt sequence numbering in templates", () => {
+    const plan = buildPlan([e1, e2, e3], {
+      ...OPTS,
+      fileNaming: "custom",
+      nameTemplate: "{مشتری} {شماره}",
+    });
+    const names = plan.items.map((i) => i.fileName).sort();
+    expect(names).toEqual(["علی رضایی ۱.pdf", "علی رضایی ۲.jpg", "علی رضایی ۳.pdf"].sort());
   });
 
   it("collisions across customers with the same name get suffixes, never overwrite", () => {

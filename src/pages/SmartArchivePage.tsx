@@ -4,24 +4,25 @@ import {
   BadgeCheck,
   ChevronDown,
   FileArchive,
-  FileImage,
-  FileText,
-  Folder,
   FolderOpen,
   FolderPlus,
+  FolderTree,
   Inbox,
   Loader2,
   Paperclip,
   PenLine,
   RotateCcw,
+  Sparkles,
   Upload,
   UserRound,
   Users,
 } from "lucide-react";
 import { PageHeader } from "../components/ui/StatCard";
 import { EmptyState } from "../components/ui/EmptyState";
-import { FilterSelect, RadioSelect, SectionCard, SearchBox } from "../components/ui/inputs";
+import { FilterSelect, SectionCard, SearchBox } from "../components/ui/inputs";
 import { Checkbox, Input, Toggle } from "../components/ui/fields";
+import { OptionPicker } from "../components/ui/OptionPicker";
+import { ArchiveTree, buildTree, type ArchiveTreeActions } from "../components/domain/ArchiveTree";
 import { JalaliDatePicker } from "../components/ui/JalaliDatePicker";
 import { useToast } from "../hooks/useToast";
 import {
@@ -32,6 +33,7 @@ import {
   useTags,
 } from "../hooks/useData";
 import { toPersianDigits } from "../utils/jalali";
+import { loadPageFilter, savePageFilter } from "../utils/pageFilters";
 import {
   REQUEST_DATE_BASIS_OPTIONS,
   basisRangePlaceholders,
@@ -46,14 +48,77 @@ import {
   buildPlan,
   formatBytes,
   generateAndSave,
+  resolveTemplate,
   type ArchiveEntry,
   type FileNaming,
   type FolderMode,
-  type PlanItem,
   type PlanOverride,
 } from "../utils/smartArchive/engine";
 
 type ArchiveMode = "visas" | "documents";
+
+/** Everything about the archive structure the user can tune — persisted
+ *  per mode (visas / documents) so the last setup is always remembered. */
+interface StructPrefs {
+  folderMode: FolderMode;
+  fileNaming: FileNaming;
+  singleFolderName: string;
+  zipName: string;
+  folderTemplate: string;
+  nameTemplate: string;
+  docSubfolders: boolean;
+}
+
+const FOLDER_MODES: { value: FolderMode; label: string; hint: string }[] = [
+  {
+    value: "perAgentCustomer",
+    label: "نماینده ← مشتری",
+    hint: "احمدی / علی رضایی / ویزا.pdf",
+  },
+  {
+    value: "perAgent",
+    label: "هر نماینده یک پوشه",
+    hint: "احمدی / علی رضایی.pdf — فایل‌ها مستقیم داخل پوشه نماینده",
+  },
+  {
+    value: "perCustomer",
+    label: "هر مشتری یک پوشه",
+    hint: "علی رضایی / فایل‌های او",
+  },
+  {
+    value: "perFile",
+    label: "هر فایل یک پوشه",
+    hint: "هر فایل داخل پوشه‌ای به نام صاحبش — مناسب ارسال تک‌به‌تک",
+  },
+  { value: "single", label: "همه در یک پوشه", hint: "نام پوشه را خودتان تعیین می‌کنید" },
+  { value: "flat", label: "بدون پوشه", hint: "همه فایل‌ها در ریشه ZIP" },
+  { value: "custom", label: "ساختار دلخواه (الگو)", hint: "مسیر را با الگو بسازید: {نماینده}/{مشتری}" },
+];
+
+const NAMING_MODES: { value: FileNaming; label: string; hint: string }[] = [
+  { value: "customerName", label: "نام مشتری", hint: "علی رضایی.pdf" },
+  { value: "customerDoc", label: "مشتری - نوع مدرک", hint: "علی رضایی - پاسپورت.jpg" },
+  { value: "docCustomer", label: "نوع مدرک - مشتری", hint: "پاسپورت - علی رضایی.jpg" },
+  { value: "docLabel", label: "نوع مدرک", hint: "پاسپورت.jpg • id روی.jpg • ویزا.pdf" },
+  { value: "passportNo", label: "شماره پاسپورت", hint: "A12345678.pdf — بدون پاسپورت: نام مشتری" },
+  { value: "customerOriginal", label: "مشتری - نام اصلی", hint: "علی رضایی - scan.jpg" },
+  { value: "sequence", label: "شماره‌گذاری", hint: "۱.pdf • ۲.pdf • ۳.jpg" },
+  { value: "original", label: "نام اصلی فایل", hint: "همان نامی که هنگام بارگذاری داشت" },
+  { value: "custom", label: "الگوی دلخواه", hint: "مثلا: {مشتری} - {مدرک} یا {پاسپورت}" },
+];
+
+/** Tokens available inside folder/name templates (Persian + English). */
+const TEMPLATE_TOKENS: { token: string; desc: string }[] = [
+  { token: "{نماینده}", desc: "نام نمایندهٔ مشتری" },
+  { token: "{مشتری}", desc: "نام مشتری" },
+  { token: "{مدرک}", desc: "نوع مدرک / ویزا" },
+  { token: "{نوع}", desc: "ویزا | مدرک | پروفایل | فایل" },
+  { token: "{شماره}", desc: "شمارهٔ فایل هر مشتری" },
+  { token: "{پاسپورت}", desc: "شمارهٔ پاسپورت" },
+  { token: "{تاریخ}", desc: "تاریخ فایل (شمسی)" },
+  { token: "{سال}", desc: "سال شمسی" },
+  { token: "{ماه}", desc: "نام ماه شمسی" },
+];
 
 const MODE_DEFAULTS: Record<
   ArchiveMode,
@@ -63,6 +128,8 @@ const MODE_DEFAULTS: Record<
     singleFolderName: string;
     zipName: string;
     dateBasis: RequestDateBasis;
+    folderTemplate: string;
+    nameTemplate: string;
   }
 > = {
   visas: {
@@ -71,6 +138,8 @@ const MODE_DEFAULTS: Record<
     singleFolderName: "ویزا های امروز صادر شده",
     zipName: "ویزا های صادر شده",
     dateBasis: "issued",
+    folderTemplate: "{نماینده}/{مشتری}",
+    nameTemplate: "{مشتری} - {مدرک}",
   },
   documents: {
     folderMode: "perCustomer",
@@ -78,28 +147,67 @@ const MODE_DEFAULTS: Record<
     singleFolderName: "مدارک مشتریان",
     zipName: "مدارک مشتریان",
     dateBasis: "registration",
+    folderTemplate: "{نماینده}/{مشتری}",
+    nameTemplate: "{مشتری} - {مدرک}",
   },
 };
 
-const FOLDER_MODES: { value: FolderMode; label: string; hint: string }[] = [
-  { value: "perCustomer", label: "هر مشتری یک پوشه", hint: "فایل‌های هر مشتری داخل پوشه‌ای به نام خودش" },
-  { value: "perFile", label: "هر فایل یک پوشه", hint: "هر فایل داخل پوشه‌ای به نام صاحبش — مناسب ارسال تک‌به‌تک" },
-  { value: "single", label: "همه در یک پوشه", hint: "نام پوشه را خودتان تعیین می‌کنید" },
-  { value: "flat", label: "بدون پوشه", hint: "همه فایل‌ها در ریشه ZIP" },
-];
+const isFolderMode = (v: string): v is FolderMode =>
+  ["perCustomer", "perAgentCustomer", "perAgent", "perFile", "single", "flat", "custom"].includes(v);
 
-const NAMING_MODES: { value: FileNaming; label: string; hint: string }[] = [
-  { value: "customerName", label: "نام مشتری", hint: "علی رضایی.pdf" },
-  { value: "docLabel", label: "نوع مدرک", hint: "پاسپورت.jpg • id روی.jpg • ویزا.pdf" },
-  { value: "sequence", label: "شماره‌گذاری", hint: "۱.pdf • ۲.pdf • ۳.jpg" },
-  { value: "original", label: "نام اصلی فایل", hint: "همان نامی که هنگام بارگذاری داشت" },
-];
+const isFileNaming = (v: string): v is FileNaming =>
+  [
+    "customerName",
+    "customerDoc",
+    "docCustomer",
+    "docLabel",
+    "passportNo",
+    "customerOriginal",
+    "sequence",
+    "original",
+    "custom",
+  ].includes(v);
+
+/** Load the remembered structure setup for a mode (with per-key validation). */
+function loadStructPrefs(mode: ArchiveMode): StructPrefs {
+  const d = MODE_DEFAULTS[mode];
+  const page = `smart-archive-${mode}`;
+  return {
+    folderMode: loadPageFilter<FolderMode>(page, "folderMode", d.folderMode, isFolderMode),
+    fileNaming: loadPageFilter<FileNaming>(page, "fileNaming", d.fileNaming, isFileNaming),
+    singleFolderName: loadPageFilter(page, "singleFolderName", d.singleFolderName, () => true),
+    zipName: loadPageFilter(page, "zipName", d.zipName, () => true),
+    folderTemplate: loadPageFilter(page, "folderTemplate", d.folderTemplate, () => true),
+    nameTemplate: loadPageFilter(page, "nameTemplate", d.nameTemplate, () => true),
+    docSubfolders: loadPageFilter<string>(page, "docSubfolders", "0", () => true) === "1",
+  };
+}
+
+/** A sample rendering of a template so the user sees what it produces. */
+function templateExample(tpl: string): string {
+  return (
+    resolveTemplate(tpl, {
+      rep: "احمدی",
+      customer: "علی رضایی",
+      doc: "پاسپورت",
+      kind: "مدرک",
+      seq: "۱",
+      passport: "A12345678",
+      date: "۱۴۰۴/۰۸/۰۶",
+      year: "۱۴۰۴",
+      month: "آبان",
+    }) || "—"
+  );
+}
+
+/* ------------------------------------------------------------------ */
 
 /**
  * بایگانی هوشمند — export customer documents and issued-visa files as a
- * fully customizable ZIP archive. All report filters apply; folder structure,
- * file naming, the ZIP name and even every single destination are under the
- * user's control, with a live preview before download.
+ * fully customizable ZIP archive. All report filters apply; folder structure
+ * (incl. per-representative grouping and free-form templates), file naming,
+ * the ZIP name and every single destination are under the user's control,
+ * with a live drag-and-drop tree preview before download.
  */
 export function SmartArchivePage() {
   const toast = useToast();
@@ -131,13 +239,10 @@ export function SmartArchivePage() {
   const [includeVisas, setIncludeVisas] = useState(true);
   const [includePhotos, setIncludePhotos] = useState(false);
 
-  /* ------------------------------ structure ------------------------------ */
-  const [folderMode, setFolderMode] = useState<FolderMode>("single");
-  const [singleFolderName, setSingleFolderName] = useState(MODE_DEFAULTS.visas.singleFolderName);
+  /* --------------------- structure (persisted per mode) ------------------- */
+  const [struct, setStruct] = useState<StructPrefs>(() => loadStructPrefs("visas"));
   const [folderNameDirty, setFolderNameDirty] = useState(false);
-  const [fileNaming, setFileNaming] = useState<FileNaming>("customerName");
-  const [docSubfolders, setDocSubfolders] = useState(false);
-  const [zipName, setZipName] = useState(MODE_DEFAULTS.visas.zipName);
+  const prefsPage = `smart-archive-${mode}`;
 
   /* --------------------- extra (user-added) empty folders ----------------- */
   const [extraFolders, setExtraFolders] = useState<string[]>([]);
@@ -148,15 +253,22 @@ export function SmartArchivePage() {
   const [dragOver, setDragOver] = useState(false);
   const externalInputRef = useRef<HTMLInputElement>(null);
 
-  /* --------------------- folder bulk-rename in the tree -------------------- */
-  const [renamingFolder, setRenamingFolder] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState("");
-
-  /* ------------------------- entries + overrides -------------------------- */
+  /* --------------------------- preview editing ---------------------------- */
   const [entries, setEntries] = useState<ArchiveEntry[] | null>(null);
   const [collecting, setCollecting] = useState(false);
   const [overrides, setOverrides] = useState<Record<string, PlanOverride>>({});
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  /** folder bulk-rename (path being renamed) */
+  const [renamingFolder, setRenamingFolder] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  /** per-file inline rename (entry id + working value) */
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [fileRenameValue, setFileRenameValue] = useState("");
+  /** multi-select for bulk moves */
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  /** touch-friendly «move to folder…» prompt inside the selection toolbar */
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [moveTarget, setMoveTarget] = useState("");
 
   /* ------------------------------- download ------------------------------- */
   const [busy, setBusy] = useState(false);
@@ -165,6 +277,33 @@ export function SmartArchivePage() {
 
   const quickRanges = useMemo(() => quickDateRanges(), []);
   const rangePlaceholders = basisRangePlaceholders(dateBasis);
+
+  /* --------------------- persist the structure setup ---------------------- */
+  useEffect(() => {
+    savePageFilter(prefsPage, "folderMode", struct.folderMode);
+    savePageFilter(prefsPage, "fileNaming", struct.fileNaming);
+    savePageFilter(prefsPage, "singleFolderName", struct.singleFolderName);
+    savePageFilter(prefsPage, "zipName", struct.zipName);
+    savePageFilter(prefsPage, "folderTemplate", struct.folderTemplate);
+    savePageFilter(prefsPage, "nameTemplate", struct.nameTemplate);
+    savePageFilter(prefsPage, "docSubfolders", struct.docSubfolders ? "1" : "0");
+  }, [prefsPage, struct]);
+
+  /* ---------- structure changes release old folder overrides -------------- */
+  /** When the folder rules change, dragged/renamed destinations from the old
+   *  structure would silently pin files to stale paths — release ONLY the
+   *  folder part of each override; manual file renames stay untouched. */
+  useEffect(() => {
+    setOverrides((prev) => {
+      const next: Record<string, PlanOverride> = {};
+      let changed = false;
+      for (const [id, ov] of Object.entries(prev)) {
+        if (ov.folder !== undefined) changed = true;
+        else next[id] = ov;
+      }
+      return changed ? next : prev;
+    });
+  }, [struct.folderMode, struct.folderTemplate, struct.docSubfolders]);
 
   /* --------------------------- scope resolution --------------------------- */
   const manualSelection = mode === "documents" && pickedIds.size > 0;
@@ -217,13 +356,7 @@ export function SmartArchivePage() {
     }, 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    scopeKey,
-    mode,
-    includeDocs,
-    includeVisas,
-    includePhotos,
-  ]);
+  }, [scopeKey, mode, includeDocs, includeVisas, includePhotos]);
 
   /* --------------------------------- plan --------------------------------- */
   /** DB entries + externally imported files — one candidate list. */
@@ -233,52 +366,44 @@ export function SmartArchivePage() {
   );
   const plan = useMemo(
     () =>
-      buildPlan(allEntries, {
-        folderMode,
-        singleFolderName,
-        fileNaming,
-        docSubfolders,
-        extraFolders,
-      }, overrides),
-    [allEntries, folderMode, singleFolderName, fileNaming, docSubfolders, extraFolders, overrides],
+      buildPlan(
+        allEntries,
+        {
+          folderMode: struct.folderMode,
+          singleFolderName: struct.singleFolderName,
+          folderTemplate: struct.folderTemplate,
+          fileNaming: struct.fileNaming,
+          nameTemplate: struct.nameTemplate,
+          docSubfolders: struct.docSubfolders,
+          extraFolders,
+        },
+        overrides,
+      ),
+    [allEntries, struct, extraFolders, overrides],
   );
 
-  const tree = useMemo(() => {
-    const m = new Map<string, PlanItem[]>();
-    for (const it of plan.items) {
-      const key = it.folder || "—";
-      const arr = m.get(key);
-      if (arr) arr.push(it);
-      else m.set(key, [it]);
-    }
-    // user-added empty folders appear in the preview too (zero files)
-    for (const f of plan.emptyFolders) if (!m.has(f)) m.set(f, []);
-    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], "fa"));
-  }, [plan]);
+  const tree = useMemo(() => buildTree(plan.items, plan.emptyFolders), [plan]);
 
   /* ------------------------------ interactions ---------------------------- */
 
   const switchMode = (m: string) => {
     if (m === mode) return;
-    const next = m === "visas" || m === "documents" ? m : "visas";
+    const next: ArchiveMode = m === "visas" || m === "documents" ? m : "visas";
     setMode(next);
-    const d = MODE_DEFAULTS[next];
-    setFolderMode(d.folderMode);
-    setFileNaming(d.fileNaming);
-    setSingleFolderName(d.singleFolderName);
-    setZipName(d.zipName);
-    setDateBasis(d.dateBasis);
+    setStruct(loadStructPrefs(next));
     setFolderNameDirty(false);
+    setDateBasis(MODE_DEFAULTS[next].dateBasis);
     setStatus("");
     setOverrides({});
+    setSelectedIds(new Set());
   };
 
   const applyQuickRange = (fromIso: string, toIso: string, label: string) => {
     setFrom(fromIso);
     setTo(toIso);
     // helpful default folder name for the classic "visas issued today" case
-    if (mode === "visas" && !folderNameDirty && folderMode === "single") {
-      setSingleFolderName(`ویزا های ${label} صادر شده`);
+    if (mode === "visas" && !folderNameDirty && struct.folderMode === "single") {
+      setStruct((s) => ({ ...s, singleFolderName: `ویزا های ${label} صادر شده` }));
     }
   };
 
@@ -328,26 +453,6 @@ export function SmartArchivePage() {
     setNewFolderName("");
   };
 
-  /** Bulk-rename a folder in the preview — moves EVERY file inside it. */
-  const applyFolderRename = () => {
-    const key = renamingFolder;
-    if (key === null) return;
-    const old = key === "—" ? "" : key;
-    const next = renameValue.trim().replace(/^\/+|\/+$/g, "");
-    if (next !== old) {
-      setOverrides((prev) => {
-        const nextOv = { ...prev };
-        for (const it of plan.items) {
-          if (it.folder === old) {
-            nextOv[it.entry.id] = { ...nextOv[it.entry.id], folder: next };
-          }
-        }
-        return nextOv;
-      });
-    }
-    setRenamingFolder(null);
-  };
-
   const setOverride = (id: string, patch: PlanOverride) => {
     setOverrides((prev) => {
       const next = { ...prev, [id]: { ...prev[id], ...patch } };
@@ -358,6 +463,75 @@ export function SmartArchivePage() {
     });
   };
 
+  /** Bulk-rename a folder in the preview — moves EVERY file inside it,
+   *  including files in nested subfolders (prefix-aware). */
+  const applyFolderRename = () => {
+    const key = renamingFolder;
+    if (key === null) return;
+    const old = key === "—" ? "" : key;
+    const next = renameValue.trim().replace(/^\/+|\/+$/g, "");
+    if (next !== old) {
+      setOverrides((prev) => {
+        const nextOv = { ...prev };
+        for (const it of plan.items) {
+          const inside =
+            it.folder === old || (old !== "" && it.folder.startsWith(`${old}/`));
+          if (inside) {
+            const moved =
+              it.folder === old ? next : `${next}${it.folder.slice(old.length)}`;
+            nextOv[it.entry.id] = {
+              ...nextOv[it.entry.id],
+              folder: moved.replace(/^\/+|\/+$/g, ""),
+            };
+          }
+        }
+        return nextOv;
+      });
+    }
+    setRenamingFolder(null);
+  };
+
+  const applyFileRename = () => {
+    if (renamingId !== null && fileRenameValue.trim() !== "") {
+      setOverride(renamingId, { fileName: fileRenameValue.trim() });
+    }
+    setRenamingId(null);
+  };
+
+  /** Drag & drop (or «انتقال به پوشه…») — move entries to a new folder. */
+  const moveEntries = (ids: string[], folder: string) => {
+    if (ids.length === 0) return;
+    setOverrides((prev) => {
+      const next = { ...prev };
+      for (const id of ids) next[id] = { ...next[id], folder };
+      return next;
+    });
+    setSelectedIds(new Set());
+    setMoveOpen(false);
+    setMoveTarget("");
+    toast.success(
+      ids.length === 1
+        ? "فایل به پوشهٔ جدید منتقل شد"
+        : `${toPersianDigits(ids.length)} فایل به پوشهٔ جدید منتقل شد`,
+    );
+  };
+
+  const bulkExclude = () => {
+    setOverrides((prev) => {
+      const next = { ...prev };
+      for (const id of selectedIds) next[id] = { ...next[id], excluded: true };
+      return next;
+    });
+    setSelectedIds(new Set());
+  };
+
+  const resetEdits = () => {
+    setOverrides({});
+    setSelectedIds(new Set());
+    setRenamingFolder(null);
+    setRenamingId(null);
+  };
+
   const download = async () => {
     if (plan.items.length === 0 && plan.emptyFolders.length === 0) return;
     if (busy) return;
@@ -366,7 +540,7 @@ export function SmartArchivePage() {
     try {
       const res = await generateAndSave(
         plan.items,
-        zipName,
+        struct.zipName,
         setProgress,
         plan.emptyFolders,
       );
@@ -386,6 +560,46 @@ export function SmartArchivePage() {
       setBusy(false);
       setProgress(0);
     }
+  };
+
+  const treeActions: ArchiveTreeActions = {
+    overrides,
+    collapsed,
+    onToggleCollapse: (path) =>
+      setCollapsed((prev) => {
+        const next = new Set(prev);
+        if (next.has(path)) next.delete(path);
+        else next.add(path);
+        return next;
+      }),
+    renamingFolder,
+    folderRenameValue: renameValue,
+    onFolderRenameStart: (path) => {
+      setRenamingFolder(path);
+      setRenameValue(path);
+    },
+    onFolderRenameChange: setRenameValue,
+    onFolderRenameCommit: applyFolderRename,
+    onFolderRenameCancel: () => setRenamingFolder(null),
+    renamingId,
+    fileRenameValue,
+    onFileRenameStart: (id, currentName) => {
+      setRenamingId(id);
+      setFileRenameValue(currentName);
+    },
+    onFileRenameChange: setFileRenameValue,
+    onFileRenameCommit: applyFileRename,
+    onFileRenameCancel: () => setRenamingId(null),
+    selection: selectedIds,
+    onToggleSelect: (id) =>
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      }),
+    onMoveEntries: moveEntries,
+    onExclude: (id, excluded) => setOverride(id, { excluded }),
   };
 
   /* --------------------------------- view --------------------------------- */
@@ -430,15 +644,35 @@ export function SmartArchivePage() {
         }
       />
 
-      {/* Mode */}
-      <RadioSelect
-        options={[
-          { value: "visas", label: "ویزاهای صادر شده" },
-          { value: "documents", label: "مدارک مشتریان" },
-        ]}
-        value={mode}
-        onChange={switchMode}
-      />
+      {/* Mode — compact pill switcher (no stretching) */}
+      <div
+        className="glass mx-auto flex w-fit gap-1 rounded-full p-1.5"
+        role="radiogroup"
+        aria-label="نوع بایگانی"
+      >
+        {(
+          [
+            { value: "visas", label: "ویزاهای صادر شده", icon: BadgeCheck },
+            { value: "documents", label: "مدارک مشتریان", icon: FolderOpen },
+          ] as const
+        ).map((m) => (
+          <button
+            key={m.value}
+            type="button"
+            role="radio"
+            aria-checked={mode === m.value}
+            onClick={() => switchMode(m.value)}
+            className={`flex items-center gap-1.5 whitespace-nowrap rounded-full px-5 py-2.5 text-[13px] font-bold transition-all ${
+              mode === m.value
+                ? "bg-brand-500 text-white shadow-[0_6px_18px_-6px_rgba(99,91,255,0.55)]"
+                : "text-ink-500 hover:text-ink-800 dark:text-ink-400 dark:hover:text-ink-100"
+            }`}
+          >
+            <m.icon size={16} />
+            {m.label}
+          </button>
+        ))}
+      </div>
 
       {/* Filters — the full report filter set */}
       <div className="glass flex flex-col gap-2.5 rounded-3xl p-3.5">
@@ -731,127 +965,179 @@ export function SmartArchivePage() {
               ))}
             </ul>
           )}
-          <p className="text-[10.5px] leading-5 text-ink-400">
-            فایل‌های اضافه‌شده در حالت «هر مشتری یک پوشه» داخل پوشه «فایل‌های اضافی» و در
-            حالت «هر فایل یک پوشه» هر کدام در پوشه خودشان قرار می‌گیرند؛ بعداً مقصد و نام
-            هر کدام را در پیش‌نمایش عوض کنید.
-          </p>
         </div>
       </SectionCard>
 
-      {/* Structure + naming */}
-      <SectionCard title="ساختار پوشه‌ها و نام‌گذاری" icon={<FolderOpen size={15} className="text-brand-500" />}>
-        <div className="flex flex-col gap-4">
-          <div>
-            <p className="mb-1.5 text-[12px] font-bold">پوشه‌بندی</p>
-            <div className="grid grid-cols-2 gap-1.5 lg:grid-cols-4">
-              {FOLDER_MODES.map((f) => (
-                <button
-                  key={f.value}
-                  type="button"
-                  onClick={() => setFolderMode(f.value)}
-                  className={`rounded-2xl border p-2.5 text-right transition-all ${
-                    folderMode === f.value
-                      ? "border-brand-500 bg-brand-500/10"
-                      : "border-ink-900/10 hover:border-brand-300 dark:border-white/10"
-                  }`}
-                >
-                  <span className="block text-[12px] font-bold">{f.label}</span>
-                  <span className="block text-[10.5px] leading-4 text-ink-400">{f.hint}</span>
-                </button>
-              ))}
+      {/* Structure + naming — compact collapsible pickers instead of button grids */}
+      <SectionCard title="ساختار پوشه‌ها و نام‌گذاری" icon={<FolderTree size={15} className="text-brand-500" />}>
+        <div className="grid grid-cols-1 gap-2.5 lg:grid-cols-2">
+          <div className="flex flex-col gap-2.5">
+            <OptionPicker
+              label="ساختار پوشه‌ها"
+              icon={FolderTree}
+              options={FOLDER_MODES}
+              value={struct.folderMode}
+              onChange={(v) => setStruct((s) => ({ ...s, folderMode: v as FolderMode }))}
+              stayOpenOn={["custom", "single"]}
+            >
+              {struct.folderMode === "custom" && (
+                <div className="mb-1.5 rounded-xl bg-brand-500/6 p-2.5">
+                  <Input
+                    dir="auto"
+                    className="font-mono text-[12px]"
+                    value={struct.folderTemplate}
+                    onChange={(e) => setStruct((s) => ({ ...s, folderTemplate: e.target.value }))}
+                    placeholder="{نماینده}/{مشتری}"
+                    aria-label="الگوی مسیر پوشه‌ها"
+                  />
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {TEMPLATE_TOKENS.map((t) => (
+                      <button
+                        key={t.token}
+                        type="button"
+                        title={t.desc}
+                        onClick={() =>
+                          setStruct((s) => ({ ...s, folderTemplate: s.folderTemplate + t.token }))
+                        }
+                        className="rounded-full bg-brand-500/10 px-2.5 py-1 font-mono text-[11px] font-bold text-brand-600 transition-all hover:bg-brand-500/20 dark:text-brand-300"
+                        dir="ltr"
+                      >
+                        {t.token}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="mt-1.5 text-[10.5px] leading-4 text-ink-400" dir="auto">
+                    نمونه: {templateExample(struct.folderTemplate)} — بخش‌های خالی حذف می‌شوند
+                  </p>
+                </div>
+              )}
+              {struct.folderMode === "single" && (
+                <div className="mb-1.5 rounded-xl bg-brand-500/6 p-2.5">
+                  <p className="mb-1 text-[11px] font-bold text-ink-500 dark:text-ink-400">نام پوشه:</p>
+                  <Input
+                    value={struct.singleFolderName}
+                    onChange={(e) => {
+                      setStruct((s) => ({ ...s, singleFolderName: e.target.value }));
+                      setFolderNameDirty(true);
+                    }}
+                    placeholder="مثلا: ویزا های امروز صادر شده"
+                  />
+                </div>
+              )}
+              {(struct.folderMode === "perCustomer" ||
+                struct.folderMode === "perAgent" ||
+                struct.folderMode === "perAgentCustomer") && (
+                <div className="mb-1.5 rounded-xl bg-brand-500/6 p-2.5">
+                  <Toggle
+                    checked={struct.docSubfolders}
+                    onChange={() => setStruct((s) => ({ ...s, docSubfolders: !s.docSubfolders }))}
+                    label="تفکیک در زیرپوشه‌های «مدارک» و «ویزاها»"
+                  />
+                </div>
+              )}
+            </OptionPicker>
+
+            <OptionPicker
+              label="نام‌گذاری فایل‌ها"
+              icon={PenLine}
+              options={NAMING_MODES}
+              value={struct.fileNaming}
+              onChange={(v) => setStruct((s) => ({ ...s, fileNaming: v as FileNaming }))}
+              stayOpenOn={["custom"]}
+            >
+              {struct.fileNaming === "custom" && (
+                <div className="mb-1.5 rounded-xl bg-brand-500/6 p-2.5">
+                  <Input
+                    dir="auto"
+                    className="font-mono text-[12px]"
+                    value={struct.nameTemplate}
+                    onChange={(e) => setStruct((s) => ({ ...s, nameTemplate: e.target.value }))}
+                    placeholder="{مشتری} - {مدرک}"
+                    aria-label="الگوی نام فایل‌ها"
+                  />
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {TEMPLATE_TOKENS.map((t) => (
+                      <button
+                        key={t.token}
+                        type="button"
+                        title={t.desc}
+                        onClick={() =>
+                          setStruct((s) => ({ ...s, nameTemplate: s.nameTemplate + t.token }))
+                        }
+                        className="rounded-full bg-brand-500/10 px-2.5 py-1 font-mono text-[11px] font-bold text-brand-600 transition-all hover:bg-brand-500/20 dark:text-brand-300"
+                        dir="ltr"
+                      >
+                        {t.token}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="mt-1.5 text-[10.5px] leading-4 text-ink-400" dir="auto">
+                    نمونه: {templateExample(struct.nameTemplate)}.pdf
+                  </p>
+                </div>
+              )}
+            </OptionPicker>
+          </div>
+
+          <div className="flex flex-col gap-2.5">
+            <div>
+              <p className="mb-1.5 text-[12px] font-bold">نام فایل ZIP</p>
+              <Input
+                dir="auto"
+                value={struct.zipName}
+                onChange={(e) => setStruct((s) => ({ ...s, zipName: e.target.value }))}
+                placeholder="archive"
+              />
             </div>
-            {folderMode === "single" && (
-              <div className="mt-2">
-                <p className="mb-1 text-[11px] font-bold text-ink-500 dark:text-ink-400">نام پوشه:</p>
-                <Input
-                  value={singleFolderName}
-                  onChange={(e) => {
-                    setSingleFolderName(e.target.value);
-                    setFolderNameDirty(true);
+            <div>
+              <p className="mb-1.5 text-[12px] font-bold">پوشه‌های خالی دلخواه (اختیاری)</p>
+              <div className="flex flex-col gap-2">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {extraFolders.map((f) => (
+                    <span key={f} className="chip num !gap-1 !py-1">
+                      <FolderOpen size={11} className="inline" /> {f}
+                      <button
+                        type="button"
+                        className="mr-0.5 rounded-full px-1 text-[12px] leading-none hover:text-[#ef4444]"
+                        aria-label={`حذف پوشه ${f}`}
+                        onClick={() => setExtraFolders((p) => p.filter((x) => x !== f))}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                  {extraFolders.length === 0 && (
+                    <span className="text-[10.5px] text-ink-400">
+                      پوشه‌ای اضافه نشده — برای ساخت پوشه خالی در ZIP، نامش را بنویسید
+                    </span>
+                  )}
+                </div>
+                <form
+                  className="flex flex-wrap items-center gap-1.5"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    addExtraFolder();
                   }}
-                  placeholder="مثلا: ویزا های امروز صادر شده"
-                />
-              </div>
-            )}
-            {folderMode === "perCustomer" && (
-              <div className="mt-2">
-                <Toggle
-                  checked={docSubfolders}
-                  onChange={() => setDocSubfolders((v) => !v)}
-                  label="تفکیک در زیرپوشه‌های «مدارک» و «ویزاها»"
-                />
-              </div>
-            )}
-          </div>
-          <div>
-            <p className="mb-1.5 text-[12px] font-bold">پوشه‌های خالی دلخواه (اختیاری)</p>
-            <div className="flex flex-col gap-2">
-              <div className="flex flex-wrap items-center gap-1.5">
-                {extraFolders.map((f) => (
-                  <span key={f} className="chip num !gap-1 !py-1">
-                    <Folder size={11} className="inline" /> {f}
-                    <button
-                      type="button"
-                      className="mr-0.5 rounded-full px-1 text-[12px] leading-none hover:text-[#ef4444]"
-                      aria-label={`حذف پوشه ${f}`}
-                      onClick={() => setExtraFolders((p) => p.filter((x) => x !== f))}
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-                {extraFolders.length === 0 && (
-                  <span className="text-[10.5px] text-ink-400">
-                    پوشه‌ای اضافه نشده — برای ساخت پوشه خالی در ZIP، نامش را بنویسید
-                  </span>
-                )}
-              </div>
-              <form
-                className="flex flex-wrap items-center gap-1.5"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  addExtraFolder();
-                }}
-              >
-                <Input
-                  dir="auto"
-                  className="min-w-0 flex-1 !py-1.5 text-[12px] sm:!w-56 sm:flex-none"
-                  value={newFolderName}
-                  onChange={(e) => setNewFolderName(e.target.value)}
-                  placeholder='مثلا: مدارک اضافی/۱۴۰۴ (با / تو در تو می‌شود)'
-                />
-                <button type="submit" className="btn btn-glass btn-sm">
-                  <FolderPlus size={13} /> افزودن پوشه
-                </button>
-              </form>
-            </div>
-          </div>
-          <div>
-            <p className="mb-1.5 text-[12px] font-bold">نام‌گذاری فایل‌ها</p>
-            <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
-              {NAMING_MODES.map((n) => (
-                <button
-                  key={n.value}
-                  type="button"
-                  onClick={() => setFileNaming(n.value)}
-                  className={`rounded-2xl border p-2.5 text-right transition-all ${
-                    fileNaming === n.value
-                      ? "border-brand-500 bg-brand-500/10"
-                      : "border-ink-900/10 hover:border-brand-300 dark:border-white/10"
-                  }`}
                 >
-                  <span className="block text-[12px] font-bold">{n.label}</span>
-                  <span className="block truncate text-[10.5px] leading-4 text-ink-400" title={n.hint}>
-                    {n.hint}
-                  </span>
-                </button>
-              ))}
+                  <Input
+                    dir="auto"
+                    className="min-w-0 flex-1 !py-1.5 text-[12px] sm:!w-56 sm:flex-none"
+                    value={newFolderName}
+                    onChange={(e) => setNewFolderName(e.target.value)}
+                    placeholder='مثلا: مدارک اضافی/۱۴۰۴ (با / تو در تو می‌شود)'
+                  />
+                  <button type="submit" className="btn btn-glass btn-sm">
+                    <FolderPlus size={13} /> افزودن پوشه
+                  </button>
+                </form>
+              </div>
             </div>
-          </div>
-          <div>
-            <p className="mb-1.5 text-[12px] font-bold">نام فایل ZIP</p>
-            <Input dir="ltr" className="text-left" value={zipName} onChange={(e) => setZipName(e.target.value)} placeholder="archive" />
+            <p className="mt-auto flex items-start gap-1.5 rounded-xl bg-brand-500/6 p-2.5 text-[10.5px] leading-5 text-ink-500 dark:text-ink-400">
+              <Sparkles size={13} className="mt-0.5 shrink-0 text-brand-500" />
+              آخرین تنظیمات ساختار برای هر حالت (ویزاها / مدارک) به‌خاطر سپرده می‌شود. برای
+              گروه‌بندی بر اساس نماینده، ساختار «نماینده ← مشتری» را انتخاب کنید — هر
+              نماینده یک پوشه و داخل آن پوشهٔ هر مشتری با فایل‌هایش.
+            </p>
           </div>
         </div>
       </SectionCard>
@@ -859,10 +1145,10 @@ export function SmartArchivePage() {
       {/* Preview */}
       <SectionCard
         title="پیش‌نمایش بایگانی"
-        icon={<Folder size={15} className="text-brand-500" />}
+        icon={<FolderTree size={15} className="text-brand-500" />}
         action={
-          Object.keys(overrides).length > 0 ? (
-            <button className="btn btn-ghost btn-sm" onClick={() => setOverrides({})}>
+          Object.keys(overrides).length > 0 || selectedIds.size > 0 ? (
+            <button className="btn btn-ghost btn-sm" onClick={resetEdits}>
               <RotateCcw size={13} /> بازنشانی ویرایش‌ها
             </button>
           ) : undefined
@@ -941,173 +1227,69 @@ export function SmartArchivePage() {
               </div>
             )}
 
-            {/* tree */}
-            <div className="max-h-[26rem] overflow-y-auto rounded-2xl border border-ink-900/8 dark:border-white/10">
-              {tree.map(([folder, items]) => {
-                const isRoot = folder === "—";
-                const collapsedNow = collapsed.has(folder);
-                const renamingNow = renamingFolder === folder;
-                const toggleCollapse = () =>
-                  setCollapsed((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(folder)) next.delete(folder);
-                    else next.add(folder);
-                    return next;
-                  });
-                return (
-                  <div key={folder} data-folder={folder}>
-                    <div
-                      role="button"
-                      tabIndex={renamingNow ? -1 : 0}
-                      aria-expanded={!collapsedNow}
-                      aria-label={isRoot ? "ریشه ZIP" : folder}
-                      onClick={renamingNow ? undefined : toggleCollapse}
-                      onKeyDown={(e) => {
-                        if (renamingNow) return;
-                        if (e.key === "Enter" || e.key === " ") toggleCollapse();
+            {/* multi-select toolbar */}
+            {selectedIds.size > 0 && (
+              <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-brand-400/40 bg-brand-500/8 px-3 py-2">
+                <span className="text-[12px] font-bold text-brand-600 dark:text-brand-300">
+                  {toPersianDigits(selectedIds.size)} فایل انتخاب شد — بکشید و روی پوشهٔ مقصد رها کنید
+                </span>
+                <div className="mr-auto flex flex-wrap items-center gap-1.5">
+                  {moveOpen ? (
+                    <form
+                      className="flex items-center gap-1.5"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        moveEntries([...selectedIds], moveTarget.trim().replace(/^\/+|\/+$/g, ""));
                       }}
-                      className="sticky top-0 z-10 flex w-full cursor-pointer items-center gap-2 border-b border-ink-900/6 bg-white/85 px-3 py-2 text-right backdrop-blur dark:border-white/8 dark:bg-ink-950/80"
                     >
-                      <ChevronDown
-                        size={14}
-                        className={`shrink-0 text-ink-400 transition-transform ${collapsedNow ? "-rotate-90" : ""}`}
+                      <Input
+                        dir="auto"
+                        className="!w-48 !py-1.5 text-[12px]"
+                        value={moveTarget}
+                        autoFocus
+                        onChange={(e) => setMoveTarget(e.target.value)}
+                        placeholder="مسیر پوشه (خالی = ریشه)"
+                        aria-label="پوشه مقصد"
                       />
-                      {isRoot ? (
-                        <FolderOpen size={15} className="shrink-0 text-brand-500" />
-                      ) : (
-                        <Folder size={15} className="shrink-0 text-brand-500" />
-                      )}
-                      {renamingNow ? (
-                        <Input
-                          dir="auto"
-                          className="min-w-0 flex-1 !py-1 text-[12px]"
-                          value={renameValue}
-                          autoFocus
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={(e) => setRenameValue(e.target.value)}
-                          onKeyDown={(e) => {
-                            e.stopPropagation();
-                            if (e.key === "Enter") applyFolderRename();
-                            if (e.key === "Escape") setRenamingFolder(null);
-                          }}
-                          onBlur={applyFolderRename}
-                          placeholder="نام جدید پوشه (خالی = ریشه ZIP)"
-                          aria-label="نام جدید پوشه"
-                        />
-                      ) : (
-                        <span className="min-w-0 truncate text-[12px] font-bold" dir="auto">
-                          {isRoot ? "ریشه ZIP (بدون پوشه)" : folder}
-                        </span>
-                      )}
-                      <span className="chip-soft num mr-auto shrink-0 rounded-full px-2 py-0.5 text-[10px]">
-                        {toPersianDigits(items.length)}
-                      </span>
-                      {!renamingNow && (
-                        <span
-                          role="button"
-                          tabIndex={0}
-                          aria-label="تغییر نام پوشه"
-                          title="تغییر نام پوشه — همه فایل‌های داخلش جابه‌جا می‌شوند"
-                          className="icon-btn !h-6 !w-6 shrink-0"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setRenamingFolder(folder);
-                            setRenameValue(isRoot ? "" : folder);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.stopPropagation();
-                              setRenamingFolder(folder);
-                              setRenameValue(isRoot ? "" : folder);
-                            }
-                          }}
-                        >
-                          <PenLine size={12} />
-                        </span>
-                      )}
-                    </div>
-                    {!collapsedNow && (
-                      <ul className="divide-y divide-ink-900/5 dark:divide-white/5">
-                        {items.length === 0 && (
-                          <li className="px-3 py-2.5 text-center text-[11px] text-ink-400">
-                            پوشه خالی — در ZIP ساخته می‌شود
-                          </li>
-                        )}
-                        {items.map((it) => {
-                          const ov = overrides[it.entry.id];
-                          const excluded = ov?.excluded === true;
-                          return (
-                            <li
-                              key={it.entry.id}
-                              className={`flex flex-wrap items-center gap-2 px-3 py-2 ${
-                                excluded ? "opacity-45" : ""
-                              }`}
-                            >
-                              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-500/10 text-brand-600 dark:text-brand-300">
-                                {it.entry.kind === "external" ? (
-                                  <Paperclip size={15} />
-                                ) : it.entry.kind === "issuedVisa" ? (
-                                  <BadgeCheck size={15} />
-                                ) : it.entry.mime.startsWith("image/") ? (
-                                  <FileImage size={15} />
-                                ) : (
-                                  <FileText size={15} />
-                                )}
-                              </span>
-                              <Input
-                                dir="auto"
-                                className="min-w-0 flex-1 !py-1.5 text-[12px]"
-                                value={ov?.fileName ?? it.fileName}
-                                onChange={(e) => setOverride(it.entry.id, { fileName: e.target.value })}
-                                aria-label="نام فایل"
-                                title={`نام اصلی: ${it.entry.originalName}`}
-                              />
-                              {!isRoot && (
-                                <Input
-                                  dir="auto"
-                                  className="min-w-0 flex-1 !py-1.5 text-[12px]"
-                                  value={ov?.folder ?? it.folder}
-                                  onChange={(e) => setOverride(it.entry.id, { folder: e.target.value })}
-                                  aria-label="پوشه مقصد"
-                                />
-                              )}
-                              <span
-                                className="shrink-0 text-[10.5px] text-ink-400"
-                                title={
-                                  it.entry.kind === "external"
-                                    ? `فایل اضافی — ${it.entry.originalName}`
-                                    : it.entry.customerName
-                                }
-                              >
-                                {it.entry.kind === "external"
-                                  ? "فایل اضافی"
-                                  : it.entry.customerName}
-                              </span>
-                              <span className="shrink-0 text-[10.5px] text-ink-400">
-                                {formatBytes(it.entry.size)}
-                              </span>
-                              <button
-                                type="button"
-                                className={`icon-btn !h-7 !w-7 shrink-0 ${excluded ? "" : "hover:!text-[#ef4444]"}`}
-                                title={excluded ? "بازگرداندن به بایگانی" : "حذف از بایگانی"}
-                                aria-label={excluded ? "بازگرداندن" : "حذف"}
-                                onClick={() => setOverride(it.entry.id, { excluded: !excluded })}
-                              >
-                                {excluded ? <RotateCcw size={13} /> : "×"}
-                              </button>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                      <button type="submit" className="btn btn-primary btn-sm !px-3.5">
+                        انتقال
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm !px-3"
+                        onClick={() => setMoveOpen(false)}
+                      >
+                        لغو
+                      </button>
+                    </form>
+                  ) : (
+                    <>
+                      <button className="btn btn-glass btn-sm !px-3.5" onClick={() => setMoveOpen(true)}>
+                        <FolderOpen size={13} /> انتقال به پوشه…
+                      </button>
+                      <button className="btn btn-danger-soft btn-sm !px-3.5" onClick={bulkExclude}>
+                        حذف از بایگانی
+                      </button>
+                      <button
+                        className="btn btn-ghost btn-sm !px-3"
+                        onClick={() => setSelectedIds(new Set())}
+                      >
+                        لغو انتخاب
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* the tree */}
+            <ArchiveTree tree={tree} actions={treeActions} />
+
             <p className="text-[10.5px] leading-5 text-ink-400">
-              نام هر فایل و پوشه مقصدش قابل ویرایش است؛ با دکمه مداد کنار هر پوشه، کل
-              پوشه را یک‌جا تغییر نام دهید. نام‌های تکراری خودکار شماره می‌خورند تا هیچ
-              فایلی جای دیگری را نگیرد. محتوای فایل‌ها هرگز تغییر نمی‌کند.
+              فایل‌ها را بکشید و روی هر پوشه (حتی ریشه) رها کنید تا منتقل شوند؛ با تیک هر فایل،
+              چندتایی را یک‌جا جابه‌جا یا حذف کنید. کلیک روی نام فایل = تغییر نام، مداد کنار
+              پوشه = تغییر نام کل پوشه. نام‌های تکراری خودکار شماره می‌خورند تا هیچ فایلی جای
+              دیگری را نگیرد. محتوای فایل‌ها هرگز تغییر نمی‌کند.
             </p>
           </div>
         )}

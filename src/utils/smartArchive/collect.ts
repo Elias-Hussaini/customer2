@@ -5,6 +5,7 @@
 import { db } from "../../db/schema";
 import { dataUrlToBlob, ISSUED_VISA_KIND } from "../../db/attachments";
 import { customerFullName } from "../../db/customers";
+import { isoFromDate } from "../jalali";
 import type { ArchiveEntry } from "./engine";
 
 export interface CollectOptions {
@@ -21,23 +22,38 @@ export interface CollectOptions {
  *  - issued-visa files (kind "issuedVisa" — the special slot)
  *  - optionally the profile photo
  * Payment receipts are not customer documents and never included.
+ *
+ * Each entry also carries the owner's representative name, passport number
+ * and the file date — powering the agent-folder modes and the template tokens.
  */
 export async function collectEntries(opts: CollectOptions): Promise<ArchiveEntry[]> {
   const ids = [...new Set(opts.customerIds)];
   if (ids.length === 0) return [];
-  const [customers, attachments, docTypes] = await Promise.all([
+  const [customers, attachments, docTypes, representatives] = await Promise.all([
     db.customers.bulkGet(ids),
     db.attachments.where("customerId").anyOf(ids).toArray(),
     db.docTypes.toArray(),
+    db.representatives.toArray(),
   ]);
   const labelByType = new Map(docTypes.map((d) => [d.id, d.label]));
+  const repById = new Map(representatives.map((r) => [r.id, r.name]));
   const nameById = new Map<string, string>();
+  /** per-customer context (representative / passport) shared by all their files */
+  const ctxById = new Map<
+    string,
+    { name: string; repName: string; passportNo: string }
+  >();
   const entries: ArchiveEntry[] = [];
 
   for (const c of customers) {
     if (!c) continue;
     const name = customerFullName(c).trim() || "بدون نام";
     nameById.set(c.id, name);
+    ctxById.set(c.id, {
+      name,
+      repName: repById.get(c.representativeId ?? "") ?? "",
+      passportNo: c.passportNo ?? "",
+    });
     if (opts.includeProfilePhotos && c.photo) {
       const blob = dataUrlToBlob(c.photo);
       entries.push({
@@ -51,6 +67,8 @@ export async function collectEntries(opts: CollectOptions): Promise<ArchiveEntry
         kind: "profilePhoto",
         docTypeId: "profilePhoto",
         docLabel: "پروفایل",
+        repName: repById.get(c.representativeId ?? "") ?? "",
+        passportNo: c.passportNo ?? "",
       });
     }
   }
@@ -68,7 +86,10 @@ export async function collectEntries(opts: CollectOptions): Promise<ArchiveEntry
 
   for (const a of sorted) {
     if (a.customerId == null) continue;
-    const customerName = nameById.get(a.customerId) ?? "بدون نام";
+    const ctx = ctxById.get(a.customerId);
+    const customerName = ctx?.name ?? "بدون نام";
+    // the date the file was registered — powers {تاریخ}/{سال}/{ماه} tokens
+    const dateIso = isoFromDate(new Date(a.createdAt));
     if (a.kind === ISSUED_VISA_KIND) {
       if (!opts.includeIssuedVisas) continue;
       entries.push({
@@ -82,6 +103,9 @@ export async function collectEntries(opts: CollectOptions): Promise<ArchiveEntry
         kind: "issuedVisa",
         docTypeId: ISSUED_VISA_KIND,
         docLabel: "ویزا",
+        repName: ctx?.repName ?? "",
+        passportNo: ctx?.passportNo ?? "",
+        dateIso,
       });
     } else if (a.kind === "receipt") {
       continue; // payment receipts are not customer documents
@@ -98,6 +122,9 @@ export async function collectEntries(opts: CollectOptions): Promise<ArchiveEntry
         kind: "doc",
         docTypeId: a.kind,
         docLabel: labelByType.get(a.kind) ?? "مدرک",
+        repName: ctx?.repName ?? "",
+        passportNo: ctx?.passportNo ?? "",
+        dateIso,
       });
     }
   }
