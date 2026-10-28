@@ -2,6 +2,7 @@ import { forwardRef, useLayoutEffect, useMemo, useRef, useState, Fragment } from
 import type { ExportColumn, ExportGroup, ExportRow } from "../../utils/export/tabular";
 import { computeExportStats, groupLabel } from "../../utils/export/tabular";
 import { formatJalali, formatTimestamp, todayIso, toPersianDigits } from "../../utils/jalali";
+import { LOGO_DATA_URL } from "../../assets/logo";
 
 const BRAND = "#635bff";
 const BRAND_DARK = "#5344d6";
@@ -18,6 +19,8 @@ const MAX_DOC_WIDTH = 2400;
 const CELL_HPAD = 13;
 /** Columns rendered bold (money figures). */
 const BOLD_KEYS = new Set(["amount", "quoted", "paid", "balance", "total", "issued"]);
+/** Round photo size (css px) shown next to names in rows. */
+const ROW_PHOTO = 22;
 
 /* ------------------------- text measuring (canvas) ------------------------ */
 
@@ -58,15 +61,22 @@ interface Layout {
   headers: string[];
 }
 
-function buildLayout(columns: ExportColumn[], rows: ExportRow[]): Layout {
+function buildLayout(
+  columns: ExportColumn[],
+  rows: ExportRow[],
+  photoColumnKey?: string,
+): Layout {
   // Natural width of every column = widest content (header or any cell).
-  const natural = columns.map((c) => {
+  // The photo column gets extra room for the small round photo.
+  const photoIdx = photoColumnKey ? columns.findIndex((c) => c.key === photoColumnKey) : -1;
+  const natural = columns.map((c, i) => {
     let w = textWidth(c.header, HEAD_FONT);
     for (const row of rows) {
       const v = row[c.key];
       if (v != null && v !== "") w = Math.max(w, textWidth(String(v), CELL_FONT));
     }
-    return Math.max(72, Math.ceil(w) + CELL_HPAD * 2 + 6);
+    const extra = i === photoIdx ? ROW_PHOTO + 9 : 0;
+    return Math.max(72, Math.ceil(w) + CELL_HPAD * 2 + 6 + extra);
   });
 
   let widths = natural.slice();
@@ -90,7 +100,8 @@ function buildLayout(columns: ExportColumn[], rows: ExportRow[]): Layout {
     columns.map((c, i) => {
       const v = row[c.key];
       const s = v == null || v === "" ? "—" : String(v);
-      return fitToWidth(s, CELL_FONT, widths[i] - CELL_HPAD * 2);
+      const max = widths[i] - CELL_HPAD * 2 - (i === photoIdx ? ROW_PHOTO + 9 : 0);
+      return fitToWidth(s, CELL_FONT, max);
     }),
   );
   return { docWidth, widths, display, headers };
@@ -125,6 +136,16 @@ export interface ExportDocGroupMeta {
   what?: string;
 }
 
+/** Small round photos next to a name column in every row (e.g. customers). */
+export interface ExportRowPhotos {
+  /** Column whose text sits beside the photo (e.g. "customer"). */
+  columnKey: string;
+  /** Row key holding the owner id (e.g. "customerId") — never a shown column. */
+  idKey: string;
+  /** owner id → round profile photo (data URL); missing → letter avatar. */
+  photos: Record<string, string | undefined>;
+}
+
 /**
  * Print-styled export document — RTL, Vazirmatn, pure inline styles with
  * hex/rgb colors only (html2canvas-safe).
@@ -134,7 +155,9 @@ export interface ExportDocGroupMeta {
  *
  * When `groups` is set, rows are rendered section-by-section — one
  * representative completely (with a small profile photo + name + row count
- * band), then the next representative below it.
+ * band), then the next representative below it. When `rowPhotos` is set, a
+ * small round photo (or letter avatar) accompanies the matching name cell of
+ * every data row.
  */
 export const ExportDoc = forwardRef<
   HTMLDivElement,
@@ -148,10 +171,15 @@ export const ExportDoc = forwardRef<
     groups?: ExportGroup[];
     /** Photos + wording for the section bands. */
     groupMeta?: ExportDocGroupMeta;
+    /** Optional per-row photos (e.g. customer photos beside their names). */
+    rowPhotos?: ExportRowPhotos;
     /** Fired once the auto-width layout is measured and rendered. */
     onReady?: () => void;
   }
->(function ExportDoc({ title, subtitle, columns, rows, summary, groups, groupMeta, onReady }, ref) {
+>(function ExportDoc(
+  { title, subtitle, columns, rows, summary, groups, groupMeta, rowPhotos, onReady },
+  ref,
+) {
   const [layout, setLayout] = useState<Layout | null>(null);
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
@@ -160,6 +188,17 @@ export const ExportDoc = forwardRef<
   // footer always describes exactly what this output contains (all reps vs.
   // one rep, issued vs. in-progress counts, list count).
   const stats = useMemo(() => computeExportStats(columns, rows), [columns, rows]);
+
+  /** photo data URL for row index i (or null when photos are off). */
+  const photoForRow = useMemo(() => {
+    if (!rowPhotos) return null;
+    return rows.map((r) => rowPhotos.photos[String(r[rowPhotos.idKey] ?? "")] ?? null);
+  }, [rows, rowPhotos]);
+  /** fallback letter (first char of the name cell) for row i. */
+  const letterForRow = useMemo(() => {
+    if (!rowPhotos) return null;
+    return rows.map((r) => String(r[rowPhotos.columnKey] ?? "").trim().charAt(0) || "?");
+  }, [rows, rowPhotos]);
 
   // Measure in a layout effect (after Vazirmatn is guaranteed loaded) so the
   // captured pixels exactly match the measured widths.
@@ -176,7 +215,7 @@ export const ExportDoc = forwardRef<
         /* fall back to system metrics */
       }
       if (!alive) return;
-      setLayout(buildLayout(columns, rows));
+      setLayout(buildLayout(columns, rows, rowPhotos?.columnKey));
     })();
     return () => {
       alive = false;
@@ -203,7 +242,7 @@ export const ExportDoc = forwardRef<
         boxSizing: "border-box",
       }}
     >
-      {/* Header */}
+      {/* Header — the new app logo leads the document */}
       <div
         style={{
           display: "flex",
@@ -216,22 +255,20 @@ export const ExportDoc = forwardRef<
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "13px" }}>
-          <div
+          <img
+            src={LOGO_DATA_URL}
+            alt="logo"
+            width={46}
+            height={46}
             style={{
-              width: "44px",
-              height: "44px",
+              width: "46px",
+              height: "46px",
               borderRadius: "14px",
-              background: `linear-gradient(135deg, #837aff, #5344d6)`,
-              color: "#ffffff",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontWeight: 800,
-              fontSize: "16px",
+              border: "1px solid #d9d6f2",
+              flexShrink: 0,
+              objectFit: "cover",
             }}
-          >
-            EM
-          </div>
+          />
           <div>
             <div style={{ fontSize: "17px", fontWeight: 800 }}>{title}</div>
             {subtitle && (
@@ -325,6 +362,9 @@ export const ExportDoc = forwardRef<
                             columns={columns}
                             r={r}
                             last={first + r === layout.display.length - 1}
+                            photo={photoForRow ? (photoForRow[first + r] ?? undefined) : undefined}
+                            letter={letterForRow ? letterForRow[first + r] : undefined}
+                            photoColumnKey={rowPhotos?.columnKey}
                           />
                         ))}
                       </Fragment>
@@ -338,6 +378,9 @@ export const ExportDoc = forwardRef<
                     columns={columns}
                     r={r}
                     last={r === layout.display.length - 1}
+                    photo={photoForRow ? (photoForRow[r] ?? undefined) : undefined}
+                    letter={letterForRow ? letterForRow[r] : undefined}
+                    photoColumnKey={rowPhotos?.columnKey}
                   />
                 ));
               })()}
@@ -413,41 +456,60 @@ export const ExportDoc = forwardRef<
           style={{
             display: "flex",
             justifyContent: "space-between",
+            alignItems: "center",
             marginTop: "10px",
             fontSize: "10px",
             color: MUTED,
           }}
         >
           <span>ساخته‌شده در {formatTimestamp(Date.now())}</span>
-          <span dir="ltr">E-managment</span>
+          <span dir="ltr" style={{ display: "inline-flex", alignItems: "center", gap: "5px" }}>
+            <img
+              src={LOGO_DATA_URL}
+              alt=""
+              width={14}
+              height={14}
+              style={{ width: "14px", height: "14px", borderRadius: "4px", objectFit: "cover" }}
+            />
+            E-managment
+          </span>
         </div>
       </div>
     </div>
   );
 });
 
-/** One data row of the export table (zebra + status pills). */
+/** One data row of the export table (zebra + status pills + optional photo). */
 function DataRow({
   cells,
   columns,
   r,
   last,
+  photo,
+  letter,
+  photoColumnKey,
 }: {
   cells: string[];
   columns: ExportColumn[];
   r: number;
   last: boolean;
+  /** round photo data URL for this row (photo column only). */
+  photo?: string;
+  /** fallback letter when there is no photo. */
+  letter?: string;
+  photoColumnKey?: string;
 }) {
   return (
     <tr data-export-row style={{ backgroundColor: r % 2 === 1 ? ZEBRA : "#ffffff" }}>
       {cells.map((s, i) => {
         const key = columns[i].key;
         const tone = isStatusCell(s) ? statusTone(s) : null;
+        const withPhoto = photoColumnKey === key && (photo != null || letter != null);
         return (
           <td
             key={key}
             style={{
-              padding: "10px 10px",
+              padding: "8px 10px",
               fontSize: "12.5px",
               textAlign: "center",
               verticalAlign: "middle",
@@ -458,17 +520,19 @@ function DataRow({
               ...(last ? {} : { borderBottom: `1px solid ${ROW_BORDER}` }),
             }}
           >
-            {tone ? (
-              /* html2canvas does not center inline-block children
-               * via text-align — an explicit flex wrapper is the
-               * reliable way to keep the pill centered in PDF/PNG. */
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "7px" }}>
+              {withPhoto && (
+                <RoundPhoto
+                  src={photo}
+                  letter={letter}
+                  size={ROW_PHOTO}
+                  ring={r % 2 === 1 ? "#ffffff" : undefined}
+                />
+              )}
+              {tone ? (
+                /* html2canvas does not center inline-block children
+                 * via text-align — an explicit flex wrapper is the
+                 * reliable way to keep the pill centered in PDF/PNG. */
                 <span
                   style={{
                     padding: "3px 11px",
@@ -482,14 +546,66 @@ function DataRow({
                 >
                   {s}
                 </span>
-              </div>
-            ) : (
-              <span style={BOLD_KEYS.has(key) ? { fontWeight: 700 } : undefined}>{s}</span>
-            )}
+              ) : (
+                <span style={BOLD_KEYS.has(key) ? { fontWeight: 700 } : undefined}>{s}</span>
+              )}
+            </div>
           </td>
         );
       })}
     </tr>
+  );
+}
+
+/** Small round photo with a white ring; violet letter avatar fallback. */
+function RoundPhoto({
+  src,
+  letter,
+  size,
+  ring,
+}: {
+  src?: string;
+  letter?: string;
+  size: number;
+  ring?: string;
+}) {
+  if (src) {
+    return (
+      <img
+        src={src}
+        alt=""
+        width={size}
+        height={size}
+        style={{
+          width: `${size}px`,
+          height: `${size}px`,
+          borderRadius: "999px",
+          objectFit: "cover",
+          border: ring ? `1.5px solid ${ring}` : "1.5px solid #ffffff",
+          boxShadow: "0 1px 3px rgba(27,33,56,0.22)",
+          flexShrink: 0,
+        }}
+      />
+    );
+  }
+  return (
+    <span
+      style={{
+        width: `${size}px`,
+        height: `${size}px`,
+        borderRadius: "999px",
+        backgroundColor: "#837aff",
+        color: "#ffffff",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: `${Math.round(size * 0.44)}px`,
+        fontWeight: 800,
+        flexShrink: 0,
+      }}
+    >
+      {letter?.trim().charAt(0) || "?"}
+    </span>
   );
 }
 
@@ -513,45 +629,11 @@ function SectionBand({
           padding: "9px 12px",
           backgroundColor: "#f3f1ff",
           borderBottom: `1.5px solid #d9d6f2`,
-          borderTop: "1.5px solid #d9d6f2",
+          borderTop: `1.5px solid #d9d6f2`,
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "9px" }}>
-          {photo ? (
-            <img
-              src={photo}
-              alt=""
-              width={27}
-              height={27}
-              style={{
-                width: "27px",
-                height: "27px",
-                borderRadius: "999px",
-                objectFit: "cover",
-                border: "1.5px solid #ffffff",
-                boxShadow: "0 1px 4px rgba(27,33,56,0.25)",
-                flexShrink: 0,
-              }}
-            />
-          ) : (
-            <div
-              style={{
-                width: "27px",
-                height: "27px",
-                borderRadius: "999px",
-                backgroundColor: "#837aff",
-                color: "#ffffff",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: "11px",
-                fontWeight: 800,
-                flexShrink: 0,
-              }}
-            >
-              {label.trim().charAt(0) || "?"}
-            </div>
-          )}
+          <RoundPhoto src={photo} letter={label.trim().charAt(0)} size={27} />
           <span style={{ fontSize: "13px", fontWeight: 800, color: "#3d35a8" }}>{label}</span>
           <span
             style={{

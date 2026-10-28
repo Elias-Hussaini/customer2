@@ -224,6 +224,12 @@ export async function exportXlsx(
   photos?: Record<string, string | undefined>,
   /** Persian word for what is grouped — used for the «بدون …» label. */
   groupWhat?: string,
+  /** Optional per-row photos (e.g. customer photo beside their name cell). */
+  rowPhotos?: {
+    columnKey: string;
+    idKey: string;
+    photos: Record<string, string | undefined>;
+  },
 ): Promise<void> {
   const stats = computeExportStats(columns, rows);
   try {
@@ -237,12 +243,15 @@ export async function exportXlsx(
     });
 
     // Column widths from the widest content (chars), same heuristic as before.
-    const colWidth = columns.map((c) => {
+    const photoColIdx = rowPhotos ? columns.findIndex((c) => c.key === rowPhotos.columnKey) : -1;
+    const colWidth = columns.map((c, i) => {
       let len = c.header.length;
       for (const r of rows) {
         const v = r[c.key];
         if (v != null && v !== "") len = Math.max(len, String(v).length);
       }
+      // extra room beside the embedded round photo
+      if (i === photoColIdx) len += 5;
       return Math.min(40, Math.max(10, len + 4));
     });
     ws.columns = columns.map((c, i) => ({ key: c.key, width: colWidth[i] }));
@@ -266,7 +275,8 @@ export async function exportXlsx(
 
     const addDataRow = (r: ExportRow, zebra: boolean) => {
       const row = ws.addRow(columns.map((c) => (r[c.key] == null ? "" : r[c.key])));
-      row.height = 20;
+      const hasPhoto = photoColIdx >= 0;
+      row.height = hasPhoto ? 24 : 20;
       row.eachCell((cell, colNo) => {
         const v = cell.value;
         const style: CellStyle = {
@@ -279,6 +289,24 @@ export async function exportXlsx(
         }
         cell.style = style;
       });
+      // Small round photo beside the name cell (e.g. customer photo).
+      if (rowPhotos && photoColIdx >= 0) {
+        const id = String(r[rowPhotos.idKey] ?? "");
+        const photo = rowPhotos.photos[id];
+        const parsed = photo ? parseDataUrl(photo) : null;
+        if (parsed) {
+          try {
+            const imgId = wb.addImage({ base64: parsed.base64, extension: parsed.extension });
+            const rowIdx = ws.rowCount - 1; // 0-based anchor of the row just added
+            ws.addImage(imgId, {
+              tl: { col: photoColIdx + 0.06, row: rowIdx + 0.09 },
+              ext: { width: 18, height: 18 },
+            });
+          } catch {
+            /* photo is decoration — never fail the export for it */
+          }
+        }
+      }
     };
 
     if (groups && groups.length > 0) {

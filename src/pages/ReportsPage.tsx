@@ -121,6 +121,7 @@ export function ReportsPage() {
   const requestExportRows = filteredRequests.map((r) => {
     const c = (customers ?? []).find((x) => x.id === r.customerId);
     return {
+      customerId: r.customerId,
       customer: c ? customerFullName(c) : "",
       passportNo: c?.passportNo ?? "",
       visaType: r.visaType ?? "",
@@ -137,6 +138,10 @@ export function ReportsPage() {
   });
 
   const paymentExportRows = filteredPayments.map((p) => ({
+    customerId: (() => {
+      const r = (requests ?? []).find((x) => x.id === p.requestId);
+      return r?.customerId ?? "";
+    })(),
     date: formatJalali(p.date),
     representative: (representatives ?? []).find((x) => x.id === p.representativeId)?.name ?? "",
     amount: p.amount,
@@ -210,6 +215,12 @@ export function ReportsPage() {
       photos: repPhotos,
     }),
     [kind, repPhotos],
+  );
+
+  /** customer id → profile photo — small round photo beside each name. */
+  const customerPhotos = useMemo(
+    () => Object.fromEntries((customers ?? []).map((c) => [c.id, c.photo ?? undefined])),
+    [customers],
   );
 
   const clearAllFilters = () => {
@@ -559,6 +570,13 @@ export function ReportsPage() {
         }
         defaultFilename={`${kind}-report`}
         grouping={exportGrouping}
+        rowPhotos={
+          kind === "requests" || kind === "payments"
+            ? kind === "requests"
+              ? { columnKey: "customer", idKey: "customerId", photos: customerPhotos }
+              : { columnKey: "request", idKey: "customerId", photos: customerPhotos }
+            : undefined
+        }
         summary={
           kind === "payments"
             ? [

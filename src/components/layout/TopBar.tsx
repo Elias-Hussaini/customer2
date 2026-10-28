@@ -16,6 +16,7 @@ const SECTION_TITLES: { match: (p: string) => boolean; title: string }[] = [
   { match: (p) => p.startsWith("/reports"), title: "گزارش‌ها" },
   { match: (p) => p.startsWith("/search"), title: "جستجو" },
   { match: (p) => p.startsWith("/archive"), title: "آرشیو" },
+  { match: (p) => p.startsWith("/smart-archive"), title: "بایگانی هوشمند" },
   { match: (p) => p.startsWith("/backup"), title: "پشتیبان‌گیری" },
   { match: (p) => p.startsWith("/settings"), title: "تنظیمات" },
 ];
@@ -52,7 +53,7 @@ export function TopBar() {
           aria-label="خانه"
         >
           <img
-            src="icons/icon-192.png"
+            src="icons/lo-192.png"
             alt=""
             className="h-9 w-9 rounded-[11px] shadow-[0_4px_14px_-4px_rgba(99,91,255,0.5)]"
           />

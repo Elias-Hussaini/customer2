@@ -1,21 +1,39 @@
 import { downloadBlob } from "./tabular";
 
 /**
- * Rasterize a DOM element (the print-styled export document). The element is
- * rendered with inline hex/rgb styles only, so html2canvas never meets an
- * unsupported color function and Persian text renders perfectly.
+ * Rasterize a DOM element (the print-styled export document).
  *
- * html2canvas and jsPDF are heavy — they are lazy-loaded on first export.
+ * PRIMARY ENGINE — modern-screenshot (SVG foreignObject): the browser itself
+ * lays out and paints the captured subtree, so Persian text lands EXACTLY
+ * where the browser renders it — pills, chips and letter-avatars stay
+ * perfectly centered. (html2canvas re-implements text layout and drew
+ * Vazirmatn text ~0.9×font-size too low, pushing text out of small rounded
+ * containers.)
+ *
+ * FALLBACK — html2canvas: kept for exotic environments where the
+ * foreignObject pipeline is unavailable; inline hex/rgb styles keep it safe.
+ *
+ * Both engines are heavy — lazy-loaded on first export.
  */
 export async function captureElement(el: HTMLElement): Promise<HTMLCanvasElement> {
-  const [{ default: html2canvas }] = await Promise.all([import("html2canvas")]);
   await document.fonts.ready;
-  return html2canvas(el, {
-    scale: 2,
-    backgroundColor: "#ffffff",
-    logging: false,
-    useCORS: true,
-  });
+  try {
+    const { domToCanvas } = await import("modern-screenshot");
+    return await domToCanvas(el, {
+      scale: 2,
+      backgroundColor: "#ffffff",
+      font: {},
+    });
+  } catch (e) {
+    console.warn("modern-screenshot failed, falling back to html2canvas", e);
+    const [{ default: html2canvas }] = await Promise.all([import("html2canvas")]);
+    return html2canvas(el, {
+      scale: 2,
+      backgroundColor: "#ffffff",
+      logging: false,
+      useCORS: true,
+    });
+  }
 }
 
 /** PNG image of an element. */
@@ -28,10 +46,11 @@ export async function exportElementAsPng(el: HTMLElement, filename: string): Pro
 /** Multi-page A4 PDF built from a rasterized element (perfect Persian/RTL).
  *
  * Pagination is ROW-AWARE: the table rows of the export document carry a
- * `data-export-row` attribute and the table head a `data-export-head`.
- * Pages are cut exactly BETWEEN rows, so no customer row is ever sliced in
- * half or pushed under the next page's edge, and every continuation page
- * repeats the table header so long lists stay readable.
+ * `data-export-row` attribute, the table head a `data-export-head` and every
+ * section band a `data-export-section`. Pages are cut exactly BETWEEN rows
+ * (and never through a section band), so no customer row or band is ever
+ * sliced in half, and every continuation page repeats the table header so
+ * long lists stay readable.
  */
 export async function exportElementAsPdf(el: HTMLElement, filename: string): Promise<void> {
   const [{ jsPDF }] = await Promise.all([import("jspdf")]);
@@ -56,15 +75,24 @@ export async function exportElementAsPdf(el: HTMLElement, filename: string): Pro
   const domToCanvas = (domBottom: number) =>
     ((domBottom - elRect.top) / elRect.width) * canvas.width;
 
-  // ---- Cut candidates: bottom edge of every row, top of the summary
-  // footer (so it never gets sliced), and the document end ----
+  // ---- Cut candidates: bottom edge of every row, the top of the summary
+  // footer (so it never gets sliced), both edges of every section band
+  // (so a band is never cut in half), and the document end ----
   const rowEls = Array.from(el.querySelectorAll<HTMLElement>("[data-export-row]"));
   const headEl = el.querySelector<HTMLElement>("[data-export-head]");
   const footerEl = el.querySelector<HTMLElement>("[data-export-footer]");
+  const sectionEls = Array.from(el.querySelectorAll<HTMLElement>("[data-export-section]"));
   const cutSet = new Set<number>([canvas.height]);
   for (const r of rowEls) {
     const y = domToCanvas(r.getBoundingClientRect().bottom);
     if (y > 2 && y < canvas.height - 2) cutSet.add(Math.round(y));
+  }
+  for (const s of sectionEls) {
+    const sr = s.getBoundingClientRect();
+    const top = domToCanvas(sr.top);
+    const bottom = domToCanvas(sr.bottom);
+    if (top > 2 && top < canvas.height - 2) cutSet.add(Math.round(top));
+    if (bottom > 2 && bottom < canvas.height - 2) cutSet.add(Math.round(bottom));
   }
   if (footerEl) {
     const y = domToCanvas(footerEl.getBoundingClientRect().top);

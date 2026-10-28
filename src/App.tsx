@@ -14,6 +14,7 @@ import { ReportsPage } from "./pages/ReportsPage";
 import { MonthlyStatsPage } from "./pages/MonthlyStatsPage";
 import { SearchPage } from "./pages/SearchPage";
 import { ArchivePage } from "./pages/ArchivePage";
+import { SmartArchivePage } from "./pages/SmartArchivePage";
 import { BackupPage } from "./pages/BackupPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
@@ -48,6 +49,7 @@ export default function App() {
         <Route path="stats" element={<MonthlyStatsPage />} />
         <Route path="search" element={<SearchPage />} />
         <Route path="archive" element={<ArchivePage />} />
+        <Route path="smart-archive" element={<SmartArchivePage />} />
         <Route path="backup" element={<BackupPage />} />
         <Route path="settings" element={<SettingsPage />} />
         {/* Accounting section — a separate financial world */}

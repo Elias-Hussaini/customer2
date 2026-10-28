@@ -387,7 +387,7 @@
     pointer-events: none;
   }
   .dock {
-    --dock-item-w: 3.35rem;
+    --dock-item-w: 2.85rem;
     pointer-events: auto;
     position: relative;
     display: flex;
@@ -409,7 +409,7 @@
   }
   @media (min-width: 640px) {
     .dock {
-      --dock-item-w: 5.5rem;
+      --dock-item-w: 4.85rem;
     }
   }
 
@@ -434,6 +434,7 @@
   .dock-item .dock-label {
     font-size: 0.66rem;
     font-weight: 600;
+    white-space: nowrap;
     display: none;
   }
   @media (min-width: 640px) {

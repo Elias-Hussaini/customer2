@@ -289,6 +289,7 @@ export function ListDetailPage() {
         rows={filtered.map((r) => {
           const c = (customers ?? []).find((x) => x.id === r.customerId);
           return {
+            customerId: r.customerId,
             customer: c ? customerFullName(c) : "",
             passportNo: c?.passportNo ?? "",
             visaType: r.visaType ?? "",
@@ -327,6 +328,13 @@ export function ListDetailPage() {
           label: "نماینده",
           photos: Object.fromEntries(
             (representatives ?? []).map((r) => [r.name, r.photo ?? undefined]),
+          ),
+        }}
+        rowPhotos={{
+          columnKey: "customer",
+          idKey: "customerId",
+          photos: Object.fromEntries(
+            (customers ?? []).map((c) => [c.id, c.photo ?? undefined]),
           ),
         }}
       />

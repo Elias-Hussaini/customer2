@@ -239,6 +239,10 @@ export function PaymentsPage() {
         onClose={() => setExportOpen(false)}
         title="گزارش پرداخت‌ها"
         rows={filtered.map((p) => ({
+          customerId: (() => {
+            const r = (requests ?? []).find((x) => x.id === p.requestId);
+            return r?.customerId ?? "";
+          })(),
           date: formatJalali(p.date),
           representative: representatives?.find((r) => r.id === p.representativeId)?.name ?? "",
           amount: p.amount,
@@ -270,6 +274,13 @@ export function PaymentsPage() {
           label: "نماینده",
           photos: Object.fromEntries(
             (representatives ?? []).map((r) => [r.name, r.photo ?? undefined]),
+          ),
+        }}
+        rowPhotos={{
+          columnKey: "request",
+          idKey: "customerId",
+          photos: Object.fromEntries(
+            (customers ?? []).map((c) => [c.id, c.photo ?? undefined]),
           ),
         }}
       />

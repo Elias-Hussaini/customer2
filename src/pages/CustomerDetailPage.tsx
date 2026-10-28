@@ -265,7 +265,7 @@ export function CustomerDetailPage() {
 
         <div className="flex flex-col gap-4">
           <SectionCard title="مدارک و تصاویر" icon={<Archive size={15} className="text-brand-500" />}>
-            <DocumentSlots customerId={customer.id} />
+            <DocumentSlots customerId={customer.id} customer={customer} />
           </SectionCard>
 
           <SectionCard title="فعالیت‌ها">

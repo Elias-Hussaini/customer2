@@ -12,7 +12,7 @@ import {
   groupExportRows,
 } from "../../utils/export/tabular";
 import { exportElementAsPdf, exportElementAsPng } from "../../utils/export/raster";
-import { ExportDoc } from "./ExportDoc";
+import { ExportDoc, type ExportRowPhotos } from "./ExportDoc";
 import { useToast } from "../../hooks/useToast";
 
 type Format = "xlsx" | "csv" | "pdf" | "png";
@@ -45,6 +45,8 @@ interface ExportDialogProps {
   summary?: { label: string; value: string }[];
   /** Optional section grouping (offered automatically when >1 group exists). */
   grouping?: ExportGrouping;
+  /** Optional per-row photos (e.g. customer photo beside their name). */
+  rowPhotos?: ExportRowPhotos;
   extra?: ReactNode;
 }
 
@@ -54,6 +56,8 @@ interface ExportDialogProps {
  * When `grouping` is set and several groups exist, the export is sectioned —
  * one representative completely, then the next — with a small profile photo
  * next to each name (XLSX embeds it as a real image; PDF/PNG render it).
+ * When `rowPhotos` is set, every data row shows a small round photo beside
+ * the matching name cell (customer photos) in all formats.
  */
 export function ExportDialog({
   open,
@@ -65,6 +69,7 @@ export function ExportDialog({
   defaultFilename,
   summary,
   grouping,
+  rowPhotos,
   extra,
 }: ExportDialogProps) {
   const toast = useToast();
@@ -112,6 +117,7 @@ export function ExportDialog({
           effectiveGroups,
           grouping?.photos,
           grouping?.label,
+          rowPhotos,
         );
         toast.success("خروجی اکسل دانلود شد");
       } else {
@@ -270,6 +276,7 @@ export function ExportDialog({
                 photos: grouping?.photos,
                 what: grouping?.label,
               }}
+              rowPhotos={rowPhotos}
               onReady={() => readyCb.current?.()}
             />
           </div>,
