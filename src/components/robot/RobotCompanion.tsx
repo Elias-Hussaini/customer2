@@ -1,12 +1,18 @@
 /**
  * Robot Companion — the persistent in-page companion (ربات همراه).
  *
- * A pure visual/entertainment layer — NO chat anymore:
+ * A visual + personality layer:
  *  - it watches what you do (navigation, saves, searches, personalization…)
  *    through the app event bus and reacts in real time with animation + a
- *    short fun line (the reaction engine guarantees no repetition)
- *  - its eyes follow your cursor anywhere on the page (RobotModel)
- *  - a tap makes it jump and answer — that is the whole interaction model
+ *    short fun line
+ *  - the lines come from the MAIN AI (the user's AI workers, the same ones
+ *    that power the agent chat) — the model gets the robot's pre-defined
+ *    DICTIONARY as its character sheet and must invent fresh lines in that
+ *    voice. Whenever the AI is unavailable (offline, no workers, timeout)
+ *    the local dictionary lines are read instead — the robot never goes
+ *    silent (aiLines.ts).
+ *  - its whole HEAD follows your cursor anywhere on the page (RobotModel)
+ *  - a tap makes it think for a moment, then jump and answer
  *
  * Performance: the canvas pauses when the tab is hidden and the whole tree
  * unmounts when the robot is turned off in settings.
@@ -27,6 +33,7 @@ const RobotCanvas = lazy(() =>
 import { robotBus } from "../../lib/robot/eventBus";
 import { stateForEvent, RobotStateController } from "../../lib/robot/stateController";
 import { robotReactions } from "../../lib/robot/reactions";
+import { generateRobotLine, type RobotLineSource } from "../../lib/robot/aiLines";
 import {
   getRobotSettings,
   subscribeRobotSettings,
@@ -64,21 +71,106 @@ export function RobotCompanion() {
   /** The robot button — the bubble anchors to it by measurement. */
   const btnRef = useRef<HTMLButtonElement>(null);
 
+  /* ------------------------- AI line plumbing ------------------------------- */
+
+  /** Latest speak() wins: a stale AI reply may never overwrite a newer bubble. */
+  const seqRef = useRef(0);
+  /** Abort the in-flight AI request when a newer one starts / on unmount. */
+  const abortRef = useRef<AbortController | null>(null);
+  /** Passive events share one rate limit so navigation bursts don't burn quota. */
+  const lastAiAtRef = useRef(0);
+
+  /** How long a passive reaction waits for the AI before reading the local line. */
+  const AI_PASSIVE_BUDGET_MS = 3200;
+  /** A tap holds a "thinking" pose, so it may wait a little longer. */
+  const AI_TAP_BUDGET_MS = 6000;
+  /** Minimum gap between two AI line requests for PASSIVE events. */
+  const AI_MIN_INTERVAL_MS = 10_000;
+
+  useEffect(
+    () => () => {
+      abortRef.current?.abort();
+    },
+    [],
+  );
+
+  /**
+   * Say something about `source`: ask the MAIN AI (when enabled) and fall
+   * back to the local dictionary line. The local gates stay in charge — the
+   * robot remains lively but never chatty, and quota is respected.
+   */
+  const speak = useCallback(
+    (source: RobotLineSource) => {
+      if (!settings.bubble) return;
+      const local = source.type === "user:tap" ? robotReactions.tap() : robotReactions.react(source);
+      const localLine = local.line;
+      if (!localLine) return; // the gate said: animate only, stay silent
+
+      const isTap = source.type === "user:tap";
+      const seq = ++seqRef.current;
+      const myAbort = new AbortController();
+      abortRef.current?.abort();
+      abortRef.current = myAbort;
+
+      const show = (text: string, role: "assistant" | "system", worker?: string) => {
+        if (seq !== seqRef.current) return; // stale — a newer line owns the bubble
+        if (isTap) controller.enter("success"); // the promised happy jump
+        // AI lines can be a touch longer — give the reader a bit more time.
+        const ms = role === "assistant" ? Math.max(local.ms ?? 5200, 6400) : local.ms;
+        setBubble({ id: uid(), role, text, ts: Date.now(), ...(worker ? { worker } : {}) });
+        setBubbleMs(ms);
+      };
+
+      const aiAllowed =
+        settings.aiLines && (isTap || Date.now() - lastAiAtRef.current >= AI_MIN_INTERVAL_MS);
+      if (!aiAllowed) {
+        show(localLine, "system");
+        return;
+      }
+      lastAiAtRef.current = Date.now();
+
+      let settled = false;
+      const budget = new Promise<null>((resolve) => {
+        setTimeout(() => resolve(null), isTap ? AI_TAP_BUDGET_MS : AI_PASSIVE_BUDGET_MS);
+      });
+      void (async () => {
+        try {
+          const ai = await Promise.race([
+            generateRobotLine(source, {
+              signal: myAbort.signal,
+              page: document.title,
+            }),
+            budget,
+          ]);
+          if (settled || seq !== seqRef.current || myAbort.signal.aborted) return;
+          settled = true;
+          if (ai) show(ai.text, "assistant", ai.worker);
+          else {
+            myAbort.abort(); // budget over — kill the background request
+            show(localLine, "system");
+          }
+        } catch {
+          if (settled || seq !== seqRef.current) return;
+          settled = true;
+          show(localLine, "system");
+        }
+      })();
+    },
+    [controller, settings.aiLines, settings.bubble],
+  );
+
   /* --------------------------- state subscriptions -------------------------- */
 
   useEffect(() => controller.subscribe((s) => setState(s)), [controller]);
 
-  // App events → animation state + (sometimes) a fun line.
+  // App events → animation state + (sometimes) a fun line from the MAIN AI
+  // (dictionary fallback when the AI is unavailable).
   useEffect(() => {
     return robotBus.subscribe((event) => {
       stateForEvent(event, controller);
-      const r = robotReactions.react(event);
-      if (r.line && settings.bubble) {
-        setBubble({ id: uid(), role: "system", text: r.line, ts: Date.now() });
-        setBubbleMs(r.ms);
-      }
+      speak(event);
     });
-  }, [controller, settings.bubble]);
+  }, [controller, speak]);
 
   // Navigation → attentive + page-aware line.
   useEffect(() => {
@@ -120,15 +212,13 @@ export function RobotCompanion() {
 
   /* ------------------------------- interaction ------------------------------ */
 
-  /** A tap on the robot → happy jump + always an answer. */
+  /** A tap on the robot → think for a beat (the AI is being asked), then a
+   *  happy jump + always an answer — from the main AI when possible. */
   const onTap = useCallback(() => {
-    controller.enter("success");
-    const r = robotReactions.tap();
-    if (r.line && settings.bubble) {
-      setBubble({ id: uid(), role: "system", text: r.line, ts: Date.now() });
-      setBubbleMs(r.ms);
-    }
-  }, [controller, settings.bubble]);
+    if (settings.bubble) controller.enter("thinking");
+    else controller.enter("success");
+    speak({ type: "user:tap" });
+  }, [controller, settings.bubble, speak]);
 
   /* ------------------------------- rendering -------------------------------- */
 

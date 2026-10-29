@@ -154,6 +154,12 @@ export interface RobotSettings {
   enabled: boolean;
   /** Transient message bubble allowed to pop. */
   bubble: boolean;
+  /**
+   * Reaction lines come from the MAIN AI (the user's AI workers) instead of
+   * only the local dictionary. Falls back to the dictionary whenever the AI
+   * is unavailable — the robot never goes silent.
+   */
+  aiLines: boolean;
   /** Minutes of inactivity before sleeping. */
   sleepAfterMin: number;
 }
@@ -161,6 +167,7 @@ export interface RobotSettings {
 export const DEFAULT_ROBOT_SETTINGS: RobotSettings = {
   enabled: true,
   bubble: true,
+  aiLines: true,
   sleepAfterMin: 3,
 };
 

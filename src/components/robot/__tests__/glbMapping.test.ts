@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
-import { clipForState, findEyeNodes, findGlowMaterials } from "../glbMapping";
+import { clipForState, findEyeNodes, findGlowMaterials, findHeadNode } from "../glbMapping";
 
 /** The real clip names, in the real order. */
 const REAL_CLIPS = ["fluttua", "lavora", "dorme", "salto"].map(
@@ -103,6 +103,56 @@ describe("findEyeNodes — real GLB hierarchy", () => {
     const root = new THREE.Object3D();
     root.name = "robot";
     expect(findEyeNodes(root)).toEqual([]);
+  });
+});
+
+describe("findHeadNode — the whole-head pointer-follow target", () => {
+  /** The REAL inspected hierarchy: robot → salto → corpo → forma → … */
+  function realRobot() {
+    const root = new THREE.Object3D();
+    root.name = "robot";
+    const salto = new THREE.Object3D();
+    salto.name = "salto";
+    const corpo = new THREE.Object3D();
+    corpo.name = "corpo";
+    const forma = new THREE.Object3D();
+    forma.name = "forma";
+    const occhi = new THREE.Object3D();
+    occhi.name = "occhi";
+    forma.add(occhi);
+    corpo.add(forma);
+    salto.add(corpo);
+    root.add(salto);
+    return { root, corpo, forma, occhi };
+  }
+
+  it("finds corpo (the whole visible robot) — NOT forma/occhi/robot/salto", () => {
+    const { root, corpo } = realRobot();
+    expect(findHeadNode(root)).toBe(corpo);
+  });
+
+  it("generic models: body/head/torso/testa match too", () => {
+    for (const name of ["Body", "head", "Torso", "testa"]) {
+      const root = new THREE.Object3D();
+      const node = new THREE.Object3D();
+      node.name = name;
+      root.add(node);
+      expect(findHeadNode(root)?.name).toBe(name);
+    }
+  });
+
+  it("does not match headphone/eye parts (no substring matching)", () => {
+    const root = new THREE.Object3D();
+    const cuffie = new THREE.Object3D();
+    cuffie.name = "cuffie";
+    const occhio = new THREE.Object3D();
+    occhio.name = "occhio_sinistro";
+    root.add(cuffie, occhio);
+    expect(findHeadNode(root)).toBeNull();
+  });
+
+  it("null for models without a recognizable head/body node", () => {
+    expect(findHeadNode(new THREE.Object3D())).toBeNull();
   });
 });
 

@@ -36,7 +36,15 @@ export interface ReactionEngine {
 
 /* --------------------------------- pools ---------------------------------- */
 
-const P = {
+/**
+ * The pre-defined phrase DICTIONARY (دیکشنری جمله‌ها).
+ *
+ * Doubles as: (1) the local fallback lines the robot reads when the main AI
+ * is unavailable, and (2) the CHARACTER SHEET handed to the main AI — the
+ * model learns the robot's tone from these pools but must produce fresh
+ * lines (see aiLines.ts).
+ */
+export const ROBOT_DICTIONARY = {
   nav: [
     "یک بخش دیگه، یک ماجرای دیگه!",
     "بریم ببینیم این‌جا چی‌داریم!",
@@ -117,7 +125,33 @@ const P = {
   wake: ["هااا… بیدارم بیدارم!", "آخ! خواب خوبی بود!"],
 } as const;
 
-type PoolKey = keyof typeof P;
+/** Persian labels for every pool — how the AI sees the dictionary. */
+export const ROBOT_DICTIONARY_LABELS: Record<PoolKey, string> = {
+  nav: "رفتن به صفحهٔ تازه",
+  navDashboard: "رفتن به داشبورد",
+  navAccounting: "رفتن به حسابداری",
+  navBackup: "رفتن به پشتیبان‌گیری",
+  navSettings: "رفتن به تنظیمات",
+  navReports: "رفتن به گزارش‌ها",
+  navSmartArchive: "رفتن به بایگانی هوشمند",
+  saveDone: "ثبت موفق",
+  saveError: "خطا در ثبت",
+  exportDone: "خروجی موفق",
+  importDone: "بازیابی موفق",
+  reportDone: "گزارش ساخته شد",
+  search: "جستجو",
+  searchQuery: "جستجوی یک عبارت خاص",
+  themeDark: "روشن‌کردن حالت تاریک",
+  themeLight: "برگشتن به حالت روشن",
+  layoutOut: "بیرون‌کشیدن دکمه",
+  layoutIn: "جاگذاری دکمه",
+  layoutMove: "جابه‌جایی دکمه",
+  tap: "ضربه‌زدن کاربر به ربات",
+  sleep: "خوابیدن ربات",
+  wake: "بیدار شدن ربات",
+};
+
+type PoolKey = keyof typeof ROBOT_DICTIONARY;
 
 /* ------------------------------ helpers ----------------------------------- */
 
@@ -164,7 +198,7 @@ export function createReactionEngine(rng: Rng = Math.random): ReactionEngine {
   const draw = (key: PoolKey): string => {
     let bag = bags.get(key);
     if (!bag) {
-      bag = new ShuffleBag(P[key], rng);
+      bag = new ShuffleBag(ROBOT_DICTIONARY[key], rng);
       bags.set(key, bag);
     }
     return bag.draw();

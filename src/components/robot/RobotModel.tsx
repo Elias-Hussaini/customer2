@@ -5,9 +5,18 @@
  *  1. HEAD-probe `${BASE_URL}agente-robot.glb`; when present, load it with
  *     GLTFLoader (+ the meshopt decoder — the real GLB is compressed),
  *     auto-fit it to the canvas, map its REAL clips (fluttua/lavora/dorme/
- *     salto) to states and aim its real eyes group ("occhi") at the pointer.
+ *     salto) to states and turn its real head group ("corpo") toward the
+ *     pointer.
  *  2. When the file is absent or unloadable, render a polished procedural
- *     robot from Three.js primitives — same states, same eye behaviour.
+ *     robot from Three.js primitives — same states, same head behaviour.
+ *
+ * Pointer-follow policy (the user's explicit instruction):
+ *  - the WHOLE HEAD follows the cursor (root lean + head yaw)
+ *  - the EYES are never rotated and never scaled by code — they are flat
+ *    panels 0.58 in front of the face; rotating them swings one panel INTO
+ *    the curved head, which is exactly the "one eye shrinks and disappears
+ *    when it looks left/right" bug. The blink is 100% clip-owned
+ *    (occhi.scale) and animates both eyes equally.
  *
  * All animation runs through refs inside useFrame — zero per-frame React
  * state, one mixer max, disposed on unmount.
@@ -21,9 +30,9 @@ import {
   ensureGlobalPointerTracking,
   getGlobalPointer,
 } from "../../lib/robot/pointerStore";
-import { clipForState, findEyeNodes, findGlowMaterials } from "./glbMapping";
+import { clipForState, findEyeNodes, findGlowMaterials, findHeadNode } from "./glbMapping";
 
-export { clipForState, findEyeNodes, findGlowMaterials };
+export { clipForState, findEyeNodes, findGlowMaterials, findHeadNode };
 
 /* ------------------------------ GLB loading ------------------------------- */
 
@@ -37,15 +46,14 @@ export { clipForState, findEyeNodes, findGlowMaterials };
  *          · "salto" (jump 1.2s)
  *
  * Clips animate salto.translation, corpo.scale, forma.rotation,
- * occhi.scale (blink) and antenna.rotation. The eyes' ROTATION is free —
- * that is where the pointer-look goes. The mapping below is grounded in
- * these actual names; unknown future GLBs fall back to generic matching.
+ * occhi.scale (blink) and antenna.rotation. The HEAD group ("corpo")
+ * carries the whole visible robot and its ROTATION is free — that is where
+ * the pointer-follow goes. The mapping below is grounded in these actual
+ * names; unknown future GLBs fall back to generic matching.
  */
 export interface GlbResult {
   scene: THREE.Group;
   animations: THREE.AnimationClip[];
-  /** The eyes group ("occhi"/"eyes") — rotation free for pointer-look. */
-  eyeNode: THREE.Object3D | null;
   /** Emissive materials (antenna light…) to pulse per state. */
   glowMaterials: THREE.MeshStandardMaterial[];
 }
@@ -94,7 +102,6 @@ export async function probeGlb(): Promise<GlbResult | null> {
     return {
       scene,
       animations: gltf.animations ?? [],
-      eyeNode: findEyeNodes(scene)[0] ?? null,
       glowMaterials: findGlowMaterials(scene),
     };
   } catch {
@@ -152,9 +159,14 @@ export function RobotModel({ state, glb }: RobotModelProps) {
   const antennaBulb = useRef<THREE.MeshStandardMaterial>(null);
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
   const actionRef = useRef<THREE.AnimationAction | null>(null);
-  /** Pivot AT the eyes' centroid — the glance rotates around this, never
-   *  around the head center (which used to fling an eye off the face). */
-  const glbPivot = useRef<THREE.Group | null>(null);
+  /**
+   * The GLB's whole-head group ("corpo") — its rotation is FREE (the clips
+   * only animate its scale), so the pointer-follow yaw lives here. The eyes
+   * are never touched: no pivot, no reparenting, no rotation, no scale —
+   * the blink clip (occhi.scale) owns the eye size and moves BOTH eyes
+   * equally.
+   */
+  const glbHead = useRef<THREE.Object3D | null>(null);
   const glbGlow = useRef<THREE.MeshStandardMaterial[]>([]);
 
   // Whole-viewport pointer tracking (R3F's `pointer` only knows the tiny
@@ -171,51 +183,26 @@ export function RobotModel({ state, glb }: RobotModelProps) {
     antenna: 0.55,
     lookX: 0,
     lookY: 0,
+    /** Whole-head yaw (GLB) — eased separately so sleep can relax it. */
+    headYaw: 0,
   });
   const clock = useRef(0);
   const blink = useRef({ next: 2 + Math.random() * 3, phase: 0 });
 
-  // GLB: attach scene, map clips per state, wire eyes + glow materials.
+  // GLB: attach scene, map clips per state, wire glow materials.
   useEffect(() => {
     if (!glb) return;
     // One mixer for the whole session (single GLB, single mixer).
     mixerRef.current = new THREE.AnimationMixer(glb.scene);
     glbGlow.current = glb.glowMaterials;
-
-    // THE EYE FIX. In the real GLB the "occhi" group sits at the HEAD
-    // CENTER while the eye blobs float ~0.58 units IN FRONT of the face.
-    // Rotating the group therefore sent an eye swinging on a 0.58-radius
-    // arc — far past the head silhouette and into the canvas mask's fade
-    // zone: "one eye disappears when it looks left/right". Reparenting the
-    // group under a pivot AT the eyes' own centroid turns the same
-    // rotation into a subtle eyeball glance that can never leave the face.
-    // (The blink clip still owns occhi.scale — PropertyBinding resolves by
-    // node name and the node stays inside the mixer's root, so it keeps
-    // working untouched under the new parent.)
-    const eye = glb.eyeNode;
-    if (eye?.parent) {
-      const parent = eye.parent;
-      parent.updateMatrixWorld(true);
-      const center = new THREE.Box3().setFromObject(eye).getCenter(new THREE.Vector3());
-      const pivotPos = parent.worldToLocal(center.clone());
-      const oldPos = eye.position.clone();
-      const pivot = new THREE.Group();
-      pivot.name = "__robotEyePivot";
-      pivot.position.copy(pivotPos);
-      parent.add(pivot);
-      pivot.add(eye);
-      eye.position.copy(oldPos).sub(pivotPos); // eyes stay exactly put
-      glbPivot.current = pivot;
-    } else {
-      glbPivot.current = null;
-    }
+    glbHead.current = findHeadNode(glb.scene); // "corpo" — yaw is clip-free
 
     return () => {
       mixerRef.current?.stopAllAction();
       mixerRef.current?.uncacheRoot(glb.scene);
       mixerRef.current = null;
       actionRef.current = null;
-      glbPivot.current = null;
+      glbHead.current = null;
       glbGlow.current = [];
     };
   }, [glb]);
@@ -270,8 +257,9 @@ export function RobotModel({ state, glb }: RobotModelProps) {
     // Whole-viewport look with a FAST follow (the complaint was "slow eyes
     // that get left behind by the mouse") — one smoothing stage, wide range.
     const gp = getGlobalPointer();
-    const targetX = THREE.MathUtils.clamp(gp.x * 0.9, -0.9, 0.9);
-    const targetY = THREE.MathUtils.clamp(gp.y * 0.55, -0.55, 0.55);
+    const sleeping = state === "sleeping";
+    const targetX = sleeping ? 0 : THREE.MathUtils.clamp(gp.x * 0.9, -0.9, 0.9);
+    const targetY = sleeping ? 0 : THREE.MathUtils.clamp(gp.y * 0.55, -0.55, 0.55);
     const lookK = 1 - Math.exp(-11 * dt); // ≈0.17/frame @60fps — snappy
     s.lookX += (targetX - s.lookX) * lookK;
     s.lookY += (targetY - s.lookY) * lookK;
@@ -282,17 +270,22 @@ export function RobotModel({ state, glb }: RobotModelProps) {
     const shake = profile.shake ? Math.sin(t * 22) * profile.shake : 0;
     if (group.current) {
       // Floating bob + (error) horizontal shake + gentle sway.
-      group.current.position.y = Math.sin(t * s.bobSpeed * 2) * s.bob - (state === "sleeping" ? 0.12 : 0);
+      group.current.position.y = Math.sin(t * s.bobSpeed * 2) * s.bob - (sleeping ? 0.12 : 0);
       group.current.rotation.z = Math.sin(t * s.bobSpeed) * s.sway + s.tilt * 0.4;
-      // The whole body LEANS toward the cursor — works for the GLB too (the
-      // clips never touch the root rotation: they animate salto/corpo/forma/
-      // occhi/antenna channels only).
-      group.current.rotation.y = s.lookX * 0.45 + shake + (state === "sleeping" ? 0.3 : 0);
-      group.current.rotation.x = -s.lookY * 0.3;
+      // The root LEANS toward the cursor and carries the PITCH — its origin
+      // sits at the model's center, so pitching it never swings the head on
+      // an arc. Works for the GLB too (the clips never touch the root
+      // rotation: they animate salto/corpo/forma/occhi/antenna channels only).
+      // Yaw is shared with the head below — capped so the FAR eye can never
+      // graze the headphone silhouette (reads as "one eye shrinks").
+      group.current.rotation.y = s.lookX * 0.22 + shake + (sleeping ? 0.3 : 0);
+      group.current.rotation.x = -s.lookY * 0.65;
     }
     if (head.current) {
+      // Procedural fallback robot — its head group is AT the head, so both
+      // yaw and pitch are safe directly on it.
       head.current.rotation.y = s.lookX * 0.9 + shake * 0.5;
-      head.current.rotation.x = -s.lookY * 1.1 + (state === "sleeping" ? 0.28 : 0);
+      head.current.rotation.x = -s.lookY * 1.1 + (sleeping ? 0.28 : 0);
       head.current.rotation.z = s.tilt;
     }
 
@@ -309,18 +302,26 @@ export function RobotModel({ state, glb }: RobotModelProps) {
       const p = Math.max(0, blink.current.phase) / 0.22;
       blinkScale = Math.abs(p * 2 - 1) * 0.92 + 0.08;
     }
-    const open = Math.max(0.03, s.eyeOpen * (state === "sleeping" ? 1 : blinkScale));
+    const open = Math.max(0.03, s.eyeOpen * (sleeping ? 1 : blinkScale));
     if (eyeL.current) eyeL.current.scale.y = THREE.MathUtils.lerp(eyeL.current.scale.y, open, 0.55);
     if (eyeR.current) eyeR.current.scale.y = THREE.MathUtils.lerp(eyeR.current.scale.y, open, 0.55);
 
-    // GLB eyes: the pivot (at the eyes' centroid) does a quick, subtle
-    // glance; the body lean above carries the big turn. Direct assignment
-    // of the already-smoothed value — snappy, never left behind, and the
-    // ±0.34 rad orbit can never swing an eye off the face.
-    if (glbPivot.current && glb) {
-      const sleeping = state === "sleeping";
-      glbPivot.current.rotation.y = sleeping ? 0 : s.lookX * 0.34;
-      glbPivot.current.rotation.x = sleeping ? 0.1 : -s.lookY * 0.22;
+    // GLB: the WHOLE HEAD ("corpo" + everything inside it — face, eyes,
+    // headphones, antenna) turns toward the cursor, like a head on a neck.
+    // Yaw only: corpo's origin sits 0.85 BELOW the head, so a pitch here
+    // would swing the head on a long arc — pitch lives on the root above.
+    // The turn is deliberately capped (root + head ≈ 0.52 rad ≈ 30°): the
+    // model's eyes are asymmetric (left sits further out) and past ~30° the
+    // far eye grazes the dark headphone silhouette — which reads exactly
+    // like the reported bug ("one eye becomes small and gets lost").
+    // While sleeping the head relaxes to a dozed-off turn and stops
+    // tracking. The eye nodes are deliberately NEVER rotated or scaled by
+    // code — the blink clip owns occhi.scale and animates both eyes
+    // equally (rotating a flat eye panel is what made one eye vanish).
+    if (glbHead.current && glb) {
+      const targetYaw = sleeping ? 0.34 : s.lookX * 0.36;
+      s.headYaw += (targetYaw - s.headYaw) * lookK;
+      glbHead.current.rotation.y = s.headYaw + shake * 0.5;
     }
 
     // Antenna glow pulse.

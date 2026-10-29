@@ -68,11 +68,36 @@ export function clipForState(
  * eye meshes (occhio_sinistro / occhio_destro / eye_left…) are skipped on
  * purpose: we rotate the GROUP, and the group's scale belongs to the blink
  * animation anyway.
+ *
+ * NOTE: since the whole-head pointer-follow rework, the eye nodes are never
+ * rotated or scaled by code at all. The eyes are FLAT panels (z-scale 0.06)
+ * floating 0.58 in front of the face — any eye-local rotation buries one of
+ * them into the curved head ("one eye shrinks and disappears"). The function
+ * stays as part of the mapping library (tests pin it).
  */
 export function findEyeNodes(root: THREE.Object3D): THREE.Object3D[] {
   const out: THREE.Object3D[] = [];
   root.traverse((o) => {
     if (/^(eye|eyes|augen|occhi|oculo)s?$/i.test(o.name.trim())) out.push(o);
+  });
+  return out;
+}
+
+/**
+ * The WHOLE-HEAD node — agente-robot calls it "corpo" (Italian for "body"):
+ * the single group that carries the entire visible robot (forma → pelle /
+ * occhi / cuffie / antenna). The clips animate only its SCALE (squash &
+ * stretch), never its rotation — so its YAW is free and that is where the
+ * pointer-follow goes: the whole head turns toward the cursor, exactly like
+ * a head on a neck. Pitch stays on the ROOT group (whose origin sits at the
+ * model's center) — pitching "corpo" itself would swing the head on a long
+ * arc, because its origin sits 0.85 BELOW the head.
+ */
+export function findHeadNode(root: THREE.Object3D): THREE.Object3D | null {
+  const re = /^(corpo|body|torso|bust|testa|head)$/i;
+  let out: THREE.Object3D | null = null;
+  root.traverse((o) => {
+    if (!out && re.test(o.name.trim())) out = o;
   });
   return out;
 }
