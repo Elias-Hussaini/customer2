@@ -386,6 +386,7 @@ export function AccPartyProfilePage() {
               ]
             : undefined
         }
+        theme="acc"
       />
     </div>
   );

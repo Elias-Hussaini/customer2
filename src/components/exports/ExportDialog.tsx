@@ -12,7 +12,7 @@ import {
   groupExportRows,
 } from "../../utils/export/tabular";
 import { exportElementAsPdf, exportElementAsPng } from "../../utils/export/raster";
-import { ExportDoc, type ExportRowPhotos } from "./ExportDoc";
+import { ExportDoc, type ExportRowPhotos, type ExportTheme } from "./ExportDoc";
 import { useToast } from "../../hooks/useToast";
 import { loadPageFilter, savePageFilter } from "../../utils/pageFilters";
 
@@ -67,6 +67,8 @@ interface ExportDialogProps {
   grouping?: ExportGrouping;
   /** Optional per-row photos (e.g. customer photo beside their name). */
   rowPhotos?: ExportRowPhotos;
+  /** Section identity for PDF/PNG documents: "visa" (default) or "acc". */
+  theme?: ExportTheme;
   extra?: ReactNode;
 }
 
@@ -94,6 +96,7 @@ export function ExportDialog({
   summary,
   grouping,
   rowPhotos,
+  theme = "visa",
   extra,
 }: ExportDialogProps) {
   const toast = useToast();
@@ -335,6 +338,7 @@ export function ExportDialog({
                 what: grouping?.label,
               }}
               rowPhotos={rowPhotos}
+              theme={theme}
               onReady={() => readyCb.current?.()}
             />
           </div>,

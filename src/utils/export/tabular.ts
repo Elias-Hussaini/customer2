@@ -98,12 +98,30 @@ export interface ExportStats {
   /** True when a status column with recognizable status values exists. */
   hasStatus: boolean;
   hasRepresentative: boolean;
+  /* — accounting scope — */
+  /** Distinct non-empty party names (طرف حساب) across the export. */
+  accParties: string[];
+  /** Count of قطعی (incl. فقط ثبت) transaction rows. */
+  finalTx: number;
+  reversedTx: number;
+  cancelledTx: number;
+  /** Outstanding rows: سررسید گذشته / باز / پرداخت جزئی / تسویه شده. */
+  overdueItems: number;
+  openItems: number;
+  partialItems: number;
+  settledItems: number;
+  /** True when any accounting status value was recognized. */
+  hasAccStatus: boolean;
 }
 
 /**
  * Smart scope statistics computed from the ACTUAL exported rows — the same
  * export is summarised differently when it covers everyone vs. one
  * representative, with no call-site plumbing.
+ *
+ * Two scopes are recognized in one column:
+ *  — visa statuses (صادر شده / در حال کار / لغو)
+ *  — accounting statuses (قطعی / برگشت خورده / ابطال + باز / جزئی / تسویه / سررسید گذشته)
  */
 export function computeExportStats(columns: ExportColumn[], rows: ExportRow[]): ExportStats {
   const statusCol = columns.find(
@@ -111,6 +129,7 @@ export function computeExportStats(columns: ExportColumn[], rows: ExportRow[]): 
   );
   const repCol = columns.find((c) => c.key === "representative" || c.header.includes("نماینده"));
   const listCol = columns.find((c) => c.key === "list" || c.header.includes("لیست"));
+  const partyCol = columns.find((c) => c.key === "party" || c.key === "partyName" || c.header.includes("طرف حساب"));
   const stats: ExportStats = {
     total: rows.length,
     representatives: [],
@@ -120,6 +139,15 @@ export function computeExportStats(columns: ExportColumn[], rows: ExportRow[]): 
     rejected: 0,
     hasStatus: false,
     hasRepresentative: Boolean(repCol),
+    accParties: [],
+    finalTx: 0,
+    reversedTx: 0,
+    cancelledTx: 0,
+    overdueItems: 0,
+    openItems: 0,
+    partialItems: 0,
+    settledItems: 0,
+    hasAccStatus: false,
   };
   if (repCol) {
     const set = new Set<string>();
@@ -137,16 +165,38 @@ export function computeExportStats(columns: ExportColumn[], rows: ExportRow[]): 
     }
     stats.lists = [...set].sort();
   }
+  if (partyCol) {
+    const set = new Set<string>();
+    for (const r of rows) {
+      const v = r[partyCol.key];
+      if (v != null && String(v).trim()) set.add(String(v).trim());
+    }
+    stats.accParties = [...set].sort();
+  }
   if (statusCol) {
     for (const r of rows) {
       const v = r[statusCol.key];
       const s = v == null ? "" : String(v).trim();
       if (!s) continue;
+      // — visa statuses —
       if (s.includes("صادر")) stats.issued++;
       else if (s.includes("در حال")) stats.inProgress++;
       else if (s.includes("لغو") || s.includes("رد ")) stats.rejected++;
+      // — accounting transaction statuses —
+      if (s.startsWith("قطعی")) stats.finalTx++;
+      if (s.includes("برگشت خورده")) stats.reversedTx++;
+      if (s.includes("ابطال")) stats.cancelledTx++;
+      // — accounting outstanding statuses —
+      if (s.includes("سررسید گذشته")) stats.overdueItems++;
+      else if (s === "باز" || s.startsWith("باز ")) stats.openItems++;
+      else if (s.includes("پرداخت جزئی")) stats.partialItems++;
+      else if (s.includes("تسویه شده")) stats.settledItems++;
     }
     stats.hasStatus = stats.issued + stats.inProgress + stats.rejected > 0;
+    stats.hasAccStatus =
+      stats.finalTx + stats.reversedTx + stats.cancelledTx +
+      stats.overdueItems + stats.openItems + stats.partialItems + stats.settledItems >
+      0;
   }
   return stats;
 }
@@ -166,6 +216,14 @@ export function exportStatsLine(stats: ExportStats): string {
     parts.push(`${toFaDigits(stats.issued)} صادر شده`);
     parts.push(`${toFaDigits(stats.inProgress)} در حال کار`);
     if (stats.rejected > 0) parts.push(`${toFaDigits(stats.rejected)} رد شده`);
+  }
+  if (stats.hasAccStatus) {
+    if (stats.accParties.length === 1) parts.push(`طرف حساب: ${stats.accParties[0]}`);
+    else if (stats.accParties.length > 1) parts.push(`${toFaDigits(stats.accParties.length)} طرف حساب`);
+    parts.push(`${toFaDigits(stats.finalTx)} قطعی`);
+    if (stats.reversedTx > 0) parts.push(`${toFaDigits(stats.reversedTx)} برگشت خورده`);
+    if (stats.cancelledTx > 0) parts.push(`${toFaDigits(stats.cancelledTx)} ابطال شده`);
+    if (stats.overdueItems > 0) parts.push(`${toFaDigits(stats.overdueItems)} سررسید گذشته`);
   }
   return parts.join(" — ");
 }

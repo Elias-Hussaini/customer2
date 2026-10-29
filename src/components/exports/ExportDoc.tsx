@@ -4,8 +4,35 @@ import { computeExportStats, groupLabel } from "../../utils/export/tabular";
 import { formatJalali, formatTimestamp, todayIso, toPersianDigits } from "../../utils/jalali";
 import { LOGO_DATA_URL } from "../../assets/logo";
 
-const BRAND = "#635bff";
-const BRAND_DARK = "#5344d6";
+/* --------------------------------- themes ---------------------------------- */
+
+export type ExportTheme = "visa" | "acc";
+
+/** Each section keeps its own identity: visa stays on the brand purple,
+ * accounting (حسابداری) gets a financial emerald — same layout quality, same
+ * logo (lo.png) leads every document. */
+const THEMES: Record<
+  ExportTheme,
+  { brand: string; brandDark: string; soft: string; tableBorder: string; latin: string; latinSub: string }
+> = {
+  visa: {
+    brand: "#635bff",
+    brandDark: "#5344d6",
+    soft: "#f3f1ff",
+    tableBorder: "#d9d6f2",
+    latin: "E-managment — Visa Management",
+    latinSub: "",
+  },
+  acc: {
+    brand: "#0b9e6e",
+    brandDark: "#07815a",
+    soft: "#eafaf3",
+    tableBorder: "#bfe8d8",
+    latin: "E-managment — Accounting",
+    latinSub: "بخش حسابداری",
+  },
+};
+
 const INK = "#1b2138";
 const MUTED = "#7a829c";
 const BORDER = "#e4e6f0";
@@ -17,8 +44,39 @@ const PAGE_PAD = 44;
 const MIN_DOC_WIDTH = 900;
 const MAX_DOC_WIDTH = 2400;
 const CELL_HPAD = 13;
-/** Columns rendered bold (money figures). */
-const BOLD_KEYS = new Set(["amount", "quoted", "paid", "balance", "total", "issued"]);
+/** Columns rendered bold — money figures and key numbers. */
+const BOLD_KEYS = new Set([
+  "amount",
+  "quoted",
+  "paid",
+  "balance",
+  "total",
+  "issued",
+  // accounting money columns
+  "deposit",
+  "withdraw",
+  "running",
+  "settled",
+  "remaining",
+  "receipts",
+  "payments",
+  "withdrawals",
+  "transfers",
+  "openings",
+  "adjustments",
+  "inflow",
+  "outflow",
+  "opening",
+  "closing",
+  "volume",
+  "net",
+  "netIRT",
+  "netUSD",
+  "avg",
+  "largest",
+  "cash",
+  "value",
+]);
 /** Round photo size (css px) shown next to names in rows. */
 const ROW_PHOTO = 22;
 
@@ -122,22 +180,58 @@ function buildLayout(
 
 /* --------------------------------- tones ---------------------------------- */
 
+/** Palette for status pills. */
+const TONE = {
+  green: { bg: "#e5f6ec", fg: "#0b7a55" },
+  amber: { bg: "#fdf2dd", fg: "#a56a06" },
+  red: { bg: "#fdeaea", fg: "#c0392b" },
+  blue: { bg: "#e7f0fd", fg: "#2563eb" },
+  gray: { bg: "#eef0f6", fg: "#5a627a" },
+} as const;
+
 function statusTone(v: string): { bg: string; fg: string } | null {
-  if (v.includes("صادر")) return { bg: "#e5f6ec", fg: "#0b7a55" };
-  if (v.includes("در حال")) return { bg: "#fdf2dd", fg: "#a56a06" };
-  if (v.includes("رد ") || v.includes("لغو")) return { bg: "#fdeaea", fg: "#c0392b" };
+  const t = v.trim();
+  // — visa statuses —
+  if (t.includes("صادر")) return TONE.green;
+  if (t.includes("در حال")) return TONE.amber;
+  if (t.includes("رد ") || t.includes("لغو")) return TONE.red;
+  // — accounting: transaction statuses —
+  if (t.startsWith("قطعی")) return t.includes("فقط ثبت") ? TONE.amber : TONE.green;
+  if (t.includes("برگشت خورده")) return TONE.amber;
+  if (t.includes("ابطال")) return TONE.gray;
+  // — accounting: outstanding statuses —
+  if (t.includes("سررسید گذشته")) return TONE.red;
+  if (t === "باز" || t.startsWith("باز ")) return TONE.blue;
+  if (t.includes("پرداخت جزئی")) return TONE.amber;
+  if (t.includes("تسویه شده")) return TONE.green;
+  // — accounting: active flags —
+  if (t === "فعال") return TONE.green;
+  if (t === "غیرفعال") return TONE.gray;
   return null;
 }
 
 /** A cell that IS a status value (short + starts with a status phrase) —
  *  never a long note that merely mentions one. */
+const STATUS_PREFIXES = [
+  "صادر",
+  "در حال",
+  "رد ",
+  "لغو",
+  "قطعی",
+  "برگشت خورده",
+  "ابطال شده",
+  "سررسید گذشته",
+  "باز",
+  "پرداخت جزئی",
+  "تسویه شده",
+  "فعال",
+  "غیرفعال",
+];
+
 function isStatusCell(s: string): boolean {
   const t = s.trim();
   if (t.length > 22) return false;
-  return (
-    (t.startsWith("صادر") || t.startsWith("در حال") || t.startsWith("رد ") || t.startsWith("لغو")) &&
-    statusTone(t) != null
-  );
+  return STATUS_PREFIXES.some((p) => t.startsWith(p)) && statusTone(t) != null;
 }
 
 /* -------------------------------- component ------------------------------- */
@@ -186,13 +280,16 @@ export const ExportDoc = forwardRef<
     groupMeta?: ExportDocGroupMeta;
     /** Optional per-row photos (e.g. customer photos beside their names). */
     rowPhotos?: ExportRowPhotos;
+    /** Section identity: "visa" (brand purple) or "acc" (financial emerald). */
+    theme?: ExportTheme;
     /** Fired once the auto-width layout is measured and rendered. */
     onReady?: () => void;
   }
 >(function ExportDoc(
-  { title, subtitle, columns, rows, summary, groups, groupMeta, rowPhotos, onReady },
+  { title, subtitle, columns, rows, summary, groups, groupMeta, rowPhotos, theme = "visa", onReady },
   ref,
 ) {
+  const th = THEMES[theme] ?? THEMES.visa;
   const [layout, setLayout] = useState<Layout | null>(null);
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
@@ -288,7 +385,7 @@ export const ExportDoc = forwardRef<
           justifyContent: "space-between",
           gap: "18px",
           paddingBottom: "15px",
-          borderBottom: `2px solid ${BRAND}`,
+          borderBottom: `2px solid ${th.brand}`,
           marginBottom: "22px",
         }}
       >
@@ -302,7 +399,7 @@ export const ExportDoc = forwardRef<
               width: "46px",
               height: "46px",
               borderRadius: "14px",
-              border: "1px solid #d9d6f2",
+              border: `1px solid ${th.tableBorder}`,
               flexShrink: 0,
               objectFit: "cover",
             }}
@@ -312,6 +409,7 @@ export const ExportDoc = forwardRef<
               style={{
                 fontSize: "17px",
                 fontWeight: 800,
+                color: th.brandDark,
                 whiteSpace: "nowrap",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
@@ -345,7 +443,8 @@ export const ExportDoc = forwardRef<
             lineHeight: "1.7",
           }}
         >
-          <div dir="ltr">E-managment — Visa Management</div>
+          <div dir="ltr">{th.latin}</div>
+          {th.latinSub && <div>{th.latinSub}</div>}
           <div>تاریخ گزارش: {formatJalali(todayIso(), "long")}</div>
         </div>
       </div>
@@ -361,7 +460,7 @@ export const ExportDoc = forwardRef<
                 borderRadius: "999px",
                 padding: "6px 14px",
                 fontSize: "11.5px",
-                backgroundColor: "#f3f1ff",
+                backgroundColor: th.soft,
               }}
             >
               <span style={{ color: MUTED }}>{s.label}: </span>
@@ -377,7 +476,7 @@ export const ExportDoc = forwardRef<
           style={{
             borderRadius: "14px",
             overflow: "hidden",
-            border: "1px solid #d9d6f2",
+            border: `1px solid ${th.tableBorder}`,
           }}
         >
           <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
@@ -387,7 +486,7 @@ export const ExportDoc = forwardRef<
               ))}
             </colgroup>
             <thead>
-              <tr data-export-head style={{ background: `linear-gradient(180deg, ${BRAND}, ${BRAND_DARK})` }}>
+              <tr data-export-head style={{ background: `linear-gradient(180deg, ${th.brand}, ${th.brandDark})` }}>
                 {layout.headers.map((h, i) => (
                   <th
                     key={columns[i].key}
@@ -472,9 +571,10 @@ export const ExportDoc = forwardRef<
         </div>
       )}
 
-      {/* Smart summary footer — describes exactly what this output contains:
-          total rows, representative scope (one name vs. a count), list count,
-          issued / in-progress / rejected counts. */}
+      {/* Smart summary footer — describes exactly what this output contains.
+          Visa scope: rows, representative/list scope, issued/in-progress/rejected.
+          Accounting scope: rows, party count, قطعی/برگشت/ابطال tx counts,
+          open/overdue outstanding items. */}
       <div
         data-export-footer
         style={{
@@ -484,16 +584,16 @@ export const ExportDoc = forwardRef<
         }}
       >
         <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
-          <span style={{ fontSize: "12px", fontWeight: 800, color: BRAND_DARK }}>جمع‌بندی:</span>
-          <FooterChip label="کل رکوردها" value={toPersianDigits(stats.total)} />
+          <span style={{ fontSize: "12px", fontWeight: 800, color: th.brandDark }}>جمع‌بندی:</span>
+          <FooterChip label="کل رکوردها" value={toPersianDigits(stats.total)} theme={theme} />
           {stats.hasRepresentative &&
             (stats.representatives.length === 1 ? (
-              <FooterChip label="نماینده" value={stats.representatives[0]} />
+              <FooterChip label="نماینده" value={stats.representatives[0]} theme={theme} />
             ) : (
-              <FooterChip label="نمایندگان" value={toPersianDigits(stats.representatives.length)} />
+              <FooterChip label="نمایندگان" value={toPersianDigits(stats.representatives.length)} theme={theme} />
             ))}
           {stats.lists.length > 1 && (
-            <FooterChip label="لیست‌ها" value={toPersianDigits(stats.lists.length)} />
+            <FooterChip label="لیست‌ها" value={toPersianDigits(stats.lists.length)} theme={theme} />
           )}
           {stats.hasStatus && (
             <>
@@ -502,12 +602,14 @@ export const ExportDoc = forwardRef<
                 value={toPersianDigits(stats.issued)}
                 bg="#e5f6ec"
                 fg="#0b7a55"
+                theme={theme}
               />
               <FooterChip
                 label="در حال کار"
                 value={toPersianDigits(stats.inProgress)}
                 bg="#fdf2dd"
                 fg="#a56a06"
+                theme={theme}
               />
               {stats.rejected > 0 && (
                 <FooterChip
@@ -515,6 +617,55 @@ export const ExportDoc = forwardRef<
                   value={toPersianDigits(stats.rejected)}
                   bg="#fdeaea"
                   fg="#c0392b"
+                  theme={theme}
+                />
+              )}
+            </>
+          )}
+          {stats.hasAccStatus && (
+            <>
+              {stats.accParties.length > 1 && (
+                <FooterChip
+                  label="طرف حساب‌ها"
+                  value={toPersianDigits(stats.accParties.length)}
+                  theme={theme}
+                />
+              )}
+              {stats.accParties.length === 1 && (
+                <FooterChip label="طرف حساب" value={stats.accParties[0]} theme={theme} />
+              )}
+              <FooterChip
+                label="قطعی"
+                value={toPersianDigits(stats.finalTx)}
+                bg="#e5f6ec"
+                fg="#0b7a55"
+                theme={theme}
+              />
+              {stats.reversedTx > 0 && (
+                <FooterChip
+                  label="برگشت خورده"
+                  value={toPersianDigits(stats.reversedTx)}
+                  bg="#fdf2dd"
+                  fg="#a56a06"
+                  theme={theme}
+                />
+              )}
+              {stats.cancelledTx > 0 && (
+                <FooterChip
+                  label="ابطال شده"
+                  value={toPersianDigits(stats.cancelledTx)}
+                  bg="#eef0f6"
+                  fg="#5a627a"
+                  theme={theme}
+                />
+              )}
+              {stats.overdueItems > 0 && (
+                <FooterChip
+                  label="سررسید گذشته"
+                  value={toPersianDigits(stats.overdueItems)}
+                  bg="#fdeaea"
+                  fg="#c0392b"
+                  theme={theme}
                 />
               )}
             </>
@@ -751,14 +902,17 @@ function SectionBand({
 function FooterChip({
   label,
   value,
-  bg = "#f3f1ff",
+  bg,
   fg,
+  theme = "visa",
 }: {
   label: string;
   value: string;
   bg?: string;
   fg?: string;
+  theme?: ExportTheme;
 }) {
+  const th = THEMES[theme] ?? THEMES.visa;
   return (
     <span
       style={{
@@ -769,7 +923,7 @@ function FooterChip({
         borderRadius: "999px",
         padding: "4px 12px",
         fontSize: "11px",
-        backgroundColor: bg,
+        backgroundColor: bg ?? th.soft,
         color: fg ?? INK,
         whiteSpace: "nowrap",
       }}

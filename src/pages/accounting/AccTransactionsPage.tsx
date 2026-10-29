@@ -606,6 +606,7 @@ export function AccTransactionsPage() {
         columns={exportColumns}
         rows={exportRows}
         defaultFilename="acc-transactions"
+        theme="acc"
       />
     </div>
   );

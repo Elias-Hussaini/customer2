@@ -276,6 +276,7 @@ export function AccAccountDetailPage() {
           { label: "جمع خروجی", value: formatMoney(outflow, account.currency) },
           { label: "تعداد تراکنش", value: statementRows.length.toLocaleString("fa-IR") },
         ]}
+        theme="acc"
       />
     </div>
   );

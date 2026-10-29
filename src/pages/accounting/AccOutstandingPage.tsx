@@ -3,11 +3,12 @@
 
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Ban, MoreVertical, Plus, Scale, CheckCircle2 } from "lucide-react";
+import { Ban, FileDown, MoreVertical, Plus, Scale, CheckCircle2 } from "lucide-react";
 import { Button, IconButton } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Menu } from "../../components/ui/Menu";
 import { SearchBox, FilterSelect } from "../../components/ui/inputs";
+import { ExportDialog } from "../../components/exports/ExportDialog";
 import { useConfirm } from "../../hooks/useConfirm";
 import { useToast } from "../../hooks/useToast";
 import { formatJalali, todayIso } from "../../utils/jalali";
@@ -16,6 +17,7 @@ import { outstandingEffectiveStatus, outstandingRemaining } from "../../accounti
 import { cancelOutstanding, removeSettlement } from "../../accounting/repo";
 import {
   OUTSTANDING_KIND_LABELS,
+  OUTSTANDING_STATUS_LABELS,
   type OutstandingItem,
 } from "../../accounting/types";
 import { useAccOutstanding, useAccParties } from "../../accounting/hooks";
@@ -39,6 +41,7 @@ export function AccOutstandingPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [settleFor, setSettleFor] = useState<OutstandingItem | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
 
   const today = todayIso();
   const partyName = (id: string) => (parties ?? []).find((p) => p.id === id)?.name ?? "—";
@@ -64,6 +67,39 @@ export function AccOutstandingPage() {
       .filter((o) => o.status !== "cancelled" && o.status !== "settled")
       .filter((o) => o.currency === cur)
       .reduce((s, o) => s + outstandingRemaining(o), 0);
+
+  /** Rows for the shared export dialog — exactly what the current filter shows. */
+  const exportRows = useMemo(
+    () =>
+      rows.map((o) => {
+        const remaining = outstandingRemaining(o);
+        const settled = o.amount - remaining;
+        const eff = outstandingEffectiveStatus(o, today);
+        let delay = "—";
+        if (o.dueDate) {
+          const diff = Math.round((Date.parse(today) - Date.parse(o.dueDate)) / 86_400_000);
+          delay =
+            diff >= 0
+              ? `${diff.toLocaleString("fa-IR")} روز تأخیر`
+              : `${(-diff).toLocaleString("fa-IR")} روز مانده`;
+        }
+        return {
+          party: partyName(o.partyId),
+          kind: OUTSTANDING_KIND_LABELS[o.kind],
+          amount: o.amount.toLocaleString("fa-IR"),
+          settled: settled.toLocaleString("fa-IR"),
+          remaining: remaining.toLocaleString("fa-IR"),
+          progress: `${Math.round((settled / (o.amount || 1)) * 100).toLocaleString("fa-IR")}٪`,
+          currency: o.currency === "USD" ? "دلار" : "تومان",
+          due: o.dueDate ? formatJalali(o.dueDate) : "بدون سررسید",
+          delay,
+          status: OUTSTANDING_STATUS_LABELS[eff],
+          reference: o.reference ?? "",
+          description: o.description ?? "",
+        };
+      }),
+    [rows, parties, today],
+  );
 
   const doCancel = async (item: OutstandingItem) => {
     const reason = window.prompt("دلیل ابطال این مانده (الزامی):");
@@ -120,6 +156,9 @@ export function AccOutstandingPage() {
             { value: "all", label: "همه" },
           ]}
         />
+        <Button variant="glass" icon={FileDown} onClick={() => setExportOpen(true)}>
+          خروجی
+        </Button>
         <Button variant="primary" icon={Plus} onClick={() => setFormOpen(true)}>
           ثبت مانده
         </Button>
@@ -211,6 +250,41 @@ export function AccOutstandingPage() {
 
       <OutstandingFormModal open={formOpen} onClose={() => setFormOpen(false)} />
       <SettleModal open={settleFor != null} onClose={() => setSettleFor(null)} item={settleFor} />
+
+      <ExportDialog
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        title={
+          kindFilter === "payable"
+            ? "گزارش بدهی‌ها"
+            : kindFilter === "receivable"
+              ? "گزارش مطالبات"
+              : "گزارش مطالبات و بدهی‌ها"
+        }
+        subtitle={`${statusFilter === "all" ? "همه وضعیت‌ها" : statusFilter === "open" ? "باز / جزئی" : statusFilter === "overdue" ? "سررسید گذشته" : statusFilter === "settled" ? "تسویه شده" : "ابطال شده"}`}
+        columns={[
+          { key: "party", header: "طرف حساب" },
+          { key: "kind", header: "نوع" },
+          { key: "amount", header: "مبلغ کل" },
+          { key: "settled", header: "تسویه شده" },
+          { key: "remaining", header: "مانده" },
+          { key: "progress", header: "درصد تسویه" },
+          { key: "currency", header: "ارز" },
+          { key: "due", header: "سررسید" },
+          { key: "delay", header: "وضعیت سررسید" },
+          { key: "status", header: "وضعیت" },
+          { key: "reference", header: "مرجع" },
+          { key: "description", header: "شرح" },
+        ]}
+        rows={exportRows}
+        defaultFilename="acc-outstanding"
+        summary={[
+          { label: "تعداد", value: rows.length.toLocaleString("fa-IR") },
+          { label: "جمع مانده (تومان)", value: formatMoney(sumRemaining("IRT"), "IRT") },
+          { label: "جمع مانده (دلار)", value: formatMoney(sumRemaining("USD"), "USD") },
+        ]}
+        theme="acc"
+      />
     </div>
   );
 }

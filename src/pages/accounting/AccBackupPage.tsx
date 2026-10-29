@@ -789,6 +789,7 @@ function DataOnlyExport({
       columns={def.columns}
       rows={rows ?? []}
       defaultFilename={`acc-${kind}`}
+      theme="acc"
     />
   );
 }
