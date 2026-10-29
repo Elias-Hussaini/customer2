@@ -6,6 +6,7 @@ import type {
   CustomFieldDef,
   Customer,
   DocType,
+  Employer,
   ListFolder,
   Payment,
   Representative,
@@ -32,6 +33,7 @@ import type { AiSettings, AiWorker } from "../lib/ai/types";
  */
 export class VisaDB extends Dexie {
   representatives!: Table<Representative, string>;
+  employers!: Table<Employer, string>;
   customers!: Table<Customer, string>;
   requests!: Table<VisaRequest, string>;
   lists!: Table<ListFolder, string>;
@@ -111,6 +113,13 @@ export class VisaDB extends Dexie {
       aiWorkers: "id, priority, createdAt",
       aiMeta: "id",
     });
+    // v8: employers (کارفرما) — an OPTIONAL customer attribute managed in
+    // Settings; customers gain an employerId index for filtering/detach.
+    this.version(8).stores({
+      employers: "id, name, createdAt, archivedAt",
+      customers:
+        "id, firstName, lastName, passportNo, registrationDate, createdAt, archivedAt, listId, representativeId, employerId",
+    });
   }
 }
 
@@ -118,6 +127,7 @@ export const db = new VisaDB();
 
 export const DB_TABLES = [
   "representatives",
+  "employers",
   "customers",
   "requests",
   "lists",

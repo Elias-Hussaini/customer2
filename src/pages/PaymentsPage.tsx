@@ -17,6 +17,8 @@ import { formatJalali, toPersianDigits } from "../utils/jalali";
 import { formatMoney } from "../utils/num";
 import { customerFullName } from "../db/customers";
 import type { Attachment, Payment } from "../types";
+import { currencyLabel } from "../types";
+import { buildReceiptImages } from "../utils/receiptImages";
 
 export function PaymentsPage() {
   const { confirm } = useConfirm();
@@ -35,11 +37,26 @@ export function PaymentsPage() {
   const [editing, setEditing] = useState<Payment | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [previewReceipt, setPreviewReceipt] = useState<Attachment | null>(null);
+  /** paymentId → receipt image data URLs — for the export (سند زیر هر پرداخت). */
+  const [receiptPhotos, setReceiptPhotos] = useState<Record<string, string[]> | null>(null);
 
   const receiptByPayment = useMemo(
     () => new Map((receipts ?? []).map((r) => [r.paymentId ?? "", r] as const)),
     [receipts],
   );
+
+  /** Receipt images of the currently filtered payments — image receipts
+   *  attached to a payment become data URLs for the export document. */
+  const loadReceiptsForExport = async () => {
+    const visible = new Set(filtered.map((p) => p.id));
+    const byId = new Map((receipts ?? []).map((r) => [r.id, r] as const));
+    const photos = await buildReceiptImages(
+      (receipts ?? []).filter((r) => r.paymentId && visible.has(r.paymentId)),
+      (attId) => byId.get(attId)?.paymentId ?? null,
+      async (attId) => byId.get(attId)?.blob,
+    );
+    setReceiptPhotos(photos);
+  };
 
   const filtered = useMemo(() => {
     return (payments ?? [])
@@ -54,7 +71,7 @@ export function PaymentsPage() {
   }, [payments, repId, currency, from, to]);
 
   const totals = useMemo(() => {
-    const acc = { USD: 0, IRT: 0 };
+    const acc = { USD: 0, IRT: 0, AFN: 0 };
     for (const p of filtered) acc[p.currency] += p.amount;
     return acc;
   }, [filtered]);
@@ -161,10 +178,10 @@ export function PaymentsPage() {
     <div className="flex flex-col gap-4">
       <PageHeader
         title="پرداخت‌ها"
-        subtitle="دفتر مالی — دلار و تومان جداگانه جمع می‌شوند"
+        subtitle="دفتر مالی — تومان، دلار و افغانی جداگانه جمع می‌شوند"
         actions={
           <>
-            <button className="btn btn-glass btn-sm" onClick={() => setExportOpen(true)}>
+            <button className="btn btn-glass btn-sm" onClick={() => { setReceiptPhotos(null); void loadReceiptsForExport(); setExportOpen(true); }}>
               <FileDown size={14} /> خروجی
             </button>
             <button className="btn btn-primary btn-sm" onClick={() => setAddOpen(true)}>
@@ -239,6 +256,7 @@ export function PaymentsPage() {
         onClose={() => setExportOpen(false)}
         title="گزارش پرداخت‌ها"
         rows={filtered.map((p) => ({
+          paymentId: p.id,
           customerId: (() => {
             const r = (requests ?? []).find((x) => x.id === p.requestId);
             return r?.customerId ?? "";
@@ -246,7 +264,7 @@ export function PaymentsPage() {
           date: formatJalali(p.date),
           representative: representatives?.find((r) => r.id === p.representativeId)?.name ?? "",
           amount: p.amount,
-          currency: p.currency === "USD" ? "دلار" : "تومان",
+          currency: currencyLabel(p.currency),
           request: (() => {
             const r = (requests ?? []).find((x) => x.id === p.requestId);
             if (!r) return "";
@@ -283,6 +301,7 @@ export function PaymentsPage() {
             (customers ?? []).map((c) => [c.id, c.photo ?? undefined]),
           ),
         }}
+        rowReceipts={{ idKey: "paymentId", photos: receiptPhotos ?? {} }}
       />
     </div>
   );

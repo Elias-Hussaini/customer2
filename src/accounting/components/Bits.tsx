@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { Banknote, Building2, Landmark, UserRound, Wallet } from "lucide-react";
 import type { Currency } from "../../types";
+import { CURRENCIES } from "../../types";
 import { formatMoney } from "../../utils/num";
 import {
   ACCOUNT_TYPE_LABELS,
@@ -111,38 +112,39 @@ export function SignedAmount({
   );
 }
 
-/** Both currencies side by side with small labels (never combined). */
+/** All currencies stacked, small and separated (never combined). */
 export function DualMoney({
   usd,
   irt,
-  usdLabel = "دلار",
-  irtLabel = "تومان",
+  afn,
 }: {
   usd: number;
   irt: number;
-  usdLabel?: string;
-  irtLabel?: string;
+  afn?: number;
 }) {
   return (
     <span className="num inline-flex flex-col leading-5">
-      <span>{formatMoney(usd, "USD")}</span>
-      <span className="text-ink-500 dark:text-ink-400">{formatMoney(irt, "IRT")}</span>
+      <span>{formatMoney(irt, "IRT")}</span>
+      <span className="text-ink-500 dark:text-ink-400">{formatMoney(usd, "USD")}</span>
+      {afn ? (
+        <span className="text-ink-500 dark:text-ink-400">{formatMoney(afn, "AFN")}</span>
+      ) : null}
     </span>
   );
-  void usdLabel;
-  void irtLabel;
 }
+
+const CURRENCY_CHIP_STYLE: Record<Currency, string> = {
+  USD: "bg-[#8b5cf6]/12 text-[#7c3aed] dark:text-[#b79bf8]",
+  IRT: "bg-[#10b981]/12 text-[#0b9e6e] dark:text-[#3ddc9a]",
+  AFN: "bg-[#f59e0b]/14 text-[#c77d0a] dark:text-[#f5b84f]",
+};
 
 export function CurrencyChip({ currency }: { currency: Currency }) {
   return (
     <span
-      className={`inline-flex items-center rounded-md px-1.5 py-px text-[10px] font-extrabold ${
-        currency === "USD"
-          ? "bg-[#8b5cf6]/12 text-[#7c3aed] dark:text-[#b79bf8]"
-          : "bg-[#10b981]/12 text-[#0b9e6e] dark:text-[#3ddc9a]"
-      }`}
+      className={`inline-flex items-center rounded-md px-1.5 py-px text-[10px] font-extrabold ${CURRENCY_CHIP_STYLE[currency]}`}
     >
-      {currency === "USD" ? "USD" : "IRT"}
+      {currency}
     </span>
   );
 }

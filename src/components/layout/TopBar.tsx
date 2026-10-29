@@ -1,7 +1,7 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import { Banknote, FilePlus2, FolderPlus, Moon, Plus, Search, Sun, UserPlus, UserRoundPlus } from "lucide-react";
 import { useTheme } from "../../hooks/useTheme";
-import { useCustomers, useCustomFields, useLists, useRepresentatives, useRequests, useTags } from "../../hooks/useData";
+import { useCustomers, useCustomFields, useEmployers, useLists, useRepresentatives, useRequests, useTags } from "../../hooks/useData";
 import { GlobalSearch } from "./GlobalSearch";
 import { Menu, type MenuItem } from "../ui/Menu";
 import { uiActions } from "./uiStore";
@@ -27,6 +27,7 @@ export function TopBar() {
   const location = useLocation();
 
   const customers = useCustomers() ?? [];
+  const employers = useEmployers() ?? [];
   const representatives = useRepresentatives() ?? [];
   const requests = useRequests() ?? [];
   const lists = useLists() ?? [];
@@ -67,6 +68,7 @@ export function TopBar() {
         <GlobalSearch
           className="mx-auto hidden w-full max-w-md md:block"
           customers={customers}
+          employers={employers}
           representatives={representatives}
           requests={requests}
           lists={lists}

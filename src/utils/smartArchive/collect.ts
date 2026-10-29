@@ -29,19 +29,21 @@ export interface CollectOptions {
 export async function collectEntries(opts: CollectOptions): Promise<ArchiveEntry[]> {
   const ids = [...new Set(opts.customerIds)];
   if (ids.length === 0) return [];
-  const [customers, attachments, docTypes, representatives] = await Promise.all([
+  const [customers, attachments, docTypes, representatives, employers] = await Promise.all([
     db.customers.bulkGet(ids),
     db.attachments.where("customerId").anyOf(ids).toArray(),
     db.docTypes.toArray(),
     db.representatives.toArray(),
+    db.employers.toArray(),
   ]);
   const labelByType = new Map(docTypes.map((d) => [d.id, d.label]));
   const repById = new Map(representatives.map((r) => [r.id, r.name]));
+  const employerById = new Map(employers.map((e) => [e.id, e.name]));
   const nameById = new Map<string, string>();
   /** per-customer context (representative / passport) shared by all their files */
   const ctxById = new Map<
     string,
-    { name: string; repName: string; passportNo: string }
+    { name: string; repName: string; passportNo: string; employerName: string }
   >();
   const entries: ArchiveEntry[] = [];
 
@@ -53,6 +55,7 @@ export async function collectEntries(opts: CollectOptions): Promise<ArchiveEntry
       name,
       repName: repById.get(c.representativeId ?? "") ?? "",
       passportNo: c.passportNo ?? "",
+      employerName: employerById.get(c.employerId ?? "") ?? "",
     });
     if (opts.includeProfilePhotos && c.photo) {
       const blob = dataUrlToBlob(c.photo);
@@ -68,6 +71,7 @@ export async function collectEntries(opts: CollectOptions): Promise<ArchiveEntry
         docTypeId: "profilePhoto",
         docLabel: "پروفایل",
         repName: repById.get(c.representativeId ?? "") ?? "",
+        employerName: employerById.get(c.employerId ?? "") ?? "",
         passportNo: c.passportNo ?? "",
       });
     }
@@ -104,6 +108,7 @@ export async function collectEntries(opts: CollectOptions): Promise<ArchiveEntry
         docTypeId: ISSUED_VISA_KIND,
         docLabel: "ویزا",
         repName: ctx?.repName ?? "",
+        employerName: ctx?.employerName ?? "",
         passportNo: ctx?.passportNo ?? "",
         dateIso,
       });
@@ -123,6 +128,7 @@ export async function collectEntries(opts: CollectOptions): Promise<ArchiveEntry
         docTypeId: a.kind,
         docLabel: labelByType.get(a.kind) ?? "مدرک",
         repName: ctx?.repName ?? "",
+        employerName: ctx?.employerName ?? "",
         passportNo: ctx?.passportNo ?? "",
         dateIso,
       });

@@ -259,6 +259,14 @@ export interface ExportRowPhotos {
   photos: Record<string, string | undefined>;
 }
 
+/** Receipt (سند) images rendered BELOW each row that owns them. */
+export interface ExportRowReceipts {
+  /** Row key holding the owner id (e.g. "txId") — never a shown column. */
+  idKey: string;
+  /** owner id → ordered receipt image data URLs. */
+  photos: Record<string, string[]>;
+}
+
 /**
  * Print-styled export document — RTL, Vazirmatn, pure inline styles with
  * hex/rgb colors only (html2canvas-safe).
@@ -292,6 +300,8 @@ export const ExportDoc = forwardRef<
     groupMeta?: ExportDocGroupMeta;
     /** Optional per-row photos (e.g. customer photos beside their names). */
     rowPhotos?: ExportRowPhotos;
+    /** Optional per-row receipt images (سند) — rendered below each owning row. */
+    rowReceipts?: ExportRowReceipts;
     /** Section identity: "visa" (brand purple) or "acc" (financial emerald). */
     theme?: ExportTheme;
     /** Fired once the auto-width layout is measured and rendered. */
@@ -309,6 +319,7 @@ export const ExportDoc = forwardRef<
     groups,
     groupMeta,
     rowPhotos,
+    rowReceipts,
     theme = "visa",
     onReady,
   },
@@ -334,6 +345,12 @@ export const ExportDoc = forwardRef<
     if (!rowPhotos) return null;
     return rows.map((r) => String(r[rowPhotos.columnKey] ?? "").trim().charAt(0) || "?");
   }, [rows, rowPhotos]);
+
+  /** receipt data URLs for row index i (empty when receipts are off). */
+  const receiptsForRow = useMemo(() => {
+    if (!rowReceipts) return null;
+    return rows.map((r) => rowReceipts.photos[String(r[rowReceipts.idKey] ?? "")] ?? []);
+  }, [rows, rowReceipts]);
 
   /** Widest section-band content (photo + rep name + count chip + paddings).
    *  The table must be at least this wide so band names never wrap. */
@@ -371,6 +388,22 @@ export const ExportDoc = forwardRef<
         ]);
       } catch {
         /* fall back to system metrics */
+      }
+      // Preload every receipt image BEFORE layout is committed — the
+      // rasterized pixels must contain fully painted images, not placeholders.
+      if (receiptsForRow) {
+        const urls = [...new Set(receiptsForRow.flat())];
+        await Promise.all(
+          urls.map(
+            (u) =>
+              new Promise<void>((res) => {
+                const img = new Image();
+                img.onload = () => res();
+                img.onerror = () => res();
+                img.src = u;
+              }),
+          ),
+        );
       }
       if (!alive) return;
       setLayout(buildLayout(columns, rows, rowPhotos?.columnKey, minBandWidth));
@@ -571,52 +604,74 @@ export const ExportDoc = forwardRef<
                 ))}
               </tr>
             </thead>
-            <tbody>
-              {(() => {
-                if (groups && groups.length > 0) {
-                  // Sectioned layout: one representative fully, then the next.
-                  let idx = 0;
-                  return groups.map((g, gi) => {
-                    const first = idx;
-                    idx += g.rows.length;
-                    return (
-                      <Fragment key={`g-${gi}-${g.value}`}>
+            {/* Every data row lives in its OWN tbody together with its
+                receipt block: data-export-row sits on the wrapper, so the
+                PDF pagination can only cut BETWEEN transactions — a row is
+                never sliced apart from its receipt image. */}
+            {(() => {
+              if (groups && groups.length > 0) {
+                // Sectioned layout: one representative fully, then the next.
+                let idx = 0;
+                return groups.map((g, gi) => {
+                  const first = idx;
+                  idx += g.rows.length;
+                  return (
+                    <Fragment key={`g-${gi}-${g.value}`}>
+                      <tbody>
                         <SectionBand
                           label={groupLabel(g.value, groupMeta?.what ?? "نماینده")}
                           photo={groupMeta?.photos?.[g.value]}
                           count={g.rows.length}
                           colCount={columns.length}
                         />
-                        {layout.display.slice(first, first + g.rows.length).map((cells, r) => (
-                          <DataRow
-                            key={`gr-${gi}-${r}`}
-                            cells={cells}
-                            columns={columns}
-                            r={r}
-                            last={first + r === layout.display.length - 1}
-                            photo={photoForRow ? (photoForRow[first + r] ?? undefined) : undefined}
-                            letter={letterForRow ? letterForRow[first + r] : undefined}
-                            photoColumnKey={rowPhotos?.columnKey}
-                          />
-                        ))}
-                      </Fragment>
-                    );
-                  });
-                }
-                return layout.display.map((cells, r) => (
-                  <DataRow
-                    key={r}
-                    cells={cells}
-                    columns={columns}
-                    r={r}
-                    last={r === layout.display.length - 1}
-                    photo={photoForRow ? (photoForRow[r] ?? undefined) : undefined}
-                    letter={letterForRow ? letterForRow[r] : undefined}
-                    photoColumnKey={rowPhotos?.columnKey}
-                  />
-                ));
-              })()}
-              {rows.length === 0 && (
+                      </tbody>
+                      {layout.display.slice(first, first + g.rows.length).map((cells, r) => {
+                        const isLast = first + r === layout.display.length - 1;
+                        const receipts = receiptsForRow ? receiptsForRow[first + r] : [];
+                        return (
+                          <tbody key={`gr-${gi}-${r}`} data-export-row>
+                            <DataRow
+                              cells={cells}
+                              columns={columns}
+                              r={r}
+                              last={isLast && receipts.length === 0}
+                              photo={photoForRow ? (photoForRow[first + r] ?? undefined) : undefined}
+                              letter={letterForRow ? letterForRow[first + r] : undefined}
+                              photoColumnKey={rowPhotos?.columnKey}
+                            />
+                            {receipts.length > 0 && (
+                              <ReceiptRow urls={receipts} colCount={columns.length} last={isLast} />
+                            )}
+                          </tbody>
+                        );
+                      })}
+                    </Fragment>
+                  );
+                });
+              }
+              return layout.display.map((cells, r) => {
+                const isLast = r === layout.display.length - 1;
+                const receipts = receiptsForRow ? receiptsForRow[r] : [];
+                return (
+                  <tbody key={r} data-export-row>
+                    <DataRow
+                      cells={cells}
+                      columns={columns}
+                      r={r}
+                      last={isLast && receipts.length === 0}
+                      photo={photoForRow ? (photoForRow[r] ?? undefined) : undefined}
+                      letter={letterForRow ? letterForRow[r] : undefined}
+                      photoColumnKey={rowPhotos?.columnKey}
+                    />
+                    {receipts.length > 0 && (
+                      <ReceiptRow urls={receipts} colCount={columns.length} last={isLast} />
+                    )}
+                  </tbody>
+                );
+              });
+            })()}
+            {rows.length === 0 && (
+              <tbody>
                 <tr>
                   <td
                     colSpan={columns.length}
@@ -630,8 +685,8 @@ export const ExportDoc = forwardRef<
                     رکوردی برای نمایش وجود ندارد
                   </td>
                 </tr>
-              )}
-            </tbody>
+              </tbody>
+            )}
           </table>
         </div>
       )}
@@ -852,6 +907,61 @@ function DataRow({
           </td>
         );
       })}
+    </tr>
+  );
+}
+
+/** Receipt images (سند پیوست) printed BELOW the owning data row — one
+ *  bordered, centered strip per transaction, so each receipt visually
+ *  belongs to exactly one row. Multiple receipts flow side by side. */
+function ReceiptRow({
+  urls,
+  colCount,
+  last,
+}: {
+  urls: string[];
+  colCount: number;
+  last: boolean;
+}) {
+  return (
+    <tr style={{ backgroundColor: "#fbfcfe" }}>
+      <td
+        colSpan={colCount}
+        style={{
+          padding: "10px 16px 13px",
+          textAlign: "center",
+          verticalAlign: "middle",
+          borderTop: `1px dashed ${ROW_BORDER}`,
+          ...(last ? {} : { borderBottom: `1px solid ${ROW_BORDER}` }),
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            justifyContent: "center",
+            alignItems: "center",
+            gap: "10px",
+          }}
+        >
+          {urls.map((u, i) => (
+            <img
+              key={i}
+              src={u}
+              alt="سند"
+              style={{
+                height: "158px",
+                maxWidth: "46%",
+                objectFit: "contain",
+                borderRadius: "10px",
+                border: `1px solid ${BORDER}`,
+                backgroundColor: "#ffffff",
+                display: "block",
+              }}
+            />
+          ))}
+        </div>
+      </td>
     </tr>
   );
 }

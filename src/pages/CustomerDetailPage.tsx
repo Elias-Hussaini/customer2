@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { Archive, FileDown, FilePenLine, FilePlus2, Trash2 } from "lucide-react";
+import {
+  Briefcase, Archive, FileDown, FilePenLine, FilePlus2, Trash2 } from "lucide-react";
 import { PageHeader } from "../components/ui/StatCard";
 import { SectionCard } from "../components/ui/inputs";
 import { Button } from "../components/ui/Button";
@@ -20,6 +21,7 @@ import {
   useActivities,
   useCustomFields,
   useCustomer,
+  useEmployers,
   useLists,
   usePrefs,
   useRepresentatives,
@@ -31,7 +33,7 @@ import { useToast } from "../hooks/useToast";
 import { formatJalali, formatDateByMode } from "../utils/jalali";
 import { uiActions } from "../components/layout/uiStore";
 import { toPersianDigits } from "../utils/jalali";
-import { requestStatusFa } from "../types";
+import { requestStatusFa, currencyLabel } from "../types";
 
 interface BaseFieldDef {
   key: keyof import("../types").Customer;
@@ -39,12 +41,13 @@ interface BaseFieldDef {
   date?: boolean;
   /** "passport" → follow the birth/passport calendar setting. */
   calendar?: "passport";
-  ref?: "rep" | "list";
+  ref?: "rep" | "list" | "employer";
 }
 
 const BASE_FIELDS: BaseFieldDef[] = [
   { key: "representativeId", label: "نماینده", ref: "rep" },
   { key: "listId", label: "لیست", ref: "list" },
+  { key: "employerId", label: "کارفرما", ref: "employer" },
   { key: "firstName", label: "نام" },
   { key: "lastName", label: "نام خانوادگی" },
   { key: "passportNo", label: "شماره پاسپورت" },
@@ -65,6 +68,7 @@ export function CustomerDetailPage() {
   const requests = useRequests();
   const representatives = useRepresentatives();
   const lists = useLists();
+  const employers = useEmployers();
   const tags = useTags();
   const customFields = useCustomFields();
   const activities = useActivities(15, id);
@@ -114,7 +118,7 @@ export function CustomerDetailPage() {
     representative: (representatives ?? []).find((x) => x.id === r.representativeId)?.name ?? "",
     list: (lists ?? []).find((l) => l.id === r.listId)?.name ?? "",
     amount: r.quotedAmount ?? "",
-    currency: r.currency === "USD" ? "دلار" : r.currency === "IRT" ? "تومان" : "",
+    currency: r.currency ? currencyLabel(r.currency) : "",
     registrationDate: formatJalali(r.registrationDate),
     status: requestStatusFa(r),
     issuedAt: r.issuedAt ? formatJalali(r.issuedAt) : "",
@@ -163,6 +167,9 @@ export function CustomerDetailPage() {
           <SectionCard title="مشخصات" icon={<FilePenLine size={15} className="text-brand-500" />}>
             <div className="grid grid-cols-1 gap-x-6 gap-y-0 sm:grid-cols-2">
               {BASE_FIELDS.map((f) => {
+                if (f.ref === "employer" && prefs.employerFieldEnabled === false && !customer.employerId) {
+                  return null;
+                }
                 const raw = customer[f.key] as string | undefined;
                 let display: ReactNode;
                 if (f.ref === "rep") {
@@ -176,6 +183,16 @@ export function CustomerDetailPage() {
                     </Link>
                   ) : (
                     <span className="text-ink-400">—</span>
+                  );
+                } else if (f.ref === "employer") {
+                  const emp = raw ? (employers ?? []).find((e) => e.id === raw) : undefined;
+                  display = emp ? (
+                    <span className="inline-flex items-center gap-1 font-semibold">
+                      <Briefcase size={12} className="text-brand-500" />
+                      {emp.name}
+                    </span>
+                  ) : (
+                    <span className="text-ink-400">بدون کارفرما</span>
                   );
                 } else if (f.ref === "list") {
                   const list = raw ? (lists ?? []).find((l) => l.id === raw) : undefined;

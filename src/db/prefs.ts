@@ -8,6 +8,8 @@ export const DEFAULT_PREFS: AppPreferences = {
   rememberLastSelections: true,
   lastRepresentativeId: null,
   lastListId: null,
+  lastEmployerId: null,
+  employerFieldEnabled: true,
   updatedAt: 0,
 };
 

@@ -18,7 +18,7 @@ import { normalizeFa } from "../utils/normalize";
 import { formatJalali } from "../utils/jalali";
 import { formatMoney } from "../utils/num";
 import { customerFullName } from "../db/customers";
-import { requestStatusFa } from "../types";
+import { requestStatusFa, currencyLabel } from "../types";
 import { loadPageFilter, savePageFilter } from "../utils/pageFilters";
 import {
   REQUEST_DATE_BASIS_OPTIONS,
@@ -152,7 +152,7 @@ export function RequestsPage() {
               .filter(Boolean)
               .join("، ") ?? "",
           amount: r.quotedAmount ?? "",
-          currency: r.currency === "USD" ? "دلار" : r.currency === "IRT" ? "تومان" : "",
+          currency: r.currency ? currencyLabel(r.currency) : "",
           registrationDate: formatJalali(r.registrationDate),
           issued: requestStatusFa(r),
           issuedAt: r.issuedAt ? formatJalali(r.issuedAt) : "",

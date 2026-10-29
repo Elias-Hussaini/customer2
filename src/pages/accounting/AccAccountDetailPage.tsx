@@ -17,8 +17,9 @@ import { Button } from "../../components/ui/Button";
 import { Tabs } from "../../components/ui/Tabs";
 import { ListSkeleton } from "../../components/ui/EmptyState";
 import { ExportDialog } from "../../components/exports/ExportDialog";
+import { currencyLabel } from "../../types";
 import { formatJalali, todayIso } from "../../utils/jalali";
-import { formatMoney, sumAmounts } from "../../utils/num";
+import { formatMoney, fromMinor, sumAmounts } from "../../utils/num";
 import { computeAccountBalance, txEffects } from "../../accounting/engine";
 import { ACCOUNT_TYPE_LABELS, TX_TYPE_LABELS } from "../../accounting/types";
 import { useAccAccount, useAccAccounts, useAccTransactions } from "../../accounting/hooks";
@@ -90,7 +91,7 @@ export function AccAccountDetailPage() {
   if (!account) return <ListSkeleton rows={5} />;
 
   const toMajor = (minor: number) =>
-    account.currency === "USD" ? Math.round(minor) / 100 : minor;
+    fromMinor(minor, account.currency);
 
   const exportColumns = [
     { key: "date", header: "تاریخ" },
@@ -118,7 +119,7 @@ export function AccAccountDetailPage() {
         back
         icon={Wallet}
         title={account.name}
-        subtitle={`${ACCOUNT_TYPE_LABELS[account.type]} — ${account.currency === "USD" ? "دلار" : "تومان"}${account.active ? "" : " (غیرفعال)"}`}
+        subtitle={`${ACCOUNT_TYPE_LABELS[account.type]} — ${currencyLabel(account.currency)}${account.active ? "" : " (غیرفعال)"}`}
         actions={
           <>
             <Button size="sm" variant="glass" icon={FileDown} onClick={() => setExportOpen(true)}>
@@ -225,7 +226,7 @@ export function AccAccountDetailPage() {
                 </p>
                 <p>
                   <span className="text-ink-500 dark:text-ink-400">ارز: </span>
-                  <span className="font-bold">{account.currency === "USD" ? "دلار" : "تومان"}</span>
+                  <span className="font-bold">{currencyLabel(account.currency)}</span>
                 </p>
                 {account.description && (
                   <p>
@@ -266,7 +267,7 @@ export function AccAccountDetailPage() {
         open={exportOpen}
         onClose={() => setExportOpen(false)}
         title={`صورتحساب ${account.name}`}
-        subtitle={`${ACCOUNT_TYPE_LABELS[account.type]} — ${account.currency === "USD" ? "دلار" : "تومان"}`}
+        subtitle={`${ACCOUNT_TYPE_LABELS[account.type]} — ${currencyLabel(account.currency)}`}
         columns={exportColumns}
         rows={exportRows}
         defaultFilename={`account-statement-${account.name.replace(/\s+/g, "-")}`}

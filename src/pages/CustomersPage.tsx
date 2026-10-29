@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Archive, FilePenLine, Search, Trash2, UserPlus, Users, X } from "lucide-react";
+import { Archive, Briefcase, FilePenLine, Search, Trash2, UserPlus, Users, X } from "lucide-react";
 import { PageHeader } from "../components/ui/StatCard";
 import { DataTable, type Column } from "../components/ui/DataTable";
 import { EmptyState } from "../components/ui/EmptyState";
@@ -10,7 +10,7 @@ import { Menu } from "../components/ui/Menu";
 import { CustomerFormModal } from "../components/domain/CustomerFormModal";
 import { Avatar } from "../components/ui/Avatar";
 import { archiveCustomer, deleteCustomer, customerFullName } from "../db/customers";
-import { useCustomers, useLists, useRepresentatives, useRequests } from "../hooks/useData";
+import { useCustomers, useLists, usePrefs, useRepresentatives, useRequests, useEmployers } from "../hooks/useData";
 import { useConfirm } from "../hooks/useConfirm";
 import { useToast } from "../hooks/useToast";
 import { formatJalali, toPersianDigits } from "../utils/jalali";
@@ -56,11 +56,17 @@ export function CustomersPage() {
   const requests = useRequests();
   const representatives = useRepresentatives();
   const lists = useLists();
+  const employers = useEmployers();
+  const prefs = usePrefs();
+  /** کارفرما is optional — hide its column/filter when switched off. */
+  const employerFieldOn = prefs.employerFieldEnabled !== false;
 
   // Last used filters are remembered across visits (validated on load).
   const [query, setQuery] = useState("");
   const [repFilter, setRepFilter] = useState<string>(() => loadPageFilter<string>("customers", "rep", "", () => true));
   const [listFilter, setListFilter] = useState<string>(() => loadPageFilter<string>("customers", "list", "", () => true));
+  /** کارفرما filter: "none" = بدون کارفرما, "" = همه. */
+  const [employerFilter, setEmployerFilter] = useState<string>(() => loadPageFilter<string>("customers", "employer", "", () => true));
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
     const saved = loadPageFilter<string>("customers", "status", "", () => true);
     return isStatusFilter(saved) ? saved : "";
@@ -97,6 +103,9 @@ export function CustomersPage() {
   useEffect(() => {
     savePageFilter("customers", "list", listFilter);
   }, [listFilter]);
+  useEffect(() => {
+    savePageFilter("customers", "employer", employerFilter);
+  }, [employerFilter]);
   useEffect(() => {
     savePageFilter("customers", "status", statusFilter);
   }, [statusFilter]);
@@ -159,6 +168,7 @@ export function CustomersPage() {
 
   const repById = useMemo(() => new Map((representatives ?? []).map((r) => [r.id, r])), [representatives]);
   const listById = useMemo(() => new Map((lists ?? []).map((l) => [l.id, l])), [lists]);
+  const employerById = useMemo(() => new Map((employers ?? []).map((e) => [e.id, e])), [employers]);
 
   const displayRepId = (c: Customer): string | null =>
     c.representativeId ?? derivedRepByCustomer.get(c.id) ?? null;
@@ -172,10 +182,18 @@ export function CustomersPage() {
     if (listFilter) {
       list = list.filter((c) => displayListId(c) === listFilter);
     }
+    // کارفرما filter — "none" matches customers WITHOUT an employer.
+    if (employerFilter && employerFieldOn) {
+      list = list.filter((c) =>
+        employerFilter === "none" ? !c.employerId : c.employerId === employerFilter,
+      );
+    }
     if (query.trim()) {
       const q = query.trim().toLowerCase();
       list = list.filter((c) =>
-        `${c.firstName ?? ""} ${c.lastName ?? ""} ${c.passportNo ?? ""} ${c.referrer ?? ""}`
+        `${c.firstName ?? ""} ${c.lastName ?? ""} ${c.passportNo ?? ""} ${c.referrer ?? ""} ${
+          c.employerId ? (employerById.get(c.employerId)?.name ?? "") : ""
+        }`
           .toLowerCase()
           .includes(q),
       );
@@ -242,6 +260,8 @@ export function CustomersPage() {
     query,
     activeRepFilter,
     listFilter,
+    employerFilter,
+    employerFieldOn,
     statusFilter,
     issuedFrom,
     issuedTo,
@@ -317,6 +337,23 @@ export function CustomersPage() {
           </button>
         ) : (
           <span className="text-ink-400">—</span>
+        );
+      },
+    },
+    {
+      key: "employer",
+      header: "کارفرما",
+      sortValue: (c) => (c.employerId ? (employerById.get(c.employerId)?.name ?? "") : ""),
+      render: (c) => {
+        if (!employerFieldOn) return <span className="text-ink-400">—</span>;
+        const emp = c.employerId ? employerById.get(c.employerId) : undefined;
+        return emp ? (
+          <span className="chip-soft inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px]">
+            <Briefcase size={11} className="text-brand-500" />
+            {emp.name}
+          </span>
+        ) : (
+          <span className="text-ink-400">بدون</span>
         );
       },
     },
@@ -405,12 +442,14 @@ export function CustomersPage() {
 
   const anyFilterActive =
     !!query.trim() || !!activeRepFilter || !!listFilter || !!statusFilter ||
+    (employerFieldOn && !!employerFilter) ||
     !!issuedFrom || !!issuedTo || !!regFrom || !!regTo;
 
   const clearAllFilters = () => {
     setQuery("");
     setRepFilter("");
     setListFilter("");
+    setEmployerFilter("");
     setStatusFilter("");
     setIssuedFrom(null);
     setIssuedTo(null);
@@ -477,6 +516,18 @@ export function CustomersPage() {
             onChange={(v) => setStatusFilter(isStatusFilter(v) ? v : "")}
             options={STATUS_FILTERS.map((s) => ({ value: s.value, label: s.label }))}
           />
+          {employerFieldOn && (
+            <FilterSelect
+              ariaLabel="کارفرما"
+              value={employerFilter}
+              onChange={setEmployerFilter}
+              options={[
+                { value: "", label: "همه کارفرماها" },
+                { value: "none", label: "بدون کارفرما" },
+                ...(employers ?? []).map((e) => ({ value: e.id, label: e.name })),
+              ]}
+            />
+          )}
           <FilterSelect
             ariaLabel="مرتب‌سازی"
             value={sort}

@@ -14,6 +14,7 @@ import {
   useRepresentatives,
   useRequests,
   useTags,
+  useEmployers,
 } from "../hooks/useData";
 import { toPersianDigits } from "../utils/jalali";
 import { normalizeFa } from "../utils/normalize";
@@ -32,6 +33,7 @@ export function SearchPage() {
   const navigate = useNavigate();
 
   const customers = useCustomers();
+  const employers = useEmployers();
   const representatives = useRepresentatives();
   const requests = useRequests();
   const lists = useLists();
@@ -56,8 +58,8 @@ export function SearchPage() {
 
   const dataset = useMemo(() => {
     if (!customers || !representatives || !requests || !lists || !tags || !customFields) return null;
-    return buildSearchDataset(customers, representatives, requests, lists, tags, customFields);
-  }, [customers, representatives, requests, lists, tags, customFields]);
+    return buildSearchDataset(customers, representatives, requests, lists, tags, customFields, employers ?? []);
+  }, [customers, representatives, requests, lists, tags, customFields, employers]);
 
   const hits = useMemo(() => {
     if (!dataset || normalizeFa(query).length < 1) return [] as SearchHit[];

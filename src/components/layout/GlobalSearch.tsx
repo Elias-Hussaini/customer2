@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FileSearch, FolderOpen, Search, User, UserRound } from "lucide-react";
-import type { Customer, CustomFieldDef, ListFolder, Representative, Tag, VisaRequest } from "../../types";
+import type { Customer, CustomFieldDef, Employer, ListFolder, Representative, Tag, VisaRequest } from "../../types";
 import { buildSearchDataset, searchDataset, type SearchHit } from "../../services/search";
 import { customerFullName } from "../../db/customers";
 import { normalizeFa } from "../../utils/normalize";
@@ -24,6 +24,7 @@ const TYPE_ICONS = {
 /** Compact global search for the top bar with a live grouped dropdown. */
 export function GlobalSearch({
   customers,
+  employers,
   representatives,
   requests,
   lists,
@@ -32,6 +33,7 @@ export function GlobalSearch({
   className = "",
 }: {
   customers: Customer[];
+  employers: Employer[];
   representatives: Representative[];
   requests: VisaRequest[];
   lists: ListFolder[];
@@ -45,8 +47,8 @@ export function GlobalSearch({
   const wrapRef = useRef<HTMLDivElement>(null);
 
   const dataset = useMemo(
-    () => buildSearchDataset(customers, representatives, requests, lists, tags, customFields),
-    [customers, representatives, requests, lists, tags, customFields],
+    () => buildSearchDataset(customers, representatives, requests, lists, tags, customFields, employers),
+    [customers, representatives, requests, lists, tags, customFields, employers],
   );
 
   const hits = useMemo(() => {

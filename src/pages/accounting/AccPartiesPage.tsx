@@ -145,6 +145,28 @@ export function AccPartiesPage() {
       },
     },
     {
+      key: "netAFN",
+      header: "خالص (افغانی)",
+      align: "center",
+      sortValue: (p) => totalsOf(p).net.AFN,
+      render: (p) => {
+        const net = totalsOf(p).net.AFN;
+        return (
+          <span
+            className={`num text-xs font-bold ${
+              net > 0
+                ? "text-[#0b9e6e] dark:text-[#3ddc9a]"
+                : net < 0
+                  ? "text-[#dc3535] dark:text-[#f87b7b]"
+                  : "text-ink-400"
+            }`}
+          >
+            {net === 0 ? "۰" : formatMoney(net, "AFN")}
+          </span>
+        );
+      },
+    },
+    {
       key: "status",
       header: "وضعیت",
       align: "center",
@@ -254,6 +276,12 @@ export function AccPartiesPage() {
                 <span className="text-ink-400">خالص دلار</span>
                 <span className="num font-bold">{formatMoney(t.net.USD, "USD")}</span>
               </div>
+              {t.net.AFN !== 0 && (
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-ink-400">خالص افغانی</span>
+                  <span className="num font-bold">{formatMoney(t.net.AFN, "AFN")}</span>
+                </div>
+              )}
             </div>
           );
         }}

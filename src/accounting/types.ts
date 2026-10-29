@@ -8,9 +8,9 @@
  * the shared activity audit trail and the shared backup format.
  *
  * Money rules (critical):
- *  - Exactly two currencies: USD and IRT (displayed as تومان).
- *  - All arithmetic happens in integer minor units (USD cents / whole tomans)
- *    via utils/num toMinor/fromMinor. Currencies never mix.
+ *  - Exactly three currencies: USD, IRT (displayed as تومان) and AFN (افغانی).
+ *  - All arithmetic happens in integer minor units (USD cents / whole tomans
+ *    / whole afghanis) via utils/num toMinor/fromMinor. Currencies never mix.
  *  - Account balances are DERIVED from finalized transactions — never stored.
  *  - Informational transactions never touch actual balances.
  */

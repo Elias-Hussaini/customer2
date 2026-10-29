@@ -45,7 +45,7 @@ import { deleteRepresentative } from "../db/reps";
 import { useConfirm } from "../hooks/useConfirm";
 import { useToast } from "../hooks/useToast";
 import type { Attachment, Payment } from "../types";
-import { requestStatusFa } from "../types";
+import { requestStatusFa, currencyLabel } from "../types";
 
 export function RepresentativeDetailPage() {
   const { id } = useParams();
@@ -391,7 +391,7 @@ export function RepresentativeDetailPage() {
             visaType: r.visaType ?? "",
             list: (lists ?? []).find((l) => l.id === r.listId)?.name ?? "",
             amount: r.quotedAmount ?? "",
-            currency: r.currency === "USD" ? "دلار" : r.currency === "IRT" ? "تومان" : "",
+            currency: r.currency ? currencyLabel(r.currency) : "",
             registrationDate: formatJalali(r.registrationDate),
             status: requestStatusFa(r),
             issuedAt: r.issuedAt ? formatJalali(r.issuedAt) : "",

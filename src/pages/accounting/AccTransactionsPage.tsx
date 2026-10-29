@@ -39,6 +39,8 @@ import {
   useAccParties,
   useAccTransactions,
 } from "../../accounting/hooks";
+import { db } from "../../db/schema";
+import { buildReceiptImages } from "../../utils/receiptImages";
 import {
   InformationalBadge,
   SignedAmount,
@@ -46,6 +48,7 @@ import {
   TxTypePill,
 } from "../../accounting/components/Bits";
 import { TransactionFormModal } from "../../accounting/components/TransactionFormModal";
+import { currencyLabel } from "../../types";
 
 export function AccTransactionsPage() {
   const navigate = useNavigate();
@@ -70,6 +73,8 @@ export function AccTransactionsPage() {
   const [newOpen, setNewOpen] = useState(false);
   const [editTx, setEditTx] = useState<FinTransaction | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  /** txId → receipt image data URLs — loaded when the export dialog opens. */
+  const [receiptPhotos, setReceiptPhotos] = useState<Record<string, string[]> | null>(null);
   const [docPreview, setDocPreview] = useState<{ name: string; mime: string; url: string } | null>(null);
 
   const partyName = (id?: string | null) => (parties ?? []).find((p) => p.id === id)?.name ?? "—";
@@ -270,13 +275,27 @@ export function AccTransactionsPage() {
     { key: "description", header: "شرح" },
   ];
 
+  /** Receipt images (سند) for the currently filtered transactions —
+   *  image documents linked through transactionId become data URLs. */
+  const loadReceiptsForExport = async () => {
+    const visibleIds = new Set(rows.map((t) => t.id));
+    const docById = new Map((docsMeta ?? []).map((d) => [d.id, d] as const));
+    const photos = await buildReceiptImages(
+      (docsMeta ?? []).filter((d) => d.transactionId && visibleIds.has(d.transactionId)),
+      (docId) => docById.get(docId)?.transactionId ?? null,
+      async (docId) => (await db.accDocs.get(docId))?.blob,
+    );
+    setReceiptPhotos(photos);
+  };
+
   const exportRows = rows.map((t) => ({
+    txId: t.id,
     date: formatJalali(t.date),
     number: t.number,
     type: TX_TYPE_LABELS[t.type],
     party: t.partyId ? partyName(t.partyId) : "",
     amount: t.amount.toLocaleString("fa-IR"),
-    currency: t.currency === "USD" ? "دلار" : "تومان",
+    currency: currencyLabel(t.currency),
     fromAccount: t.sourceAccountId ? accountName(t.sourceAccountId) : "",
     toAccount: t.destAccountId ? accountName(t.destAccountId) : "",
     status: t.status === "final" ? (t.affectsBalance ? "قطعی" : "قطعی - فقط ثبت") : t.status === "reversed" ? "برگشت خورده" : "ابطال شده",
@@ -310,9 +329,10 @@ export function AccTransactionsPage() {
           onChange={setCurrencyFilter}
           ariaLabel="ارز"
           options={[
-            { value: "all", label: "هر دو ارز" },
+            { value: "all", label: "همه ارزها" },
             { value: "IRT", label: "تومان" },
             { value: "USD", label: "دلار" },
+            { value: "AFN", label: "افغانی" },
           ]}
         />
         <FilterSelect
@@ -357,7 +377,7 @@ export function AccTransactionsPage() {
           {fromDate || toDate ? " در بازه انتخابی" : ""}
         </p>
         <div className="flex gap-2">
-          <Button size="sm" variant="glass" icon={FileDown} onClick={() => setExportOpen(true)}>
+          <Button size="sm" variant="glass" icon={FileDown} onClick={() => { setReceiptPhotos(null); void loadReceiptsForExport(); setExportOpen(true); }}>
             خروجی
           </Button>
           <Button size="sm" variant="primary" icon={Plus} onClick={() => setNewOpen(true)}>
@@ -606,6 +626,7 @@ export function AccTransactionsPage() {
         columns={exportColumns}
         rows={exportRows}
         defaultFilename="acc-transactions"
+        rowReceipts={{ idKey: "txId", photos: receiptPhotos ?? {} }}
         theme="acc"
       />
     </div>

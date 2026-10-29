@@ -19,6 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { PageHeader } from "../../components/ui/StatCard";
+import { currencyLabel } from "../../types";
 import { Button } from "../../components/ui/Button";
 import { SectionCard, FilterSelect, RadioSelect } from "../../components/ui/inputs";
 import { GlassCard } from "../../components/ui/GlassCard";
@@ -559,6 +560,7 @@ export function AccBackupPage() {
               options={[
                 { value: "IRT", label: "تومان" },
                 { value: "USD", label: "دلار" },
+                { value: "AFN", label: "افغانی" },
               ]}
             />
           </div>
@@ -819,7 +821,7 @@ function useDataOnlyRows() {
             number: t.number,
             date: formatJalali(t.date),
             amount: t.amount.toLocaleString("fa-IR"),
-            currency: t.currency === "USD" ? "دلار" : "تومان",
+            currency: currencyLabel(t.currency),
             type: t.type,
             status: t.status,
           }));
@@ -827,7 +829,7 @@ function useDataOnlyRows() {
           return (accounts ?? []).map((a) => ({
             name: a.name,
             type: a.type,
-            currency: a.currency === "USD" ? "دلار" : "تومان",
+            currency: currencyLabel(a.currency),
             active: a.active ? "فعال" : "غیرفعال",
           }));
         case "outstanding": {

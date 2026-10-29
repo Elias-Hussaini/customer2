@@ -110,6 +110,7 @@ const NAMING_MODES: { value: FileNaming; label: string; hint: string }[] = [
 /** Tokens available inside folder/name templates (Persian + English). */
 const TEMPLATE_TOKENS: { token: string; desc: string }[] = [
   { token: "{نماینده}", desc: "نام نمایندهٔ مشتری" },
+  { token: "{کارفرما}", desc: "نام کارفرمای مشتری" },
   { token: "{مشتری}", desc: "نام مشتری" },
   { token: "{مدرک}", desc: "نوع مدرک / ویزا" },
   { token: "{نوع}", desc: "ویزا | مدرک | پروفایل | فایل" },

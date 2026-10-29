@@ -57,8 +57,11 @@ import {
   useAccTransactions,
 } from "../../accounting/hooks";
 import { useActivities } from "../../hooks/useData";
+import { db } from "../../db/schema";
+import { buildReceiptImages } from "../../utils/receiptImages";
 import type { OutstandingItem, FinTransaction } from "../../accounting/types";
 import type { Currency } from "../../types";
+import { CURRENCIES, currencyLabel } from "../../types";
 
 /* ------------------------------ report kinds ------------------------------ */
 
@@ -179,7 +182,7 @@ const KIND_HINTS: Partial<Record<ReportKind, string>> = {
   payables: "طلب طرف حساب‌ها از ما (تسویه‌نشده) با درصد تسویه و روزهای تأخیر.",
   outstandingDue: "فقط موارد بازی که سررسیدشان گذشته — پرریسک‌ترین قسمت بایگانی مالی.",
   netPosition: "تصویر big-picture: نقد و بانک + مطالبات باز − بدهی‌های باز = خالص وضعیت. بر اساس تاریخ امروز.",
-  topParties: "بزرگ‌ترین طرف حساب‌ها بر اساس حجم تعامل (دریافت + پرداخت)، جدا برای تومان و دلار.",
+  topParties: "بزرگ‌ترین طرف حساب‌ها بر اساس حجم تعامل (دریافت + پرداخت)، جدا برای هر ارز.",
   aging: "مانده‌های باز در سطل‌های سنی (۰-۳۰ / ۳۱-۶۰ / ۶۱-۹۰ / +۹۰ روز) — قدیمی‌ترین مطالبات اول.",
   currencySummary: "جمع دریافت/پرداخت/برداشت/انتقال/مانده اولیه/تعدیل به تفکیک ارز + خالص دریافت−پرداخت.",
   periodic: "دوره‌بندی روزانه/هفتگی/ماهانه/سالانه با دریافت، پرداخت، برداشت و خالص هر دوره.",
@@ -206,7 +209,7 @@ type AnyRow = Record<string, string | number>;
 const dayDiff = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
 const faPct = (n: number) => `${n.toLocaleString("fa-IR", { maximumFractionDigits: 1 })}٪`;
 const faInt = (n: number) => n.toLocaleString("fa-IR", { maximumFractionDigits: 2 });
-const curLabel = (c: "IRT" | "USD") => (c === "USD" ? "دلار" : "تومان");
+const curLabel = (c: Currency) => currencyLabel(c);
 
 /** Aging bucket of an open outstanding item (most overdue first in display). */
 function ageBucketOf(o: OutstandingItem, today: string): string {
@@ -231,15 +234,22 @@ const BUCKET_ORDER = [
 
 /** Plain Persian number (no unit — the section badge carries the currency). */
 const faNum = (n: number) => n.toLocaleString("fa-IR", { maximumFractionDigits: 2 });
-const curTag = (c: Currency) => (c === "USD" ? "دلار" : "تومان");
+const curTag = (c: Currency) => currencyLabel(c);
 
-/** Both currencies in one cell, each with its unit written ONCE:
- *  «۱۲٬۰۰۰٬۰۰۰ تومان + ۸۰۰ دلار» — or «—» when both are zero. */
-const moneyPair = (irt: number, usd: number): string => {
+/** Every non-zero currency in one cell, each with its unit written ONCE:
+ *  «۱۲٬۰۰۰٬۰۰۰ تومان + ۸۰۰ دلار + ۹٬۰۰۰ افغانی» — or «—» when all are zero. */
+const moneyAll = (perCur: Record<Currency, number>): string => {
   const parts: string[] = [];
-  if (irt) parts.push(formatMoney(irt, "IRT"));
-  if (usd) parts.push(formatMoney(usd, "USD"));
+  for (const c of CURRENCIES) {
+    if (perCur[c]) parts.push(formatMoney(perCur[c], c));
+  }
   return parts.length > 0 ? parts.join(" + ") : "—";
+};
+/** In-page gradient tone per currency badge (matches ExportDoc). */
+const CUR_TAG_GRADIENT: Record<Currency, string> = {
+  IRT: "bg-gradient-to-br from-[#10b981] to-[#0b9e6e] shadow-[#0b9e6e]/30",
+  USD: "bg-gradient-to-br from-[#3b82f6] to-[#2563eb] shadow-[#2563eb]/30",
+  AFN: "bg-gradient-to-br from-[#f59e0b] to-[#d97706] shadow-[#d97706]/30",
 };
 
 /** Per-party breakdown («جمع‌بندی به تفکیک طرف حساب») for transaction reports.
@@ -271,7 +281,7 @@ function buildTxPartySummary(
     const key = t.partyId ? partyName(t.partyId) : "بدون طرف حساب";
     const agg =
       map.get(key) ??
-      { count: 0, rec: { IRT: 0, USD: 0 }, pay: { IRT: 0, USD: 0 }, wd: { IRT: 0, USD: 0 } };
+      { count: 0, rec: { IRT: 0, USD: 0, AFN: 0 }, pay: { IRT: 0, USD: 0, AFN: 0 }, wd: { IRT: 0, USD: 0, AFN: 0 } };
     agg.count++;
     if (countsTowardTotals(t)) {
       if (t.type === "receipt") agg.rec[t.currency] += t.amount;
@@ -281,33 +291,32 @@ function buildTxPartySummary(
     map.set(key, agg);
   }
   if (map.size < 2) return undefined;
-  const vol = (a: Agg) => a.rec.IRT + a.rec.USD + a.pay.IRT + a.pay.USD + a.wd.IRT + a.wd.USD;
+  const vol = (a: Agg) => a.rec.IRT + a.rec.USD + a.rec.AFN + a.pay.IRT + a.pay.USD + a.pay.AFN + a.wd.IRT + a.wd.USD + a.wd.AFN;
   const rows = [...map.entries()]
     .sort((a, b) => vol(b[1]) - vol(a[1]))
     .map(([name, a]) => {
       const cells = [name, a.count.toLocaleString("fa-IR")];
-      if (showRec) cells.push(moneyPair(a.rec.IRT, a.rec.USD));
-      if (showPay) cells.push(moneyPair(a.pay.IRT, a.pay.USD));
-      if (showWd) cells.push(moneyPair(a.wd.IRT, a.wd.USD));
+      if (showRec) cells.push(moneyAll(a.rec));
+      if (showPay) cells.push(moneyAll(a.pay));
+      if (showWd) cells.push(moneyAll(a.wd));
       return cells;
     });
   const tot = [...map.values()].reduce(
     (acc, a) => {
       acc.count += a.count;
-      acc.rec.IRT += a.rec.IRT;
-      acc.rec.USD += a.rec.USD;
-      acc.pay.IRT += a.pay.IRT;
-      acc.pay.USD += a.pay.USD;
-      acc.wd.IRT += a.wd.IRT;
-      acc.wd.USD += a.wd.USD;
+      for (const c of CURRENCIES) {
+        acc.rec[c] += a.rec[c];
+        acc.pay[c] += a.pay[c];
+        acc.wd[c] += a.wd[c];
+      }
       return acc;
     },
-    { count: 0, rec: { IRT: 0, USD: 0 }, pay: { IRT: 0, USD: 0 }, wd: { IRT: 0, USD: 0 } },
+    { count: 0, rec: { IRT: 0, USD: 0, AFN: 0 }, pay: { IRT: 0, USD: 0, AFN: 0 }, wd: { IRT: 0, USD: 0, AFN: 0 } },
   );
   const totalRow = ["جمع کل", tot.count.toLocaleString("fa-IR")];
-  if (showRec) totalRow.push(moneyPair(tot.rec.IRT, tot.rec.USD));
-  if (showPay) totalRow.push(moneyPair(tot.pay.IRT, tot.pay.USD));
-  if (showWd) totalRow.push(moneyPair(tot.wd.IRT, tot.wd.USD));
+  if (showRec) totalRow.push(moneyAll(tot.rec));
+  if (showPay) totalRow.push(moneyAll(tot.pay));
+  if (showWd) totalRow.push(moneyAll(tot.wd));
   return { title: "جمع‌بندی به تفکیک طرف حساب", columns: cols, rows, totalRow };
 }
 
@@ -321,7 +330,7 @@ function buildOutstandingPartySummary(
   for (const o of list) {
     const key = partyName(o.partyId);
     const agg =
-      map.get(key) ?? { count: 0, amount: { IRT: 0, USD: 0 }, remaining: { IRT: 0, USD: 0 } };
+      map.get(key) ?? { count: 0, amount: { IRT: 0, USD: 0, AFN: 0 }, remaining: { IRT: 0, USD: 0, AFN: 0 } };
     agg.count++;
     agg.amount[o.currency] += o.amount;
     agg.remaining[o.currency] += outstandingRemaining(o);
@@ -331,25 +340,26 @@ function buildOutstandingPartySummary(
   const rows = [...map.entries()]
     .sort(
       (a, b) =>
-        b[1].remaining.IRT + b[1].remaining.USD - (a[1].remaining.IRT + a[1].remaining.USD),
+        b[1].remaining.IRT + b[1].remaining.USD + b[1].remaining.AFN -
+        (a[1].remaining.IRT + a[1].remaining.USD + a[1].remaining.AFN),
     )
     .map(([name, a]) => [
       name,
       a.count.toLocaleString("fa-IR"),
-      moneyPair(a.amount.IRT, a.amount.USD),
-      moneyPair(a.amount.IRT - a.remaining.IRT, a.amount.USD - a.remaining.USD),
-      moneyPair(a.remaining.IRT, a.remaining.USD),
+      moneyAll(a.amount),
+      moneyAll({ IRT: a.amount.IRT - a.remaining.IRT, USD: a.amount.USD - a.remaining.USD, AFN: a.amount.AFN - a.remaining.AFN }),
+      moneyAll(a.remaining),
     ]);
   const tot = [...map.values()].reduce(
     (acc, a) => {
       acc.count += a.count;
-      acc.amount.IRT += a.amount.IRT;
-      acc.amount.USD += a.amount.USD;
-      acc.remaining.IRT += a.remaining.IRT;
-      acc.remaining.USD += a.remaining.USD;
+      for (const c of CURRENCIES) {
+        acc.amount[c] += a.amount[c];
+        acc.remaining[c] += a.remaining[c];
+      }
       return acc;
     },
-    { count: 0, amount: { IRT: 0, USD: 0 }, remaining: { IRT: 0, USD: 0 } },
+    { count: 0, amount: { IRT: 0, USD: 0, AFN: 0 }, remaining: { IRT: 0, USD: 0, AFN: 0 } },
   );
   return {
     title: "جمع‌بندی به تفکیک طرف حساب",
@@ -358,9 +368,9 @@ function buildOutstandingPartySummary(
     totalRow: [
       "جمع کل",
       tot.count.toLocaleString("fa-IR"),
-      moneyPair(tot.amount.IRT, tot.amount.USD),
-      moneyPair(tot.amount.IRT - tot.remaining.IRT, tot.amount.USD - tot.remaining.USD),
-      moneyPair(tot.remaining.IRT, tot.remaining.USD),
+      moneyAll(tot.amount),
+      moneyAll({ IRT: tot.amount.IRT - tot.remaining.IRT, USD: tot.amount.USD - tot.remaining.USD, AFN: tot.amount.AFN - tot.remaining.AFN }),
+      moneyAll(tot.remaining),
     ],
   };
 }
@@ -449,9 +459,30 @@ export function AccReportsPage() {
   const [accountId, setAccountId] = useState<string | null>(null);
   const [granularity, setGranularity] = useState<"day" | "week" | "month" | "year">("month");
   const [exportOpen, setExportOpen] = useState(false);
+  /** txId → receipt image data URLs — loaded when the export dialog opens. */
+  const [receiptPhotos, setReceiptPhotos] = useState<Record<string, string[]> | null>(null);
 
   const partyName = (id?: string | null) => (parties ?? []).find((p) => p.id === id)?.name ?? "—";
   const accountName = (id?: string | null) => (accounts ?? []).find((a) => a.id === id)?.name ?? "—";
+
+  /** Receipt images (سند) for the rows of the current report — only
+   *  transaction-based reports carry a hidden txId key. */
+  const loadReceiptsForExport = async () => {
+    const visibleTxIds = new Set(
+      report.rows.map((r) => String(r.txId ?? "")).filter(Boolean),
+    );
+    if (visibleTxIds.size === 0) {
+      setReceiptPhotos({});
+      return;
+    }
+    const docById = new Map((docs ?? []).map((d) => [d.id, d] as const));
+    const photos = await buildReceiptImages(
+      (docs ?? []).filter((d) => d.transactionId && visibleTxIds.has(d.transactionId)),
+      (docId) => docById.get(docId)?.transactionId ?? null,
+      async (docId) => (await db.accDocs.get(docId))?.blob,
+    );
+    setReceiptPhotos(photos);
+  };
 
   const applyPreset = (k: PresetKey) => {
     setPreset(k);
@@ -502,8 +533,12 @@ export function AccReportsPage() {
       return { title: "", columns: [], rows: [], sections: [] };
     }
     const today = todayIso();
-    const showIRT = currency !== "USD";
-    const showUSD = currency !== "IRT";
+    /** Currencies visible under the active filter — AFN joins تومان/دلار. */
+    const activeCurrencies: Currency[] =
+      currency === "all" ? [...CURRENCIES] : [currency as Currency];
+    const showC = (c: Currency) => activeCurrencies.includes(c);
+    const showIRT = showC("IRT");
+    const showUSD = showC("USD");
     const dueInRange = (o: OutstandingItem) =>
       !from && !to ? true : !!o.dueDate && (!from || o.dueDate >= from) && (!to || o.dueDate <= to);
 
@@ -530,12 +565,13 @@ export function AccReportsPage() {
           { key: "description", header: "شرح" },
         ];
         const rows: AnyRow[] = list.map((t) => ({
+          txId: t.id,
           date: formatJalali(t.date),
           number: t.number,
           type: TX_TYPE_LABELS[t.type],
           party: t.partyId ? partyName(t.partyId) : "",
           amount: t.amount.toLocaleString("fa-IR"),
-          currency: t.currency === "USD" ? "دلار" : "تومان",
+          currency: currencyLabel(t.currency),
           fromAccount: t.sourceAccountId ? accountName(t.sourceAccountId) : "",
           toAccount: t.destAccountId ? accountName(t.destAccountId) : "",
           status: t.status === "final" ? (t.affectsBalance ? "قطعی" : "قطعی — فقط ثبت") : t.status === "reversed" ? "برگشت خورده" : "ابطال شده",
@@ -543,16 +579,16 @@ export function AccReportsPage() {
           description: t.description ?? "",
         }));
         const totals = totalsByType(list);
-        const perCur = (c: "IRT" | "USD") => list.filter((t) => t.currency === c);
-        const avgOf = (c: "IRT" | "USD") => {
+        const perCur = (c: Currency) => list.filter((t) => t.currency === c);
+        const avgOf = (c: Currency) => {
           const sub = perCur(c);
           return sub.length ? sumAmounts(sub.map((t) => t.amount), c) / sub.length : 0;
         };
-        const maxOf = (c: "IRT" | "USD") => perCur(c).reduce((m, t) => Math.max(m, t.amount), 0);
+        const maxOf = (c: Currency) => perCur(c).reduce((m, t) => Math.max(m, t.amount), 0);
         // One clean section per ACTIVE currency — the badge carries the unit,
         // so labels never repeat «دلار/تومان» and zero metrics are dropped.
         const sections: SummarySection[] = [];
-        for (const c of ["IRT", "USD"] as const) {
+        for (const c of activeCurrencies) {
           const sub = perCur(c);
           if (sub.length === 0) continue;
           const items: { label: string; value: string }[] = [
@@ -599,22 +635,23 @@ export function AccReportsPage() {
             { key: "running", header: "مانده گردشی" },
           ],
           rows: list.map((r) => ({
+            txId: r.tx.id,
             date: formatJalali(r.tx.date),
             number: r.tx.number,
             type: TX_TYPE_LABELS[r.tx.type],
             description: r.tx.description ?? "",
-            deposit: r.signedMinor > 0 ? `${r.tx.amount.toLocaleString("fa-IR")} ${r.tx.currency === "USD" ? "دلار" : "تومان"}` : "",
-            withdraw: r.signedMinor < 0 ? `${r.tx.amount.toLocaleString("fa-IR")} ${r.tx.currency === "USD" ? "دلار" : "تومان"}` : "",
-            running: `${formatMoney(r.running.IRT, "IRT")} | ${formatMoney(r.running.USD, "USD")}`,
+            deposit: r.signedMinor > 0 ? `${r.tx.amount.toLocaleString("fa-IR")} ${currencyLabel(r.tx.currency)}` : "",
+            withdraw: r.signedMinor < 0 ? `${r.tx.amount.toLocaleString("fa-IR")} ${currencyLabel(r.tx.currency)}` : "",
+            running: CURRENCIES.filter((c) => r.running[c] !== 0)
+              .map((c) => formatMoney(r.running[c], c))
+              .join(" | ") || "۰",
           })),
           sections: [
             { items: [{ label: "تعداد تراکنش", value: list.length.toLocaleString("fa-IR") }] },
-            ...(closing.IRT !== 0
-              ? [{ tag: "تومان", items: [{ label: "مانده پایانی", value: faNum(closing.IRT) }] }]
-              : []),
-            ...(closing.USD !== 0
-              ? [{ tag: "دلار", items: [{ label: "مانده پایانی", value: faNum(closing.USD) }] }]
-              : []),
+            ...CURRENCIES.filter((c) => closing[c] !== 0).map((c) => ({
+              tag: curTag(c),
+              items: [{ label: "مانده پایانی", value: faNum(closing[c]) }],
+            })),
           ],
         };
       }
@@ -637,7 +674,7 @@ export function AccReportsPage() {
             rows: accs.map((a) => ({
               name: a.name,
               type: ACCOUNT_TYPE_LABELS[a.type],
-              currency: a.currency === "USD" ? "دلار" : "تومان",
+              currency: currencyLabel(a.currency),
               balance: (balances.get(a.id)?.balance ?? 0).toLocaleString("fa-IR"),
               txCount: (balances.get(a.id)?.txCount ?? 0).toLocaleString("fa-IR"),
               active: a.active ? "فعال" : "غیرفعال",
@@ -649,40 +686,21 @@ export function AccReportsPage() {
                   { label: "حساب‌های فعال", value: accs.filter((a) => a.active).length.toLocaleString("fa-IR") },
                 ],
               },
-              ...(accs.filter((a) => a.currency === "IRT").some((a) => (balances.get(a.id)?.balance ?? 0) !== 0)
-                ? [
-                    {
-                      tag: "تومان",
-                      items: [
-                        {
-                          label: "جمع مانده",
-                          value: faNum(
-                            accs
-                              .filter((a) => a.currency === "IRT")
-                              .reduce((s, a) => s + (balances.get(a.id)?.balance ?? 0), 0),
-                          ),
-                        },
-                      ],
-                    },
-                  ]
-                : []),
-              ...(accs.filter((a) => a.currency === "USD").some((a) => (balances.get(a.id)?.balance ?? 0) !== 0)
-                ? [
-                    {
-                      tag: "دلار",
-                      items: [
-                        {
-                          label: "جمع مانده",
-                          value: faNum(
-                            accs
-                              .filter((a) => a.currency === "USD")
-                              .reduce((s, a) => s + (balances.get(a.id)?.balance ?? 0), 0),
-                          ),
-                        },
-                      ],
-                    },
-                  ]
-                : []),
+              ...CURRENCIES.filter((c) =>
+                accs.some((a) => a.currency === c && (balances.get(a.id)?.balance ?? 0) !== 0),
+              ).map((c) => ({
+                tag: curTag(c),
+                items: [
+                  {
+                    label: "جمع مانده",
+                    value: faNum(
+                      accs
+                        .filter((a) => a.currency === c)
+                        .reduce((s, a) => s + (balances.get(a.id)?.balance ?? 0), 0),
+                    ),
+                  },
+                ],
+              })),
             ],
           };
         }
@@ -699,6 +717,7 @@ export function AccReportsPage() {
           const effect = t.status === "final" && t.affectsBalance ? (isDest ? t.amount : -t.amount) : 0;
           running += effect;
           rows.push({
+            txId: t.id,
             date: formatJalali(t.date),
             number: t.number,
             type: TX_TYPE_LABELS[t.type],
@@ -742,8 +761,8 @@ export function AccReportsPage() {
           (t) => t.date >= (from ?? "0000-01-01") && t.date <= (to ?? "9999-12-31"),
         );
         const rows: AnyRow[] = [];
-        const sumInMinor: Record<"IRT" | "USD", number> = { IRT: 0, USD: 0 };
-        const sumOutMinor: Record<"IRT" | "USD", number> = { IRT: 0, USD: 0 };
+        const sumInMinor: Record<Currency, number> = { IRT: 0, USD: 0, AFN: 0 };
+        const sumOutMinor: Record<Currency, number> = { IRT: 0, USD: 0, AFN: 0 };
         for (const a of accs) {
           let inMinor = 0;
           let outMinor = 0;
@@ -766,7 +785,7 @@ export function AccReportsPage() {
           rows.push({
             name: a.name,
             type: ACCOUNT_TYPE_LABELS[a.type],
-            currency: a.currency === "USD" ? "دلار" : "تومان",
+            currency: currencyLabel(a.currency),
             opening: open.toLocaleString("fa-IR"),
             inflow: inflow.toLocaleString("fa-IR"),
             outflow: outflow.toLocaleString("fa-IR"),
@@ -796,36 +815,17 @@ export function AccReportsPage() {
                 },
               ],
             },
-            ...(sumInMinor.IRT !== 0 || sumOutMinor.IRT !== 0
-              ? [
-                  {
-                    tag: "تومان",
-                    items: [
-                      ...(fromMinor(sumInMinor.IRT, "IRT") !== 0
-                        ? [{ label: "جمع ورودی", value: faNum(fromMinor(sumInMinor.IRT, "IRT")) }]
-                        : []),
-                      ...(fromMinor(sumOutMinor.IRT, "IRT") !== 0
-                        ? [{ label: "جمع خروجی", value: faNum(fromMinor(sumOutMinor.IRT, "IRT")) }]
-                        : []),
-                    ],
-                  },
-                ]
-              : []),
-            ...(sumInMinor.USD !== 0 || sumOutMinor.USD !== 0
-              ? [
-                  {
-                    tag: "دلار",
-                    items: [
-                      ...(fromMinor(sumInMinor.USD, "USD") !== 0
-                        ? [{ label: "جمع ورودی", value: faNum(fromMinor(sumInMinor.USD, "USD")) }]
-                        : []),
-                      ...(fromMinor(sumOutMinor.USD, "USD") !== 0
-                        ? [{ label: "جمع خروجی", value: faNum(fromMinor(sumOutMinor.USD, "USD")) }]
-                        : []),
-                    ],
-                  },
-                ]
-              : []),
+            ...CURRENCIES.filter((c) => sumInMinor[c] !== 0 || sumOutMinor[c] !== 0).map((c) => ({
+              tag: curTag(c),
+              items: [
+                ...(fromMinor(sumInMinor[c], c) !== 0
+                  ? [{ label: "جمع ورودی", value: faNum(fromMinor(sumInMinor[c], c)) }]
+                  : []),
+                ...(fromMinor(sumOutMinor[c], c) !== 0
+                  ? [{ label: "جمع خروجی", value: faNum(fromMinor(sumOutMinor[c], c)) }]
+                  : []),
+              ],
+            })),
           ],
         };
       }
@@ -860,7 +860,7 @@ export function AccReportsPage() {
             settled: settled.toLocaleString("fa-IR"),
             remaining: remaining.toLocaleString("fa-IR"),
             progress: faPct(progress),
-            currency: o.currency === "USD" ? "دلار" : "تومان",
+            currency: currencyLabel(o.currency),
             due: o.dueDate ? formatJalali(o.dueDate) : "بدون سررسید",
             delay,
             status: OUTSTANDING_STATUS_LABELS[eff],
@@ -870,6 +870,7 @@ export function AccReportsPage() {
         const overdueCount = list.filter((o) => outstandingEffectiveStatus(o, today) === "overdue").length;
         const remIRT = list.filter((o) => o.currency === "IRT").reduce((s, o) => s + outstandingRemaining(o), 0);
         const remUSD = list.filter((o) => o.currency === "USD").reduce((s, o) => s + outstandingRemaining(o), 0);
+        const remAFN = list.filter((o) => o.currency === "AFN").reduce((s, o) => s + outstandingRemaining(o), 0);
         return {
           title: KIND_LABEL[kind],
           columns: [
@@ -893,8 +894,10 @@ export function AccReportsPage() {
                 { label: "سررسید گذشته", value: overdueCount.toLocaleString("fa-IR") },
               ],
             },
-            ...(remIRT !== 0 ? [{ tag: "تومان", items: [{ label: "جمع مانده", value: faNum(remIRT) }] }] : []),
-            ...(remUSD !== 0 ? [{ tag: "دلار", items: [{ label: "جمع مانده", value: faNum(remUSD) }] }] : []),
+            ...CURRENCIES.filter((c) => (c === "IRT" ? remIRT : c === "USD" ? remUSD : remAFN) !== 0).map((c) => ({
+              tag: curTag(c),
+              items: [{ label: "جمع مانده", value: faNum(c === "IRT" ? remIRT : c === "USD" ? remUSD : remAFN) }],
+            })),
           ],
           partySummary: buildOutstandingPartySummary(list, partyName),
         };
@@ -913,6 +916,9 @@ export function AccReportsPage() {
           recUSD: number;
           payUSD: number;
           closeUSD: number;
+          recAFN: number;
+          payAFN: number;
+          closeAFN: number;
           last: string;
         };
         const prow: PRow[] = [];
@@ -922,12 +928,12 @@ export function AccReportsPage() {
           const inRange = st.rows.filter(
             (r) => (!from || r.tx.date >= from) && (!to || r.tx.date <= to),
           );
-          const rec = (c: "IRT" | "USD") =>
+          const rec = (c: Currency) =>
             sumAmounts(
               inRange.filter((r) => r.signedMinor > 0 && r.tx.currency === c).map((r) => r.tx.amount),
               c,
             );
-          const pay = (c: "IRT" | "USD") =>
+          const pay = (c: Currency) =>
             sumAmounts(
               inRange.filter((r) => r.signedMinor < 0 && r.tx.currency === c).map((r) => r.tx.amount),
               c,
@@ -943,12 +949,17 @@ export function AccReportsPage() {
             recUSD: rec("USD"),
             payUSD: pay("USD"),
             closeUSD: st.closing.USD,
+            recAFN: rec("AFN"),
+            payAFN: pay("AFN"),
+            closeAFN: st.closing.AFN,
             last: st.rows.length ? formatJalali(st.rows[st.rows.length - 1].tx.date) : "—",
           });
         }
         prow.sort(
           (a, b) =>
-            Math.abs(b.closeIRT) - Math.abs(a.closeIRT) || Math.abs(b.closeUSD) - Math.abs(a.closeUSD),
+            Math.abs(b.closeIRT) - Math.abs(a.closeIRT) ||
+            Math.abs(b.closeUSD) - Math.abs(a.closeUSD) ||
+            Math.abs(b.closeAFN) - Math.abs(a.closeAFN),
         );
         const cols: ExportColumn[] = [{ key: "party", header: "طرف حساب" }, { key: "type", header: "نوع" }, { key: "count", header: "تعداد تراکنش" }];
         if (showIRT)
@@ -963,6 +974,12 @@ export function AccReportsPage() {
             { key: "payUSD", header: "پرداخت در بازه (دلار)" },
             { key: "closeUSD", header: "مانده پایانی (دلار)" },
           );
+        if (showC("AFN"))
+          cols.push(
+            { key: "recAFN", header: "دریافت در بازه (افغانی)" },
+            { key: "payAFN", header: "پرداخت در بازه (افغانی)" },
+            { key: "closeAFN", header: "مانده پایانی (افغانی)" },
+          );
         cols.push({ key: "last", header: "آخرین فعالیت" });
         const rows: AnyRow[] = prow.map((p) => {
           const r: AnyRow = { party: p.name, type: p.type, count: p.count.toLocaleString("fa-IR") };
@@ -976,11 +993,16 @@ export function AccReportsPage() {
             r.payUSD = p.payUSD.toLocaleString("fa-IR");
             r.closeUSD = p.closeUSD.toLocaleString("fa-IR");
           }
+          if (showC("AFN")) {
+            r.recAFN = p.recAFN.toLocaleString("fa-IR");
+            r.payAFN = p.payAFN.toLocaleString("fa-IR");
+            r.closeAFN = p.closeAFN.toLocaleString("fa-IR");
+          }
           r.last = p.last;
           return r;
         });
-        const zeroCount = prow.filter((p) => p.closeIRT === 0 && p.closeUSD === 0).length;
-        const posCount = prow.filter((p) => p.closeIRT > 0 || p.closeUSD > 0).length;
+        const zeroCount = prow.filter((p) => p.closeIRT === 0 && p.closeUSD === 0 && p.closeAFN === 0).length;
+        const posCount = prow.filter((p) => p.closeIRT > 0 || p.closeUSD > 0 || p.closeAFN > 0).length;
         return {
           title: "مانده طرف حساب‌ها",
           columns: cols,
@@ -993,12 +1015,19 @@ export function AccReportsPage() {
                 { label: "دریافت بیشتر از پرداخت", value: posCount.toLocaleString("fa-IR") },
               ],
             },
-            ...(prow.some((p) => p.closeIRT !== 0)
-              ? [{ tag: "تومان", items: [{ label: "جمع مانده", value: faNum(prow.reduce((s, p) => s + p.closeIRT, 0)) }] }]
-              : []),
-            ...(prow.some((p) => p.closeUSD !== 0)
-              ? [{ tag: "دلار", items: [{ label: "جمع مانده", value: faNum(prow.reduce((s, p) => s + p.closeUSD, 0)) }] }]
-              : []),
+            ...CURRENCIES.filter((c) =>
+              prow.some((p) => (c === "IRT" ? p.closeIRT : c === "USD" ? p.closeUSD : p.closeAFN) !== 0),
+            ).map((c) => ({
+              tag: curTag(c),
+              items: [
+                {
+                  label: "جمع مانده",
+                  value: faNum(
+                    prow.reduce((s, p) => s + (c === "IRT" ? p.closeIRT : c === "USD" ? p.closeUSD : p.closeAFN), 0),
+                  ),
+                },
+              ],
+            })),
           ],
         };
       }
@@ -1009,24 +1038,35 @@ export function AccReportsPage() {
         const open = outstanding.filter(
           (o) => o.status !== "cancelled" && outstandingRemaining(o) > 0,
         );
-        const sumKind = (k: "receivable" | "payable", c: "IRT" | "USD") =>
+        const sumKind = (k: "receivable" | "payable", c: Currency) =>
           sumAmounts(
             open.filter((o) => o.kind === k && o.currency === c).map((o) => outstandingRemaining(o)),
             c,
           );
-        const rec = { IRT: sumKind("receivable", "IRT"), USD: sumKind("receivable", "USD") };
-        const pay = { IRT: sumKind("payable", "IRT"), USD: sumKind("payable", "USD") };
-        const net = {
+        const rec: Record<Currency, number> = {
+          IRT: sumKind("receivable", "IRT"),
+          USD: sumKind("receivable", "USD"),
+          AFN: sumKind("receivable", "AFN"),
+        };
+        const pay: Record<Currency, number> = {
+          IRT: sumKind("payable", "IRT"),
+          USD: sumKind("payable", "USD"),
+          AFN: sumKind("payable", "AFN"),
+        };
+        const net: Record<Currency, number> = {
           IRT: cash.IRT + rec.IRT - pay.IRT,
           USD: cash.USD + rec.USD - pay.USD,
+          AFN: cash.AFN + rec.AFN - pay.AFN,
         };
         const cols: ExportColumn[] = [{ key: "component", header: "مؤلفه" }, { key: "note", header: "توضیح" }];
         if (showIRT) cols.push({ key: "irt", header: "تومان" });
         if (showUSD) cols.push({ key: "usd", header: "دلار" });
-        const mk = (component: string, note: string, v: { IRT: number; USD: number }): AnyRow => {
+        if (showC("AFN")) cols.push({ key: "afn", header: "افغانی" });
+        const mk = (component: string, note: string, v: Record<Currency, number>): AnyRow => {
           const r: AnyRow = { component, note };
           if (showIRT) r.irt = v.IRT.toLocaleString("fa-IR");
           if (showUSD) r.usd = v.USD.toLocaleString("fa-IR");
+          if (showC("AFN")) r.afn = v.AFN.toLocaleString("fa-IR");
           return r;
         };
         const rows: AnyRow[] = [
@@ -1035,7 +1075,7 @@ export function AccReportsPage() {
           mk("بدهی‌های باز", "طلب طرف حساب‌ها از ما (تسویه‌نشده)", pay),
           mk("خالص وضعیت", "نقد + مطالبات − بدهی‌ها", net),
         ];
-        const netSection = (c: "IRT" | "USD"): SummarySection => ({
+        const netSection = (c: Currency): SummarySection => ({
           tag: curTag(c),
           items: [
             { label: "نقد و بانک", value: faNum(cash[c]) },
@@ -1051,6 +1091,7 @@ export function AccReportsPage() {
           sections: [
             ...(showIRT && (cash.IRT !== 0 || rec.IRT !== 0 || pay.IRT !== 0) ? [netSection("IRT")] : []),
             ...(showUSD && (cash.USD !== 0 || rec.USD !== 0 || pay.USD !== 0) ? [netSection("USD")] : []),
+            ...(showC("AFN") && (cash.AFN !== 0 || rec.AFN !== 0 || pay.AFN !== 0) ? [netSection("AFN")] : []),
           ],
         };
       }
@@ -1059,8 +1100,8 @@ export function AccReportsPage() {
         const pool = transactions.filter(
           (t) => countsTowardTotals(t) && t.partyId && (t.type === "receipt" || t.type === "payment"),
         );
-        const currencies: ("IRT" | "USD")[] = currency === "all" ? ["IRT", "USD"] : [currency === "IRT" ? "IRT" : "USD"];
-        type TRow = { party: string; count: number; receipts: number; payments: number; volume: number; cur: "IRT" | "USD" };
+        const currencies: Currency[] = activeCurrencies;
+        type TRow = { party: string; count: number; receipts: number; payments: number; volume: number; cur: Currency };
         const trows: TRow[] = [];
         for (const c of currencies) {
           const byParty = new Map<string, { count: number; rec: number[]; pay: number[] }>();
@@ -1085,7 +1126,7 @@ export function AccReportsPage() {
             .slice(0, 10);
           trows.push(...ranked);
         }
-        const best = (c: "IRT" | "USD") => trows.filter((r) => r.cur === c)[0];
+        const best = (c: Currency) => trows.filter((r) => r.cur === c)[0];
         return {
           title: "طرف حساب‌های برتر",
           columns: [
@@ -1115,26 +1156,10 @@ export function AccReportsPage() {
                 },
               ],
             },
-            ...(best("IRT")
-              ? [
-                  {
-                    tag: "تومان",
-                    items: [
-                      { label: "بزرگ‌ترین", value: `${best("IRT")!.party} — ${faNum(best("IRT")!.volume)}` },
-                    ],
-                  },
-                ]
-              : []),
-            ...(best("USD")
-              ? [
-                  {
-                    tag: "دلار",
-                    items: [
-                      { label: "بزرگ‌ترین", value: `${best("USD")!.party} — ${faNum(best("USD")!.volume)}` },
-                    ],
-                  },
-                ]
-              : []),
+            ...CURRENCIES.filter((c) => best(c)).map((c) => ({
+              tag: curTag(c),
+              items: [{ label: "بزرگ‌ترین", value: `${best(c)!.party} — ${faNum(best(c)!.volume)}` }],
+            })),
           ],
         };
       }
@@ -1234,18 +1259,18 @@ export function AccReportsPage() {
       case "category": {
         type CatAgg = {
           count: number;
-          rec: Record<"IRT" | "USD", number[]>;
-          pay: Record<"IRT" | "USD", number[]>;
-          wd: Record<"IRT" | "USD", number[]>;
+          rec: Record<Currency, number[]>;
+          pay: Record<Currency, number[]>;
+          wd: Record<Currency, number[]>;
         };
         const map = new Map<string, CatAgg>();
         for (const t of baseTx) {
           const key = t.category?.trim() || "بدون دسته";
           const agg = map.get(key) ?? {
             count: 0,
-            rec: { IRT: [], USD: [] },
-            pay: { IRT: [], USD: [] },
-            wd: { IRT: [], USD: [] },
+            rec: { IRT: [], USD: [], AFN: [] },
+            pay: { IRT: [], USD: [], AFN: [] },
+            wd: { IRT: [], USD: [], AFN: [] },
           };
           agg.count++;
           if (t.type === "receipt") agg.rec[t.currency].push(t.amount);
@@ -1259,15 +1284,24 @@ export function AccReportsPage() {
             count: a.count,
             rIRT: sumAmounts(a.rec.IRT, "IRT"),
             rUSD: sumAmounts(a.rec.USD, "USD"),
+            rAFN: sumAmounts(a.rec.AFN, "AFN"),
             pIRT: sumAmounts(a.pay.IRT, "IRT"),
             pUSD: sumAmounts(a.pay.USD, "USD"),
+            pAFN: sumAmounts(a.pay.AFN, "AFN"),
             wIRT: sumAmounts(a.wd.IRT, "IRT"),
             wUSD: sumAmounts(a.wd.USD, "USD"),
+            wAFN: sumAmounts(a.wd.AFN, "AFN"),
           }))
-          .map((x) => ({ ...x, volIRT: x.rIRT + x.pIRT + x.wIRT, volUSD: x.rUSD + x.pUSD + x.wUSD }))
-          .sort((a, b) => b.volIRT - a.volIRT || b.volUSD - a.volUSD);
+          .map((x) => ({
+            ...x,
+            volIRT: x.rIRT + x.pIRT + x.wIRT,
+            volUSD: x.rUSD + x.pUSD + x.wUSD,
+            volAFN: x.rAFN + x.pAFN + x.wAFN,
+          }))
+          .sort((a, b) => b.volIRT - a.volIRT || b.volUSD - a.volUSD || b.volAFN - a.volAFN);
         const totalIRT = catList.reduce((s, x) => s + x.volIRT, 0);
         const totalUSD = catList.reduce((s, x) => s + x.volUSD, 0);
+        const totalAFN = catList.reduce((s, x) => s + x.volAFN, 0);
         const cols: ExportColumn[] = [{ key: "category", header: "دسته" }, { key: "count", header: "تعداد" }];
         if (showIRT)
           cols.push(
@@ -1282,6 +1316,13 @@ export function AccReportsPage() {
             { key: "payUSD", header: "پرداخت (دلار)" },
             { key: "wUSD", header: "برداشت (دلار)" },
             { key: "shareUSD", header: "سهم (دلار)" },
+          );
+        if (showC("AFN"))
+          cols.push(
+            { key: "recAFN", header: "دریافت (افغانی)" },
+            { key: "payAFN", header: "پرداخت (افغانی)" },
+            { key: "wAFN", header: "برداشت (افغانی)" },
+            { key: "shareAFN", header: "سهم (افغانی)" },
           );
         const rows: AnyRow[] = catList.map((x) => {
           const r: AnyRow = {
@@ -1299,6 +1340,12 @@ export function AccReportsPage() {
             r.payUSD = x.pUSD.toLocaleString("fa-IR");
             r.wUSD = x.wUSD.toLocaleString("fa-IR");
             r.shareUSD = totalUSD > 0 ? faPct(Math.round((x.volUSD / totalUSD) * 1000) / 10) : "—";
+          }
+          if (showC("AFN")) {
+            r.recAFN = x.rAFN.toLocaleString("fa-IR");
+            r.payAFN = x.pAFN.toLocaleString("fa-IR");
+            r.wAFN = x.wAFN.toLocaleString("fa-IR");
+            r.shareAFN = totalAFN > 0 ? faPct(Math.round((x.volAFN / totalAFN) * 1000) / 10) : "—";
           }
           return r;
         });
@@ -1335,6 +1382,19 @@ export function AccReportsPage() {
                   },
                 ]
               : []),
+            ...(totalAFN !== 0
+              ? [
+                  {
+                    tag: "افغانی",
+                    items: [
+                      ...(top && top.volAFN > 0
+                        ? [{ label: "پرحجم‌ترین دسته", value: `${top.name} — ${faNum(top.volAFN)}` }]
+                        : []),
+                      { label: "جمع حجم", value: faNum(totalAFN) },
+                    ],
+                  },
+                ]
+              : []),
           ],
         };
       }
@@ -1342,8 +1402,7 @@ export function AccReportsPage() {
       case "currencySummary": {
         const totals = totalsByType(baseTx);
         const rows: AnyRow[] = [];
-        for (const c of ["IRT", "USD"] as const) {
-          if (currency !== "all" && c !== (currency === "IRT" ? "IRT" : "USD")) continue;
+        for (const c of activeCurrencies) {
           const rec = totals.totals.receipt?.[c] ?? 0;
           const pay = totals.totals.payment?.[c] ?? 0;
           rows.push({
@@ -1358,11 +1417,10 @@ export function AccReportsPage() {
             adjustments: (totals.totals.adjustment?.[c] ?? 0).toLocaleString("fa-IR"),
           });
         }
-        const netOf = (c: "IRT" | "USD") =>
+        const netOf = (c: Currency) =>
           (totals.totals.receipt?.[c] ?? 0) - (totals.totals.payment?.[c] ?? 0);
         const sections: SummarySection[] = [];
-        for (const c of ["IRT", "USD"] as const) {
-          if (currency !== "all" && c !== (currency === "IRT" ? "IRT" : "USD")) continue;
+        for (const c of activeCurrencies) {
           const sub = baseTx.filter((t) => t.currency === c);
           if (sub.length === 0) continue;
           const items: { label: string; value: string }[] = [
@@ -1412,6 +1470,10 @@ export function AccReportsPage() {
           paymentsUSD: fromMinor(b.payments.USD, "USD").toLocaleString("fa-IR"),
           withdrawalsUSD: fromMinor(b.withdrawals.USD, "USD").toLocaleString("fa-IR"),
           netUSD: fromMinor(b.receipts.USD - b.payments.USD, "USD").toLocaleString("fa-IR"),
+          receiptsAFN: b.receipts.AFN.toLocaleString("fa-IR"),
+          paymentsAFN: b.payments.AFN.toLocaleString("fa-IR"),
+          withdrawalsAFN: b.withdrawals.AFN.toLocaleString("fa-IR"),
+          netAFN: (b.receipts.AFN - b.payments.AFN).toLocaleString("fa-IR"),
         }));
         return {
           title: `خلاصه ${granularity === "day" ? "روزانه" : granularity === "week" ? "هفتگی" : granularity === "month" ? "ماهانه" : "سالانه"}`,
@@ -1426,6 +1488,10 @@ export function AccReportsPage() {
             { key: "paymentsUSD", header: "پرداخت (دلار)" },
             { key: "withdrawalsUSD", header: "برداشت (دلار)" },
             { key: "netUSD", header: "خالص (دلار)" },
+            { key: "receiptsAFN", header: "دریافت (افغانی)" },
+            { key: "paymentsAFN", header: "پرداخت (افغانی)" },
+            { key: "withdrawalsAFN", header: "برداشت (افغانی)" },
+            { key: "netAFN", header: "خالص (افغانی)" },
           ],
           rows,
           sections: [
@@ -1448,6 +1514,19 @@ export function AccReportsPage() {
                       {
                         label: "جمع دریافت",
                         value: faNum(buckets.reduce((s, b) => s + fromMinor(b.receipts.USD, "USD"), 0)),
+                      },
+                    ],
+                  },
+                ]
+              : []),
+            ...(buckets.some((b) => b.receipts.AFN !== 0)
+              ? [
+                  {
+                    tag: "افغانی",
+                    items: [
+                      {
+                        label: "جمع دریافت",
+                        value: faNum(buckets.reduce((s, b) => s + b.receipts.AFN, 0)),
                       },
                     ],
                   },
@@ -1551,7 +1630,14 @@ export function AccReportsPage() {
         : from || to
           ? `${from ? formatJalali(from) : "ابتدا"} تا ${to ? formatJalali(to) : "امروز"}`
           : "همه دوره‌ها";
-    const cur = currency === "all" ? "تومان و دلار" : currency === "IRT" ? "تومان" : "دلار";
+    const cur =
+      currency === "all"
+        ? "همه ارزها"
+        : currency === "IRT"
+          ? "تومان"
+          : currency === "USD"
+            ? "دلار"
+            : "افغانی";
     const extra =
       kind === "netPosition"
         ? " • وضعیت به تاریخ امروز"
@@ -1665,9 +1751,10 @@ export function AccReportsPage() {
               onChange={setCurrency}
               ariaLabel="ارز"
               options={[
-                { value: "all", label: "هر دو ارز" },
+                { value: "all", label: "همه ارزها" },
                 { value: "IRT", label: "تومان" },
                 { value: "USD", label: "دلار" },
+                { value: "AFN", label: "افغانی" },
               ]}
             />
             {usesStatusFilter && (
@@ -1745,7 +1832,7 @@ export function AccReportsPage() {
               </div>
             )}
             <div className="flex-1" />
-            <Button variant="primary" icon={FileDown} onClick={() => setExportOpen(true)} disabled={report.rows.length === 0}>
+            <Button variant="primary" icon={FileDown} onClick={() => { setReceiptPhotos(null); void loadReceiptsForExport(); setExportOpen(true); }} disabled={report.rows.length === 0}>
               خروجی گزارش
             </Button>
           </div>
@@ -1761,8 +1848,10 @@ export function AccReportsPage() {
                 <span
                   className={`flex shrink-0 items-center justify-center self-stretch rounded-2xl px-4 text-[12px] font-extrabold text-white shadow-md ${
                     sec.tag === "دلار"
-                      ? "bg-gradient-to-br from-[#3b82f6] to-[#2563eb] shadow-[#2563eb]/30"
-                      : "bg-gradient-to-br from-[#10b981] to-[#0b9e6e] shadow-[#0b9e6e]/30"
+                      ? CUR_TAG_GRADIENT.USD
+                      : sec.tag === "افغانی"
+                        ? CUR_TAG_GRADIENT.AFN
+                        : CUR_TAG_GRADIENT.IRT
                   }`}
                 >
                   {sec.tag}
@@ -1859,6 +1948,7 @@ export function AccReportsPage() {
         defaultFilename={`acc-report-${kind}`}
         summarySections={report.sections}
         partySummary={report.partySummary}
+        rowReceipts={{ idKey: "txId", photos: receiptPhotos ?? {} }}
         theme="acc"
       />
     </div>

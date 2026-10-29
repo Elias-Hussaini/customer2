@@ -58,6 +58,8 @@ export interface ArchiveEntry {
   docLabel?: string;
   /** Owner's representative name — powers the نماینده/<…> folder modes. */
   repName?: string;
+  /** Owner's employer name (کارفرما) — powers the {کارفرما} naming token. */
+  employerName?: string;
   /** Owner's passport number — powers the {پاسپورت} naming token. */
   passportNo?: string;
   /** File date (attachment creation) as ISO yyyy-mm-dd — powers {تاریخ}/{سال}/{ماه}. */
@@ -175,6 +177,7 @@ function kindLabel(kind: ArchiveFileKind): string {
 
 export interface TemplateContext {
   rep?: string;
+  employer?: string;
   customer?: string;
   doc?: string;
   kind?: string;
@@ -188,6 +191,7 @@ export interface TemplateContext {
 /** Every token accepts its Persian and its English spelling. */
 const TOKENS: [RegExp, keyof TemplateContext][] = [
   [/\{\s*(?:نماینده|rep)\s*\}/gi, "rep"],
+  [/\{\s*(?:کارفرما|employer)\s*\}/gi, "employer"],
   [/\{\s*(?:مشتری|customer)\s*\}/gi, "customer"],
   [/\{\s*(?:مدرک|doc)\s*\}/gi, "doc"],
   [/\{\s*(?:نوع|kind)\s*\}/gi, "kind"],
@@ -303,6 +307,7 @@ export function buildPlan(
     const faNum = (n: number | string) => toPersianDigits(n);
     const tplCtx: TemplateContext = {
       rep: isExternal ? "" : rep,
+      employer: isExternal ? "" : e.employerName?.trim() || "",
       customer,
       doc: e.kind === "issuedVisa" ? "ویزا" : docLabel,
       kind: kindLabel(e.kind),

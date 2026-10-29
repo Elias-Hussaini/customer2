@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { FileSpreadsheet, FileText, FileType2, Image, Layers } from "lucide-react";
+import { FileSpreadsheet, FileText, FileType2, Image, Layers, Paperclip } from "lucide-react";
 import { Modal } from "../ui/Modal";
 import { Button } from "../ui/Button";
 import { Input, Checkbox } from "../ui/fields";
@@ -17,7 +17,7 @@ import {
   groupExportRows,
 } from "../../utils/export/tabular";
 import { exportElementAsPdf, exportElementAsPng } from "../../utils/export/raster";
-import { ExportDoc, type ExportRowPhotos, type ExportTheme } from "./ExportDoc";
+import { ExportDoc, type ExportRowPhotos, type ExportRowReceipts, type ExportTheme } from "./ExportDoc";
 import { useToast } from "../../hooks/useToast";
 import { loadPageFilter, savePageFilter } from "../../utils/pageFilters";
 
@@ -76,6 +76,9 @@ interface ExportDialogProps {
   grouping?: ExportGrouping;
   /** Optional per-row photos (e.g. customer photo beside their name). */
   rowPhotos?: ExportRowPhotos;
+  /** Optional per-row receipt images (سند) — offered as a toggle when at
+   *  least one row owns a receipt photo; embedded below each transaction. */
+  rowReceipts?: { idKey: string; photos: Record<string, string[]> };
   /** Section identity for PDF/PNG documents: "visa" (default) or "acc". */
   theme?: ExportTheme;
   extra?: ReactNode;
@@ -107,6 +110,7 @@ export function ExportDialog({
   partySummary,
   grouping,
   rowPhotos,
+  rowReceipts,
   theme = "visa",
   extra,
 }: ExportDialogProps) {
@@ -124,6 +128,11 @@ export function ExportDialog({
   const [busy, setBusy] = useState(false);
   const [groupBy, setGroupBy] = useState(
     () => loadPageFilter<string>(prefsPage, "groupBy", "1", () => true) !== "0",
+  );
+  /** Embed receipt images below each transaction (سند) — remembered too. */
+  const hasReceipts = (rowReceipts && Object.keys(rowReceipts.photos).length > 0) || false;
+  const [withReceipts, setWithReceipts] = useState(
+    () => loadPageFilter<string>(prefsPage, "receipts", "1", () => true) !== "0",
   );
   const docRef = useRef<HTMLDivElement>(null);
   const [pendingDoc, setPendingDoc] = useState(false);
@@ -153,6 +162,9 @@ export function ExportDialog({
   useEffect(() => {
     savePageFilter(`export-${defaultFilename}`, "groupBy", groupBy ? "1" : "0");
   }, [groupBy, defaultFilename]);
+  useEffect(() => {
+    savePageFilter(`export-${defaultFilename}`, "receipts", withReceipts ? "1" : "0");
+  }, [withReceipts, defaultFilename]);
 
   const activeColumns = columns.filter((c) => selected.includes(c.key));
 
@@ -165,6 +177,9 @@ export function ExportDialog({
   const effectiveGroups = multiGroup && groupBy ? groups : undefined;
   /** Rows in export order — grouped sections when active, natural otherwise. */
   const orderedRows = effectiveGroups ? flattenGroups(effectiveGroups) : rows;
+  /** Receipts actually embedded — only meaningful for xlsx/pdf/png. */
+  const activeReceipts: ExportRowReceipts | undefined =
+    rowReceipts && hasReceipts && withReceipts && format !== "csv" ? rowReceipts : undefined;
 
   const toggle = (key: string) =>
     setSelected((s) => (s.includes(key) ? s.filter((k) => k !== key) : [...s, key]));
@@ -190,6 +205,7 @@ export function ExportDialog({
           grouping?.photos,
           grouping?.label,
           rowPhotos,
+          activeReceipts,
           { sections: summarySections, partySummary },
         );
         toast.success("خروجی اکسل دانلود شد");
@@ -259,6 +275,21 @@ export function ExportDialog({
                 <Layers size={13} className="shrink-0 text-brand-500" />
                 <span>
                   هر {grouping?.label ?? "گروه"} یک بخش کامل می‌شود (با عکس پروفایل کنار نام) — از بالا به پایین، یکی تمام، بعدی زیرش
+                </span>
+              </div>
+            </div>
+          )}
+          {hasReceipts && (
+            <div className="flex items-start justify-between gap-3 rounded-2xl border border-[#0b9e6e]/25 bg-[#0b9e6e]/[0.05] p-3">
+              <Checkbox
+                checked={withReceipts}
+                onChange={() => setWithReceipts((v) => !v)}
+                label="درج تصویر سند زیر هر ردیف"
+              />
+              <div className="flex items-center gap-1.5 pt-0.5 text-[10.5px] leading-4 text-ink-400">
+                <Paperclip size={13} className="shrink-0 text-[#0b9e6e]" />
+                <span>
+                  {Object.keys(rowReceipts!.photos).length.toLocaleString("fa-IR")} ردیف سند تصویری دارد — عکس سندِ هر تراکنش، زیر همان تراکنش چاپ می‌شود
                 </span>
               </div>
             </div>
@@ -352,6 +383,7 @@ export function ExportDialog({
                 what: grouping?.label,
               }}
               rowPhotos={rowPhotos}
+              rowReceipts={activeReceipts}
               theme={theme}
               onReady={() => readyCb.current?.()}
             />

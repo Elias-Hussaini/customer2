@@ -9,6 +9,8 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { Menu } from "../../components/ui/Menu";
 import { SearchBox, FilterSelect } from "../../components/ui/inputs";
 import { ExportDialog } from "../../components/exports/ExportDialog";
+import { currencyLabel } from "../../types";
+import type { Currency } from "../../types";
 import { useConfirm } from "../../hooks/useConfirm";
 import { useToast } from "../../hooks/useToast";
 import { formatJalali, todayIso } from "../../utils/jalali";
@@ -61,7 +63,7 @@ export function AccOutstandingPage() {
     return [...list].sort((a, b) => (a.dueDate ?? "9999").localeCompare(b.dueDate ?? "9999"));
   }, [outstanding, kindFilter, statusFilter, query, parties, today]);
 
-  const sumRemaining = (cur: "USD" | "IRT") =>
+  const sumRemaining = (cur: Currency) =>
     (outstanding ?? [])
       .filter((o) => o.kind === kindFilter || kindFilter === "all")
       .filter((o) => o.status !== "cancelled" && o.status !== "settled")
@@ -90,7 +92,7 @@ export function AccOutstandingPage() {
           settled: settled.toLocaleString("fa-IR"),
           remaining: remaining.toLocaleString("fa-IR"),
           progress: `${Math.round((settled / (o.amount || 1)) * 100).toLocaleString("fa-IR")}٪`,
-          currency: o.currency === "USD" ? "دلار" : "تومان",
+          currency: currencyLabel(o.currency),
           due: o.dueDate ? formatJalali(o.dueDate) : "بدون سررسید",
           delay,
           status: OUTSTANDING_STATUS_LABELS[eff],
@@ -282,6 +284,9 @@ export function AccOutstandingPage() {
           { label: "تعداد", value: rows.length.toLocaleString("fa-IR") },
           { label: "جمع مانده (تومان)", value: formatMoney(sumRemaining("IRT"), "IRT") },
           { label: "جمع مانده (دلار)", value: formatMoney(sumRemaining("USD"), "USD") },
+          ...(sumRemaining("AFN") !== 0
+            ? [{ label: "جمع مانده (افغانی)", value: formatMoney(sumRemaining("AFN"), "AFN") }]
+            : []),
         ]}
         theme="acc"
       />

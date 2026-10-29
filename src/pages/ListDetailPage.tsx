@@ -18,6 +18,8 @@ import {
   useRepresentatives,
   useRequests,
   useTags,
+  useEmployers,
+  usePrefs,
 } from "../hooks/useData";
 import { useToast } from "../hooks/useToast";
 import { formatJalali, toPersianDigits } from "../utils/jalali";
@@ -32,6 +34,7 @@ import {
 import { customerFullName } from "../db/customers";
 import { requestStatusFa } from "../types";
 import type { VisaRequest } from "../types";
+import { currencyLabel } from "../types";
 
 export function ListDetailPage() {
   const { id } = useParams();
@@ -42,7 +45,11 @@ export function ListDetailPage() {
   const requests = useRequests();
   const customers = useCustomers();
   const representatives = useRepresentatives();
+  const employers = useEmployers();
+  const prefs = usePrefs();
   const tags = useTags();
+  /** کارفرما joins exports when the feature is on. */
+  const employerFieldOn = (prefs.employerFieldEnabled ?? true) !== false;
 
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("");
@@ -294,8 +301,15 @@ export function ListDetailPage() {
             passportNo: c?.passportNo ?? "",
             visaType: r.visaType ?? "",
             representative: (representatives ?? []).find((x) => x.id === r.representativeId)?.name ?? "",
+            ...(employerFieldOn
+              ? {
+                  employer: c?.employerId
+                    ? ((employers ?? []).find((e) => e.id === c.employerId)?.name ?? "بدون کارفرما")
+                    : "بدون کارفرما",
+                }
+              : {}),
             amount: r.quotedAmount ?? "",
-            currency: r.currency === "USD" ? "دلار" : r.currency === "IRT" ? "تومان" : "",
+            currency: currencyLabel(r.currency),
             registrationDate: formatJalali(r.registrationDate),
             status: requestStatusFa(r),
             issuedAt: r.issuedAt ? formatJalali(r.issuedAt) : "",
@@ -315,6 +329,7 @@ export function ListDetailPage() {
           { key: "passportNo", header: "پاسپورت" },
           { key: "visaType", header: "نوع ویزا" },
           { key: "representative", header: "نماینده" },
+          ...(employerFieldOn ? [{ key: "employer", header: "کارفرما" }] : []),
           { key: "amount", header: "مبلغ" },
           { key: "currency", header: "ارز" },
           { key: "registrationDate", header: "تاریخ ثبت" },

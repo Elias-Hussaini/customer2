@@ -18,6 +18,8 @@ import { Menu } from "../../components/ui/Menu";
 import { useConfirm } from "../../hooks/useConfirm";
 import { useToast } from "../../hooks/useToast";
 import { formatMoney } from "../../utils/num";
+import type { Currency } from "../../types";
+import { currencyLabel } from "../../types";
 import { computeAllAccountBalances } from "../../accounting/engine";
 import { deleteOrDeactivateAccount } from "../../accounting/repo";
 import {
@@ -46,7 +48,7 @@ export function AccAccountsPage() {
   );
 
   const totals = useMemo(() => {
-    const t = { IRT: 0, USD: 0 };
+    const t: Record<Currency, number> = { IRT: 0, USD: 0, AFN: 0 };
     for (const a of accounts ?? []) {
       if (!a.active) continue;
       const bal = balances?.get(a.id)?.balance ?? 0;
@@ -84,6 +86,7 @@ export function AccAccountsPage() {
           <span className="font-bold">موجودی کل:</span>
           <span className="num font-extrabold">{formatMoney(totals.IRT, "IRT")}</span>
           <span className="num font-extrabold">{formatMoney(totals.USD, "USD")}</span>
+          {totals.AFN !== 0 && <span className="num font-extrabold">{formatMoney(totals.AFN, "AFN")}</span>}
           <span className="text-ink-400">(فقط حساب‌های فعال)</span>
         </div>
         <div className="flex gap-2">
@@ -137,7 +140,7 @@ export function AccAccountsPage() {
                 <div>
                   <p className="truncate text-sm font-extrabold">{a.name}</p>
                   <p className="text-[11px] font-semibold text-ink-500 dark:text-ink-400">
-                    {ACCOUNT_TYPE_LABELS[a.type]} · {a.currency === "USD" ? "دلار" : "تومان"}
+                    {ACCOUNT_TYPE_LABELS[a.type]} · {currencyLabel(a.currency)}
                     {!a.active && " · غیرفعال"}
                   </p>
                 </div>

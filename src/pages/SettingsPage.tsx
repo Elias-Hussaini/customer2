@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   Bot,
+  Briefcase,
   CheckCircle2,
   Coins,
   DatabaseBackup,
@@ -34,7 +35,7 @@ import { Button, IconButton } from "../components/ui/Button";
 import { FormField, Input, Checkbox, Toggle, Select } from "../components/ui/fields";
 import { EmptyState } from "../components/ui/EmptyState";
 import { useTheme, type Theme } from "../hooks/useTheme";
-import { useCustomFields, usePrefs, useTags, useVisaTypes, useCustomers, useDocTypes } from "../hooks/useData";
+import { useCustomFields, usePrefs, useTags, useVisaTypes, useCustomers, useDocTypes, useEmployers } from "../hooks/useData";
 import { updatePrefs } from "../db/prefs";
 import {
   TAG_PALETTE,
@@ -52,6 +53,12 @@ import {
   restoreVisaType,
   renameVisaType,
 } from "../db/taxonomy";
+import {
+  createEmployer,
+  updateEmployer,
+  deleteEmployer,
+  restoreEmployer,
+} from "../db/employers";
 import {
   createDocType,
   updateDocType,
@@ -87,6 +94,7 @@ type SettingsSection =
   | "fields"
   | "tags"
   | "visaTypes"
+  | "employers"
   | "docTypes"
   | "currency"
   | "defaults"
@@ -101,6 +109,7 @@ const SECTIONS: { key: SettingsSection; label: string; icon: typeof Palette }[] 
   { key: "fields", label: "فیلدهای سفارشی", icon: Layers },
   { key: "tags", label: "تگ‌ها", icon: TagIcon },
   { key: "visaTypes", label: "انواع ویزا", icon: VisaIcon },
+  { key: "employers", label: "کارفرماها", icon: Briefcase },
   { key: "docTypes", label: "مدارک و تصاویر", icon: FileImage },
   { key: "currency", label: "واحد پول", icon: Coins },
   { key: "defaults", label: "پیش‌فرض‌های فرم", icon: Wand2 },
@@ -159,6 +168,7 @@ export function SettingsPage() {
           {section === "fields" && <CustomFieldsSection />}
           {section === "tags" && <TagsSection />}
           {section === "visaTypes" && <VisaTypesSection />}
+          {section === "employers" && <EmployersSection />}
           {section === "docTypes" && <DocTypesSection />}
           {section === "currency" && <CurrencySection />}
           {section === "defaults" && <DefaultsSection />}
@@ -866,6 +876,179 @@ function VisaTypesSection() {
               }}
             >
               {vt.name} — بازگردانی
+            </button>
+          ))}
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+/* ------------------------------- Employers -------------------------------- */
+
+interface EmployerEditState {
+  name: string;
+  phone: string;
+}
+
+function EmployersSection() {
+  const employers = useEmployers();
+  const allEmployers = useEmployers(false);
+  const archived = (allEmployers ?? []).filter((e) => e.archivedAt);
+  const customers = useCustomers(false);
+  const prefs = usePrefs();
+  const toast = useToast();
+  const { confirm } = useConfirm();
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [edit, setEdit] = useState<EmployerEditState>({ name: "", phone: "" });
+
+  const customerCount = (id: string) =>
+    (customers ?? []).filter((c) => c.employerId === id).length;
+
+  const add = async () => {
+    if (!name.trim()) return;
+    await createEmployer({ name, phone: phone.trim() || undefined });
+    setName("");
+    setPhone("");
+    toast.success("کارفرما اضافه شد");
+  };
+
+  return (
+    <SectionCard title="کارفرماها" icon={<Briefcase size={15} className="text-brand-500" />}>
+      <div className="mb-3 flex items-center justify-between gap-3 rounded-2xl bg-brand-500/6 px-4 py-3">
+        <div>
+          <p className="text-[13px] font-bold">نمایش فیلد کارفرما در فرم مشتری</p>
+          <p className="text-[11px] leading-5 text-ink-500 dark:text-ink-400">
+            کارفرما همیشه اختیاری است — با خاموش کردن، این فیلد از فرم مشتری و پرونده‌ها پنهان می‌شود (داده‌ها حذف نمی‌شوند)
+          </p>
+        </div>
+        <Toggle
+          checked={prefs.employerFieldEnabled !== false}
+          onChange={(v) => void updatePrefs({ employerFieldEnabled: v })}
+        />
+      </div>
+
+      <div className="mb-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+        <Input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="نام کارفرما (مثلاً شرکت پیمانکاری…)"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void add();
+          }}
+        />
+        <Input
+          dir="ltr"
+          className="text-left"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          placeholder="شماره تماس (اختیاری)"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void add();
+          }}
+        />
+        <Button variant="primary" icon={Plus} disabled={!name.trim()} onClick={() => void add()}>
+          افزودن
+        </Button>
+      </div>
+      {(employers ?? []).length === 0 ? (
+        <p className="py-4 text-center text-xs text-ink-400">
+          هنوز کارفرمایی ثبت نشده — هنگام ثبت مشتری هم می‌توانید «بدون کارفرما» را انتخاب کنید
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {(employers ?? []).map((emp) => (
+            <li key={emp.id} className="glass-soft flex items-center gap-2 rounded-2xl px-3.5 py-2.5">
+              {editingId === emp.id ? (
+                <>
+                  <Input
+                    value={edit.name}
+                    onChange={(e) => setEdit({ ...edit, name: e.target.value })}
+                    className="flex-1"
+                  />
+                  <Input
+                    dir="ltr"
+                    className="w-32 text-left"
+                    value={edit.phone}
+                    onChange={(e) => setEdit({ ...edit, phone: e.target.value })}
+                    placeholder="تلفن"
+                  />
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={async () => {
+                      if (edit.name.trim()) {
+                        await updateEmployer(emp.id, {
+                          name: edit.name,
+                          phone: edit.phone.trim() || undefined,
+                        });
+                        toast.success("ذخیره شد");
+                      }
+                      setEditingId(null);
+                    }}
+                  >
+                    ذخیره
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate text-[13px] font-semibold">{emp.name}</span>
+                    <span className="text-[10.5px] text-ink-400">
+                      {customerCount(emp.id).toLocaleString("fa-IR")} مشتری
+                      {emp.phone ? ` · ${emp.phone}` : ""}
+                    </span>
+                  </span>
+                  <button
+                    className="icon-btn !h-8 !w-8"
+                    aria-label="ویرایش"
+                    onClick={() => {
+                      setEditingId(emp.id);
+                      setEdit({ name: emp.name, phone: emp.phone ?? "" });
+                    }}
+                  >
+                    <Pencil size={13} />
+                  </button>
+                  <button
+                    className="icon-btn !h-8 !w-8 hover:!text-[#ef4444]"
+                    aria-label="حذف"
+                    onClick={async () => {
+                      const linked = customerCount(emp.id);
+                      const ok = await confirm({
+                        title: `حذف کارفرمای «${emp.name}»؟`,
+                        message:
+                          linked > 0
+                            ? `${linked.toLocaleString("fa-IR")} مشتری به این کارفرما وصل است — با حذف، آن‌ها «بدون کارفرما» می‌شوند و هیچ داده‌ای از دست نمی‌رود.`
+                            : "این کارفرما به هیچ مشتری‌ای وصل نیست.",
+                        confirmLabel: "حذف شود",
+                        danger: true,
+                      });
+                      if (!ok) return;
+                      await deleteEmployer(emp.id, emp.name);
+                      toast.success("کارفرما حذف شد");
+                    }}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {archived.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-2 border-t border-ink-900/5 pt-3 dark:border-white/5">
+          {archived.map((emp) => (
+            <button
+              key={emp.id}
+              className="chip-soft inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-[11px]"
+              onClick={async () => {
+                await restoreEmployer(emp.id, emp.name);
+                toast.success("بازگردانی شد");
+              }}
+            >
+              {emp.name} — بازگردانی
             </button>
           ))}
         </div>

@@ -20,6 +20,7 @@ export interface BackupDataOptions {
 /** Tables read by the main-app backup (attachments excluded by design in the legacy JSON). */
 export const MAIN_BACKUP_TABLES = [
   db.representatives,
+  db.employers,
   db.customers,
   db.requests,
   db.lists,
@@ -44,6 +45,7 @@ export async function readMainBackupData(
   return db.transaction("r", MAIN_BACKUP_TABLES, async () => {
     const [
       representatives,
+      employers,
       customers,
       requests,
       lists,
@@ -56,6 +58,7 @@ export async function readMainBackupData(
       preferences,
     ] = await Promise.all([
       db.representatives.toArray(),
+      db.employers.toArray(),
       db.customers.toArray(),
       db.requests.toArray(),
       db.lists.toArray(),
@@ -72,6 +75,7 @@ export async function readMainBackupData(
 
     return {
       representatives,
+      employers,
       customers,
       requests,
       lists,
@@ -101,6 +105,7 @@ export async function buildBackup(): Promise<BackupFile> {
     schemaVersion: db.verno,
     counts: {
       representatives: data.representatives.length,
+      employers: data.employers?.length ?? 0,
       customers: data.customers.length,
       requests: data.requests.length,
       lists: data.lists.length,
@@ -232,6 +237,7 @@ export async function readBackupFile(file: File, password?: string): Promise<Bac
 export async function buildRestorePreview(backup: BackupFile): Promise<RestorePreview> {
   const existingCounts: Record<string, number> = {
     representatives: await db.representatives.count(),
+    employers: await db.employers.count(),
     customers: await db.customers.count(),
     requests: await db.requests.count(),
     lists: await db.lists.count(),
@@ -244,6 +250,7 @@ export async function buildRestorePreview(backup: BackupFile): Promise<RestorePr
   const existingIds = async (
     table:
       | "representatives"
+      | "employers"
       | "customers"
       | "requests"
       | "lists"
@@ -259,6 +266,7 @@ export async function buildRestorePreview(backup: BackupFile): Promise<RestorePr
   let duplicates = 0;
   for (const key of [
     "representatives",
+    "employers",
     "customers",
     "requests",
     "lists",
@@ -268,7 +276,7 @@ export async function buildRestorePreview(backup: BackupFile): Promise<RestorePr
     "customFields",
   ] as const) {
     const ids = await existingIds(key);
-    duplicates += d[key].filter((r) => ids.has((r as { id: string }).id)).length;
+    duplicates += (d[key] ?? []).filter((r) => ids.has((r as { id: string }).id)).length;
   }
 
   const warnings: string[] = [];
@@ -309,6 +317,7 @@ export async function applyRestore(backup: BackupFile, mode: RestoreMode): Promi
     "rw",
     [
       db.representatives,
+      db.employers,
       db.customers,
       db.requests,
       db.lists,
@@ -324,6 +333,7 @@ export async function applyRestore(backup: BackupFile, mode: RestoreMode): Promi
       if (mode === "replace") {
         await Promise.all([
           db.representatives.clear(),
+          db.employers.clear(),
           db.customers.clear(),
           db.requests.clear(),
           db.lists.clear(),
@@ -340,6 +350,7 @@ export async function applyRestore(backup: BackupFile, mode: RestoreMode): Promi
       const upsert = async (
         table:
           | typeof db.representatives
+          | typeof db.employers
           | typeof db.customers
           | typeof db.requests
           | typeof db.lists
@@ -357,6 +368,7 @@ export async function applyRestore(backup: BackupFile, mode: RestoreMode): Promi
       };
 
       await upsert(db.representatives, d.representatives);
+      if (d.employers?.length) await upsert(db.employers, d.employers);
       await upsert(db.customers, d.customers);
       await upsert(db.requests, d.requests);
       await upsert(db.lists, d.lists);

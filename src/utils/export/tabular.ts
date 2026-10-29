@@ -318,6 +318,12 @@ export async function exportXlsx(
     idKey: string;
     photos: Record<string, string | undefined>;
   },
+  /** Optional per-row receipt images (سند) — each one is embedded in its own
+   *  row directly BELOW the owning transaction row. Pass undefined = off. */
+  receipts?: {
+    idKey: string;
+    photos: Record<string, string[]>;
+  },
   /** Optional accounting summary — currency sections + per-party table. */
   accSummary?: {
     sections?: SummarySection[];
@@ -397,6 +403,32 @@ export async function exportXlsx(
             });
           } catch {
             /* photo is decoration — never fail the export for it */
+          }
+        }
+      }
+      // Receipt images (سند) — one blank spacer row per image, directly
+      // below the owning transaction, image anchored inside it.
+      if (receipts) {
+        const urls = receipts.photos[String(r[receipts.idKey] ?? "")] ?? [];
+        for (const url of urls) {
+          const parsed = parseDataUrl(url);
+          if (!parsed) continue;
+          const spacer = ws.addRow(columns.map(() => ""));
+          spacer.height = 112;
+          spacer.eachCell((cell) => {
+            cell.style = {
+              border: thinBorders(),
+              fill: { type: "pattern", pattern: "solid", fgColor: { argb: "FFFAFBFE" } },
+            } satisfies CellStyle;
+          });
+          try {
+            const imgId = wb.addImage({ base64: parsed.base64, extension: parsed.extension });
+            ws.addImage(imgId, {
+              tl: { col: 0.15, row: ws.rowCount - 1 + 0.06 },
+              ext: { width: 100, height: 100 },
+            });
+          } catch {
+            /* decoration — never fail the export for it */
           }
         }
       }

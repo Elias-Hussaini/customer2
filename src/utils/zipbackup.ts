@@ -70,6 +70,7 @@ const ASSET_PREFIX = "assets/attachments/";
 /** Tables the ZIP backup reads/writes (records + attachments + optional AI). */
 const RESTORE_TABLES = [
   db.representatives,
+  db.employers,
   db.customers,
   db.requests,
   db.lists,
@@ -86,6 +87,7 @@ const RESTORE_TABLES = [
 /** Record tables whose rows are upserted by id (used for counting/duplicates). */
 const UPSERT_TABLE_KEYS = [
   "representatives",
+  "employers",
   "customers",
   "requests",
   "lists",
@@ -269,6 +271,7 @@ export async function buildFullZipBackup(
   const attMetas = attachments.map(stripAttachmentBlob);
   const counts: Record<string, number> = {
     representatives: recordData.representatives.length,
+    employers: recordData.employers?.length ?? 0,
     customers: recordData.customers.length,
     requests: recordData.requests.length,
     lists: recordData.lists.length,
@@ -561,6 +564,7 @@ export async function parseZipBackup(
   // ---- counts & duplicate ids ---------------------------------------------
   const recordTableKeys = [
     "representatives",
+    "employers",
     "customers",
     "requests",
     "lists",
@@ -859,6 +863,7 @@ export async function applyZipRestore(
         }
       };
       await upsert(db.representatives, d.representatives);
+      if (d.employers?.length) await upsert(db.employers, d.employers as never);
       await upsert(db.customers, d.customers);
       await upsert(db.requests, d.requests);
       await upsert(db.lists, d.lists);

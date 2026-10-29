@@ -18,6 +18,7 @@ import { RadioSelect, SearchSelect } from "../../components/ui/inputs";
 import { useToast } from "../../hooks/useToast";
 import { useConfirm } from "../../hooks/useConfirm";
 import type { Currency } from "../../types";
+import { CURRENCIES, CURRENCY_LABELS, currencyLabel } from "../../types";
 import { todayIso, formatJalali } from "../../utils/jalali";
 import { formatMoney, parseAmountInput } from "../../utils/num";
 import { uid } from "../../utils/id";
@@ -48,7 +49,8 @@ const TYPE_OPTIONS: { value: FinTxType; label: string }[] = [
   { value: "adjustment", label: "تعدیل" },
 ];
 
-const OTHER_CURRENCY: Record<Currency, Currency> = { USD: "IRT", IRT: "USD" };
+/** Exchange: the two OTHER currencies become selectable destinations. */
+const otherCurrencies = (c: Currency): Currency[] => CURRENCIES.filter((x) => x !== c) as Currency[];
 
 export interface TxFormInitial {
   type?: FinTxType;
@@ -92,6 +94,8 @@ export function TransactionFormModal({ open, onClose, initial, editTx }: Transac
   const [destAccountId, setDestAccountId] = useState<string | null>(null);
   const [affectsBalance, setAffectsBalance] = useState(true);
   const [destAmount, setDestAmount] = useState<number | null>(null);
+  /** Exchange destination currency — selectable among the other two. */
+  const [destCurrency, setDestCurrency] = useState<Currency>("USD");
   const [exchangeRate, setExchangeRate] = useState<number | null>(null);
   const [description, setDescription] = useState("");
   const [reference, setReference] = useState("");
@@ -124,6 +128,7 @@ export function TransactionFormModal({ open, onClose, initial, editTx }: Transac
       setDestAccountId(editTx.destAccountId ?? null);
       setAffectsBalance(editTx.affectsBalance);
       setDestAmount(editTx.destAmount ?? null);
+      setDestCurrency(editTx.destCurrency ?? otherCurrencies(editTx.currency)[0]);
       setExchangeRate(editTx.exchangeRate ?? null);
       setDescription(editTx.description ?? "");
       setReference(editTx.reference ?? "");
@@ -136,9 +141,9 @@ export function TransactionFormModal({ open, onClose, initial, editTx }: Transac
       setDate(initial?.date ?? todayIso());
       setSourceAccountId(initial?.sourceAccountId ?? null);
       setDestAccountId(initial?.destAccountId ?? null);
-      // Settlement flows always start informational OFF (they move real money).
       setAffectsBalance(true);
       setDestAmount(null);
+      setDestCurrency(otherCurrencies(initial?.currency ?? settings.defaultCurrency)[0]);
       setExchangeRate(null);
       setDescription("");
       setReference("");
@@ -146,8 +151,8 @@ export function TransactionFormModal({ open, onClose, initial, editTx }: Transac
     }
   }, [open, editTx, initial, settings.defaultCurrency]);
 
-  const destCurrency: Currency | null =
-    type === "exchange" ? OTHER_CURRENCY[currency] : null;
+  const destCurrencyEffective: Currency | null =
+    type === "exchange" ? (destCurrency === currency ? otherCurrencies(currency)[0] : destCurrency) : null;
 
   const balances = useMemo(
     () => (accounts && allTx ? computeAllAccountBalances(accounts, allTx) : null),
@@ -170,7 +175,7 @@ export function TransactionFormModal({ open, onClose, initial, editTx }: Transac
       .map((a) => ({
         id: a.id,
         title: a.name,
-        subtitle: `${a.currency === "USD" ? "دلار" : "تومان"} — مانده: ${formatMoney(
+        subtitle: `${currencyLabel(a.currency)} — مانده: ${formatMoney(
           balances?.get(a.id)?.balance ?? 0,
           a.currency,
         )}`,
@@ -190,10 +195,10 @@ export function TransactionFormModal({ open, onClose, initial, editTx }: Transac
       destAccountId,
       affectsBalance,
       destAmount,
-      destCurrency,
+      destCurrency: destCurrencyEffective,
       exchangeRate,
     }),
-    [type, partyId, amount, currency, date, description, reference, category, sourceAccountId, destAccountId, affectsBalance, destAmount, destCurrency, exchangeRate],
+    [type, partyId, amount, currency, date, description, reference, category, sourceAccountId, destAccountId, affectsBalance, destAmount, destCurrencyEffective, exchangeRate],
   );
 
   // Live validation (non-blocking) for inline errors.
@@ -208,15 +213,13 @@ export function TransactionFormModal({ open, onClose, initial, editTx }: Transac
     setInsufficient(res.insufficientFunds ?? null);
   }, [liveInput, accounts, balances]);
 
-  // Auto-compute the exchange rate from the two amounts (تومان بر دلار).
+  // Auto-compute the exchange rate from the two amounts (dest per source).
   useEffect(() => {
     if (type !== "exchange") return;
     if (amount != null && amount > 0 && destAmount != null && destAmount > 0) {
-      const usd = currency === "USD" ? amount : destAmount;
-      const irt = currency === "IRT" ? amount : destAmount;
-      if (usd > 0) setExchangeRate(Math.round((irt / usd) * 100) / 100);
+      setExchangeRate(Math.round((destAmount / amount) * 100) / 100);
     }
-  }, [type, amount, destAmount, currency]);
+  }, [type, amount, destAmount]);
 
   const pickFiles = (files: FileList | File[] | null) => {
     if (!files) return;
@@ -430,10 +433,10 @@ export function TransactionFormModal({ open, onClose, initial, editTx }: Transac
         </div>
 
         {/* Exchange destination side */}
-        {type === "exchange" && destCurrency && (
+        {type === "exchange" && destCurrencyEffective && (
           <div className="grid gap-4 rounded-2xl border border-brand-500/20 bg-brand-500/[0.04] p-3.5 sm:grid-cols-2">
             <FormField
-              label={`مبلغ مقصد (${destCurrency === "USD" ? "دلار" : "تومان"})`}
+              label={`مبلغ مقصد`}
               required
               error={fieldErrors.destAmount}
             >
@@ -446,9 +449,31 @@ export function TransactionFormModal({ open, onClose, initial, editTx }: Transac
                   onChange={(e) => setDestAmount(parseAmountInput(e.target.value))}
                   placeholder="0"
                 />
+                <div className="flex shrink-0 overflow-hidden rounded-[0.85rem] border border-ink-900/10 dark:border-white/10">
+                  {otherCurrencies(currency).map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => {
+                        setDestCurrency(c);
+                        setDestAccountId(null);
+                      }}
+                      className={`px-3 text-xs font-bold transition-colors ${
+                        destCurrencyEffective === c
+                          ? "bg-brand-500 text-white"
+                          : "bg-white/60 text-ink-500 hover:bg-white/90 dark:bg-white/5 dark:text-ink-300 dark:hover:bg-white/10"
+                      }`}
+                    >
+                      {CURRENCY_LABELS[c]}
+                    </button>
+                  ))}
+                </div>
               </div>
             </FormField>
-            <FormField label="نرخ تبدیل (تومان بر دلار)" hint="به‌طور خودکار از دو مبلغ محاسبه می‌شود">
+            <FormField
+              label="نرخ تبدیل"
+              hint={`${currencyLabel(destCurrencyEffective)} به ازای هر ۱ ${currencyLabel(currency)} — از دو مبلغ محاسبه می‌شود`}
+            >
               <Input dir="ltr" className="num text-right" value={exchangeRate ?? ""} readOnly />
             </FormField>
           </div>
@@ -492,7 +517,7 @@ export function TransactionFormModal({ open, onClose, initial, editTx }: Transac
                   onSelect={setSourceAccountId}
                   placeholder={
                     type === "exchange"
-                      ? `حساب ${currency === "USD" ? "دلاری" : "تومانی"}…`
+                      ? `حساب ${currencyLabel(currency)}…`
                       : "انتخاب حساب…"
                   }
                 />
@@ -502,14 +527,14 @@ export function TransactionFormModal({ open, onClose, initial, editTx }: Transac
               <FormField label={destLabel} error={fieldErrors.destAccountId} required={type === "receipt" || type === "transfer" || type === "exchange"}>
                 <SearchSelect
                   items={accountItems(
-                    type === "exchange" ? destCurrency : type === "transfer" ? currency : currency,
+                    type === "exchange" ? destCurrencyEffective : currency,
                     sourceAccountId,
                   )}
                   value={destAccountId}
                   onSelect={setDestAccountId}
                   placeholder={
                     type === "exchange"
-                      ? `حساب ${destCurrency === "USD" ? "دلاری" : "تومانی"}…`
+                      ? `حساب ${currencyLabel(destCurrencyEffective)}…`
                       : "انتخاب حساب…"
                   }
                 />
