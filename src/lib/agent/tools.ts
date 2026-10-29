@@ -29,6 +29,8 @@ import {
 import { todayIso, formatJalali, toLatinDigits, isoFromDate, dateFromIso } from "../../utils/jalali";
 import { formatMoney } from "../../utils/num";
 import { customerFullName, findDuplicatePassport, createCustomer } from "../../db/customers";
+import { createRepresentative } from "../../db/reps";
+import { createList } from "../../db/lists";
 import { createRequest, setRequestIssued } from "../../db/requests";
 import { createEmployer } from "../../db/employers";
 import { createPayment } from "../../db/payments";
@@ -127,10 +129,15 @@ const ARG_WRAPPER_KEYS = ["filters", "filter", "query", "criteria", "where", "op
 
 /** model-invented names → canonical param (applied only when the tool actually has the target AND lacks the source). */
 const ARG_ALIASES: Array<[string, string]> = [
-  ["customer_name", "customer"], ["client", "customer"], ["person", "customer"],
+  ["customer_name", "customer"], ["client", "customer"], ["person", "customer"], ["customer_id", "customer"],
   ["passport_number", "passport"], ["passport_no", "passport"],
   ["rep", "representative"], ["emp", "employer"], ["company", "employer"],
-  ["visa", "visa_type"], ["type", "visa_type"],
+  ["representative_name", "representative"], ["representative_id", "representative"], ["rep_name", "representative"],
+  ["employer_name", "employer"], ["employer_id", "employer"],
+  ["list_name", "list"], ["list_id", "list"], ["list_title", "list"], ["folder", "list"],
+  ["visa", "visa_type"], ["type", "visa_type"], ["visa_name", "visa_type"],
+  ["given_name", "first_name"], ["fname", "first_name"],
+  ["surname", "last_name"], ["family_name", "last_name"], ["lname", "last_name"],
   ["count", "limit"], ["max", "limit"], ["n", "limit"], ["first", "limit"], ["top", "limit"],
   ["q", "selector"], ["search", "selector"],
 ];
@@ -181,6 +188,21 @@ export function normalizeCallArgs(raw: Args, params: ToolParam[]): Args {
       a[to] = a[from];
       delete a[from];
     }
+  }
+  // 5) full name → first + last: models love sending {"name":"تقی احمدی"} or
+  //    {"full_name": …} to create_customer. Split it when the tool wants
+  //    first_name/last_name and lacks the combined key ("name" IS a real
+  //    param of other tools and is never touched there).
+  for (const src of ["full_name", "name"]) {
+    if (names.has(src) || !names.has("first_name") || !names.has("last_name")) continue;
+    const v = a[src];
+    if (v == null) continue;
+    if (typeof v !== "string" || !v.trim()) { delete a[src]; continue; }
+    if ("first_name" in a || "last_name" in a) { delete a[src]; continue; } // parts already given
+    const parts = v.trim().split(/\s+/);
+    a.first_name = parts[0];
+    if (parts.length > 1) a.last_name = parts.slice(1).join(" ");
+    delete a[src];
   }
   return a;
 }
@@ -502,7 +524,7 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
   entries.push({
     def: {
       name: "query_table",
-      description: "کوئری عمومی روی هر جدول مجاز (escaped hatch برای هر چیزی که ابزار اختصاصی ندارد). filters: {فیلد: مقدار} یا {فیلد: {min,max}} برای بازهٔ عددی؛ رشته‌ها حساس-به-حروف نیستند.",
+      description: "کوئری عمومی روی هر جدول مجاز (escape hatch برای هر چیزی که ابزار اختصاصی ندارد). نام فیلدها را خودت با نام واقعی جدول بده (describe_schema) — ولی نام‌های رایج مثل issued_at، registered، status=issued/pending و نامِ (به‌جای id) نماینده/لیست/کارفرما/مشتری هم خودکار فهمیده می‌شوند. filters: {فیلد: مقدار} یا {فیلد: {min,max}} برای بازهٔ عددی.",
       params: [
         P("table", "string", "نام جدول", true),
         P("filters", "object", "مثل {\"listId\":\"l1\"} یا {\"quotedAmount\":{\"min\":100}}"),
@@ -519,7 +541,48 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
       if (!t || !tableIsReadable(t)) return fail(`جدول «${t ?? "?"}» قابل خواندن نیست`, `جدول‌های مجاز: ${READABLE_TABLES.join("، ")}`);
       let rows: Record<string, unknown>[] = await db.table(t).toArray();
       if (!bool(a.include_archived)) rows = rows.filter((r) => !r.archivedAt);
-      const filters = (a.filters && typeof a.filters === "object" && !Array.isArray(a.filters) ? a.filters : {}) as Record<string, unknown>;
+      const sample = rows[0] ?? {};
+      let filters: Record<string, unknown> = (a.filters && typeof a.filters === "object" && !Array.isArray(a.filters) ? a.filters : {}) as Record<string, unknown>;
+
+      /* ---- model-friendly filter repair (issued_at, status:issued, names…) ----
+       * The model invents snake_case fields and pseudo-statuses; map them onto
+       * the REAL fields of this table so the escape hatch actually works. */
+      const FIELD_ALIASES: Record<string, string> = {
+        issued_at: "issuedAt", issuedate: "issuedAt", issue_date: "issuedAt",
+        registered: "registrationDate", registered_at: "registrationDate", registration_date: "registrationDate", registration: "registrationDate", date: "registrationDate",
+        customer_id: "customerId", customerid: "customerId",
+        representative_id: "representativeId", rep_id: "representativeId", representative: "representativeId",
+        list_id: "listId", list: "listId", employer_id: "employerId", employer: "employerId",
+        visa_type: "visaType", passport: "passportNo", birth_date: "birthDate",
+      };
+      const mapped: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(filters)) {
+        const nk = k in sample ? k : (FIELD_ALIASES[k.toLowerCase().replace(/[\s\-]/g, "_")] && FIELD_ALIASES[k.toLowerCase().replace(/[\s\-]/g, "_")] in sample ? FIELD_ALIASES[k.toLowerCase().replace(/[\s\-]/g, "_")] : k);
+        mapped[nk] = v;
+      }
+      filters = mapped;
+      // {status: issued|pending} → {issued: true|false} on tables that have it
+      if ("status" in filters && !("status" in sample) && "issued" in sample) {
+        const s = norm(String(filters.status));
+        if (["issued", "صادر شده", "صادرشده", "issued=true"].includes(s)) { filters.issued = true; delete filters.status; }
+        else if (["pending", "در حال کار", "درحالکار", "pending=true"].includes(s)) { filters.issued = false; delete filters.status; }
+      }
+      // date-ish values: "1405/08/06" → "2026-10-28"
+      for (const k of Object.keys(filters)) {
+        if ((/(At|Date)$/.test(k) || k === "date") && typeof filters[k] === "string") {
+          filters[k] = isoDate(filters[k] as string) ?? filters[k];
+        }
+      }
+      // entity NAMES → ids (representative/list/employer/customer)
+      if (typeof filters.representativeId === "string") { const r = await findRep(filters.representativeId); if (r) filters.representativeId = r.id; }
+      if (typeof filters.listId === "string") { const l = await findList(filters.listId); if (l) filters.listId = l.id; }
+      if (typeof filters.employerId === "string") { const e = await findEmployer(filters.employerId); if (e) filters.employerId = e.id; }
+      if (typeof filters.customerId === "string") {
+        const hits = await findCustomers(filters.customerId);
+        if (hits.length === 1) filters.customerId = hits[0].id;
+        else if (hits.length > 1) filters.customerId = hits.map((c) => c.id); // any-of
+      }
+
       rows = rows.filter((row) => {
         for (const [k, want] of Object.entries(filters)) {
           const have = row[k];
@@ -531,6 +594,12 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
             continue;
           }
           if (have == null || want == null) { if (have !== want) return false; continue; }
+          if (Array.isArray(want)) {
+            const wv = want.map((x) => String(x).toLowerCase());
+            const hv = Array.isArray(have) ? have.map(String) : [String(have).toLowerCase()];
+            if (!hv.some((h) => wv.includes(h))) return false;
+            continue;
+          }
           const hv = Array.isArray(have) ? have.map(String) : String(have).toLowerCase();
           const wv = String(want).toLowerCase();
           if (Array.isArray(hv) ? !hv.includes(wv) : hv !== wv) return false;
@@ -720,14 +789,21 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
       writes: true,
     },
     run: async (a) => {
+      // Failure hints list the AVAILABLE options inline, so the model can
+      // self-correct in ONE round (or ask the user) instead of flailing —
+      // the exact «نام لیست داده نشده است ×5» production failure.
+      const reps = await allReps();
+      const lists = await allLists();
+      const repNames = reps.map((r) => r.name).join("، ") || "(هیچ نماینده‌ای ثبت نشده — اول با create_representative بساز)";
+      const listNames = lists.map((l) => l.name).join("، ") || "(هیچ لیستی ثبت نشده — اول با create_list بساز)";
       const repArg = str(a.representative);
-      if (!repArg) return fail("نام نماینده داده نشده است", "از کاربر بپرس تحت کدام نماینده ثبت شود");
+      if (!repArg) return fail("پارامتر representative داده نشده است", `از کاربر بپرس تحت کدام نماینده ثبت شود. نمایندگان موجود: ${repNames}`);
       const rep = await findRep(repArg);
-      if (!rep) return fail("نماینده پیدا نشد", "از کاربر بپرس تحت کدام نماینده ثبت شود؛ فهرست: resolve_names(kind=representative)");
+      if (!rep) return fail(`نماینده «${repArg}» پیدا نشد`, `نمایندگان موجود: ${repNames} — یکی از همین نام‌ها را دقیق بده، یا اگر نمایندهٔ جدید است اول با create_representative بساز`);
       const listArg = str(a.list);
-      if (!listArg) return fail("نام لیست داده نشده است", "از کاربر بپرس داخل کدام لیست ثبت شود");
+      if (!listArg) return fail("پارامتر list داده نشده است", `از کاربر بپرس داخل کدام لیست ثبت شود. لیست‌های موجود: ${listNames}`);
       const list = await findList(listArg);
-      if (!list) return fail("لیست پیدا نشد", "از کاربر بپرس داخل کدام لیست ثبت شود؛ فهرست: resolve_names(kind=list)");
+      if (!list) return fail(`لیست «${listArg}» پیدا نشد`, `لیست‌های موجود: ${listNames} — یکی از همین نام‌ها را دقیق بده، یا اگر لیست جدید است اول با create_list بساز`);
       const empRaw = str(a.employer);
       let employerId: string | null = null;
       if (empRaw && empRaw !== "none") {
@@ -886,6 +962,26 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
     },
   });
 
+  entries.push({
+    def: {
+      name: "create_representative",
+      description: "ثبت نمایندهٔ جدید — برای هر درخواستِ «نماینده جدید اضافه کن / بساز». اگر تلفن نگفته‌اند، خالی بگذار و اسم را ثبت کن.",
+      params: [
+        P("name", "string", "نام نماینده", true), P("phone", "string", "تلفن"),
+        P("contact_info", "string", "اطلاعات تماس"), P("notes", "string", "یادداشت"),
+      ],
+      writes: true,
+    },
+    run: async (a) => {
+      const name = str(a.name);
+      if (!name) return fail("نام نماینده داده نشده است", "از کاربر بپرس نام نماینده چیست");
+      const existing = (await allReps()).find((r) => norm(r.name) === norm(name));
+      if (existing) return fail(`نماینده «${existing.name}» از قبل ثبت است`, `id موجود: ${existing.id} — همان را استفاده کن یا از کاربر بپرس`);
+      const rep = await createRepresentative({ name, phone: str(a.phone), contactInfo: str(a.contact_info), notes: str(a.notes) });
+      return ok({ id: rep.id, name: rep.name, phone: rep.phone ?? null }, `نماینده «${rep.name}» ثبت شد`);
+    },
+  });
+
   /* ---------------------------------- lists ------------------------------ */
 
   entries.push({
@@ -910,6 +1006,30 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
         id: l.id, name: l.name, description: l.description ?? null,
         customers: customers.map((c) => ({ id: c.id, name: customerFullName(c), representative: reps.find((r) => r.id === c.representativeId)?.name ?? "—", registered: c.registrationDate })),
       }, `لیست «${l.name}» — ${customers.length} مشتری`);
+    },
+  });
+
+  entries.push({
+    def: {
+      name: "create_list",
+      description: "ثبت لیست جدید — گروه‌بندی مشتریان (مثل «ویزای کاری ایران فوری» یا «لیست کابل»). برای «لیست جدید بساز».",
+      params: [
+        P("name", "string", "نام لیست", true), P("description", "string", "توضیح"),
+        P("category", "string", "دسته"),
+        P("start_date", "string", "تاریخ شروع — میلادی یا شمسی"), P("end_date", "string", "تاریخ پایان — میلادی یا شمسی"),
+      ],
+      writes: true,
+    },
+    run: async (a) => {
+      const name = str(a.name);
+      if (!name) return fail("نام لیست داده نشده است", "از کاربر بپرس نام لیست چیست");
+      const existing = (await allLists()).find((l) => norm(l.name) === norm(name));
+      if (existing) return fail(`لیست «${existing.name}» از قبل ثبت است`, `id موجود: ${existing.id} — همان را استفاده کن یا از کاربر بپرس`);
+      const list = await createList({
+        name, description: str(a.description), category: str(a.category),
+        startDate: isoDate(str(a.start_date)), endDate: isoDate(str(a.end_date)),
+      });
+      return ok({ id: list.id, name: list.name }, `لیست «${list.name}» ساخته شد`);
     },
   });
 
@@ -1005,6 +1125,63 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
         total: reqs.length, issued: reqs.filter((r) => r.issued).length, pending: reqs.filter((r) => !r.issued).length,
         applied_filters: echo,
       }, `${reqs.length.toLocaleString("fa-IR")} درخواست`);
+    },
+  });
+
+  entries.push({
+    def: {
+      name: "stats_requests",
+      description: "آمار درخواست‌ها به تفکیک چیزی که کاربر خواسته (group_by): نماینده / لیست / نوع ویزا / وضعیت / کارفرما. پاسخ استانداردِ «ویزاهای صادرشدهٔ تاریخ X به تفکیک نماینده» — در یک فراخوانی، بدون کوئری خام.",
+      params: [
+        P("group_by", "string", "representative | list | visa_type | status | employer (پیش‌فرض representative)", false, { enum: ["representative", "list", "visa_type", "status", "employer"] }),
+        ...reqFilterArgs,
+      ],
+      writes: false,
+    },
+    run: async (a) => {
+      const f = {
+        status: str(a.status), rep: str(a.representative), list: str(a.list), emp: str(a.employer),
+        cust: str(a.customer), vtype: str(a.visa_type),
+        rfrom: isoDate(str(a.registered_from)), rto: isoDate(str(a.registered_to)),
+        ifrom: isoDate(str(a.issued_from)), ito: isoDate(str(a.issued_to)),
+      };
+      const groupBy = str(a.group_by) ?? "representative";
+      const { reqs, customers } = await filterRequests(f);
+      const custById = new Map(customers.map((c) => [c.id, c]));
+      const reps = await allReps(); const lists = await allLists(); const emps = await allEmployers();
+      const keyOf = (r: import("../../types").VisaRequest): string => {
+        switch (groupBy) {
+          case "list": return lists.find((x) => x.id === r.listId)?.name ?? "بدون لیست";
+          case "visa_type": return r.visaType || "نامشخص";
+          case "status": return r.issued ? "صادر شده" : "در حال کار";
+          case "employer": {
+            const empId = custById.get(r.customerId)?.employerId;
+            return empId ? emps.find((e) => e.id === empId)?.name ?? "کارفرمای نامشخص" : "بدون کارفرما";
+          }
+          default: return reps.find((x) => x.id === r.representativeId)?.name ?? "بدون نماینده";
+        }
+      };
+      const groups = new Map<string, { key: string; total: number; issued: number; pending: number }>();
+      for (const r of reqs) {
+        const k = keyOf(r);
+        const g = groups.get(k) ?? { key: k, total: 0, issued: 0, pending: 0 };
+        g.total++;
+        if (r.issued) g.issued++; else g.pending++;
+        groups.set(k, g);
+      }
+      const echo = {
+        ...(f.status ? { status: f.status } : {}),
+        ...(f.rep ? { representative: f.rep } : {}), ...(f.list ? { list: f.list } : {}), ...(f.emp ? { employer: f.emp } : {}),
+        ...(f.cust ? { customer: f.cust } : {}), ...(f.vtype ? { visa_type: f.vtype } : {}),
+        ...(f.rfrom ? { registered_from: f.rfrom } : {}), ...(f.rto ? { registered_to: f.rto } : {}),
+        ...(f.ifrom ? { issued_from: f.ifrom } : {}), ...(f.ito ? { issued_to: f.ito } : {}),
+      };
+      return ok({
+        group_by: groupBy,
+        totals: { total: reqs.length, issued: reqs.filter((r) => r.issued).length, pending: reqs.filter((r) => !r.issued).length },
+        groups: [...groups.values()].sort((x, y) => y.total - x.total),
+        applied_filters: echo,
+      }, `آمار ${reqs.length.toLocaleString("fa-IR")} درخواست به تفکیک ${groupBy}`);
     },
   });
 
@@ -1174,51 +1351,107 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
   entries.push({
     def: {
       name: "download_documents",
-      description: "دانلود ZIP مدارک مشتریان — گروه‌بندی به‌صورت نماینده/مشتری و نام‌گذاری فایل‌ها به نام خود شخص. customer_ids را از قبل با ابزارهای جستجو بگیر.",
-      params: [P("customer_ids", "array", "آرایه‌ای از id مشتریان", true, { items: { type: "string" } })],
+      description: "ساخت و دانلود ZIP مدارک مشتریان. دو راه: (۱) customer_ids از قبل گرفته‌ای؛ (۲) فیلتر بده و خودِ ابزار مشتریان را پیدا می‌کند — مثل «فایل‌های ویزاهای صادرشدهٔ تاریخ X را zip کن»: status=issued + issued_from/issued_to. ساختار: نماینده/مشتری/مدرک.jpg + عکس پروفایل. برای خروجی zip فقط همین ابزار کافی است — راه‌حل دستی پیشنهاد نکن.",
+      params: [
+        P("customer_ids", "array", "آرایه‌ای از id مشتریان (اگر از قبل داری)", false, { items: { type: "string" } }),
+        P("status", "string", "pending | issued — فیلتر درخواست", false, { enum: ["pending", "issued", "all"] }),
+        P("representative", "string", "نام/id نماینده"), P("list", "string", "نام/id لیست"),
+        P("employer", "string", "نام/id کارفرما"), P("customer", "string", "نام/پاسپورت/id یک مشتری خاص"),
+        P("visa_type", "string", "نوع ویزا"),
+        P("registered_from", "string", "از تاریخ ثبت — میلادی یا شمسی"), P("registered_to", "string", "تا تاریخ ثبت"),
+        P("issued_from", "string", "از تاریخ صدور — میلادی یا شمسی"), P("issued_to", "string", "تا تاریخ صدور"),
+        P("zip_name", "string", "نام دلخواه فایل zip (بدون پسوند)"),
+        P("include_profile_photo", "boolean", "عکس پروفایل هم داخل zip باشد؟ (پیش‌فرض بله)"),
+      ],
       writes: true,
     },
     run: async (a) => {
       const ids = Array.isArray(a.customer_ids) ? a.customer_ids.filter((x): x is string => typeof x === "string") : [];
-      if (ids.length === 0) return fail("customer_ids خالی است", "اول با list_customers id ها را بگیر");
-      const all = await db.customers.bulkGet(ids);
-      const found = all.filter((c): c is Customer => !!c);
-      if (found.length === 0) return fail("هیچ مشتری معتبری پیدا نشد");
+      const f = {
+        status: str(a.status), rep: str(a.representative), list: str(a.list), emp: str(a.employer),
+        cust: str(a.customer), vtype: str(a.visa_type),
+        rfrom: isoDate(str(a.registered_from)), rto: isoDate(str(a.registered_to)),
+        ifrom: isoDate(str(a.issued_from)), ito: isoDate(str(a.issued_to)),
+      };
+      const hasFilter = !!(f.status || f.rep || f.list || f.emp || f.cust || f.vtype || f.rfrom || f.rto || f.ifrom || f.ito);
+      let found: Customer[];
+      if (ids.length > 0) {
+        const all = await db.customers.bulkGet(ids);
+        found = all.filter((c): c is Customer => !!c);
+      } else if (hasFilter) {
+        // The tool does the heavy lifting: filter → matching customers, in
+        // one call — no more «اول id ها را پیدا کن بعد zip بزن» dead-ends.
+        const { reqs, customers } = await filterRequests(f);
+        const idsInOrder = [...new Set(reqs.map((r) => r.customerId))];
+        const byId = new Map(customers.map((c) => [c.id, c]));
+        found = idsInOrder.map((id) => byId.get(id)).filter((c): c is Customer => !!c);
+        if (found.length === 0) {
+          return fail("هیچ درخواستی با این فیلترها پیدا نشد", "فیلترها را با سؤال کاربر تطبیق بده؛ وضعیت/تاریخ‌ها را با list_requests چک کن");
+        }
+      } else {
+        return fail("نه customer_ids دادی و نه فیلتر — یکی لازم است", "مثلاً برای «مدارک ویزاهای صادرشدهٔ تاریخ X»: status=issued + issued_from/issued_to=X؛ یا representative=نام نماینده؛ یا customer_ids=[…]");
+      }
       const reps = await allReps();
       const dts = (await db.docTypes.toArray()).filter((d) => !d.archivedAt);
       const labelOf = (kind: string) => dts.find((d) => d.id === kind)?.label ?? (kind === "other" ? "سایر" : kind === "receipt" ? "رسید" : kind);
+      const includePhoto = a.include_profile_photo === undefined ? true : bool(a.include_profile_photo) !== false;
       const { default: JSZip } = await import("jszip");
       const zip = new JSZip();
       let files = 0;
+      const noDocs: string[] = [];
       const usedNames = new Set<string>();
       const seen = new Map<string, number>();
+      const perRep = new Map<string, number>();
       for (const c of found) {
         const docs = (await getAttachmentsFor(c.id)).filter((d) => !d.paymentId && d.mime.startsWith("image/"));
         const rep = reps.find((r) => r.id === c.representativeId);
         const repDir = rep ? rep.name.replace(/[\\/:*?"<>|]/g, "-") : "بدون نماینده";
+        perRep.set(repDir, (perRep.get(repDir) ?? 0) + 1);
         const base = customerFullName(c).replace(/[\\/:*?"<>|]/g, "-");
         const idx = (seen.get(base) ?? 0) + 1;
         seen.set(base, idx);
         const custDir = `${repDir}/${base}${seen.get(base)! > 1 ? `-${idx}` : ""}`;
         const perKind = new Map<string, number>();
+        let personal = 0;
+        const addFile = (path: string, content: Uint8Array) => {
+          let candidate = path;
+          let k = 2;
+          while (usedNames.has(candidate)) candidate = path.replace(/(\.[a-z0-9]+)$/, `-${k++}$1`);
+          usedNames.add(candidate);
+          zip.file(candidate, content);
+          files++;
+          personal++;
+        };
         for (const d of docs) {
           const n = (perKind.get(d.kind) ?? 0) + 1;
           perKind.set(d.kind, n);
-          const label = labelOf(d.kind);
-          const name = `${custDir}/${label}${n > 1 ? `-${n}` : ""}.jpg`;
-          let candidate = name;
-          let k = 2;
-          while (usedNames.has(candidate)) candidate = name.replace(/\.jpg$/, `-${k++}.jpg`);
-          usedNames.add(candidate);
-          zip.file(candidate, d.blob);
-          files++;
+          addFile(`${custDir}/${labelOf(d.kind)}${n > 1 ? `-${n}` : ""}.jpg`, new Uint8Array(await d.blob.arrayBuffer()));
         }
+        // Profile photo (dataURL) — included by default.
+        if (includePhoto && c.photo && c.photo.startsWith("data:")) {
+          const mime = /^data:([^;,]+)/.exec(c.photo)?.[1] ?? "image/jpeg";
+          const b64 = c.photo.slice(c.photo.indexOf(",") + 1);
+          const bin = atob(b64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const ext = mime.includes("png") ? "png" : mime.includes("webp") ? "webp" : "jpg";
+          addFile(`${custDir}/پروفایل.${ext}`, bytes);
+        }
+        if (personal === 0) noDocs.push(customerFullName(c));
       }
-      if (files === 0) return fail("این مشتریان مدرک تصویری ندارند");
+      if (files === 0) {
+        return fail("هیچ مدرکی برای این مشتریان ثبت نشده است", `مشتریان: ${found.slice(0, 10).map(customerFullName).join("، ")}${found.length > 10 ? "…" : ""} — به کاربر بگو مدارکی آپلود نشده و بعد از آپلود دوباره بخواه`);
+      }
       const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
-      const zipName = `مدارک مشتریان - ${todayIso()}.zip`;
+      const customName = str(a.zip_name)?.replace(/[\\/:*?"<>|]/g, "-");
+      const zipName = customName ? `${customName}.zip` : `مدارک مشتریان - ${todayIso()}.zip`;
       downloadBlob(blob, zipName);
-      return ok({ customers: found.length, files, zip_name: zipName, structure: "نماینده/مشتری/بخش-مدرک.jpg" }, `ZIP با ${files} فایل ساخته و دانلود شد`);
+      return ok({
+        customers: found.length, files, zip_name: zipName,
+        structure: "نماینده/مشتری/بخش-مدرک.jpg (+ عکس پروفایل)",
+        per_representative: Object.fromEntries(perRep),
+        ...(noDocs.length > 0 ? { customers_without_documents: noDocs } : {}),
+      }, `ZIP با ${files.toLocaleString("fa-IR")} فایل ساخته و دانلود شد`);
     },
   });
 

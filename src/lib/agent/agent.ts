@@ -54,8 +54,10 @@ function buildSystemPrompt(tools: ToolDef[], maxRounds: number): string {
 - «TOOL RESULTS» را فقط سیستم بعد از اجرای واقعی ابزار می‌فرستد. تو هرگز خودت چنین بخشی نساز و نتیجهٔ ابزار را شبیه‌سازی نکن.
 - وقتی ابزار لازم است، جواب تو فقط و فقط JSON خالص پروتکل است — هیچ متن، توضیح یا بلوکِ کد قبل و بعدش ننویس.
 - نام ابزار را دقیقاً با زیرخط (_) از فهرست پایین کپی کن (مثلاً count_customers نه countcustomers).
-- برای هر سؤال آماری/تعدادی، قبل از جواب دادن حتماً ابزار مربوطه (db_stats، count_customers، …) را صدا بزن؛ حدس و تخمین ممنوع.
-- اگر ابزار خطا داد، args را اصلاح کن و دوباره امتحان کن؛ از جواب خطا چیزی نساز.
+- برای هر سؤال آماری/تعدادی، قبل از جواب دادن حتماً ابزار مربوطه (db_stats، count_customers، stats_requests، …) را صدا بزن؛ حدس و تخمین ممنوع.
+- اگر ابزار خطا داد، args را طبق hint اصلاح کن و دوباره امتحان کن؛ از جواب خطا چیزی نساز.
+- ⚠️ فراخوانی ناموفق را هرگز عیناً (با همان args) تکرار نکن — سیستم آن را بلاک می‌کند. هر تلاش تازه باید args اصلاح‌شده بر اساس hint داشته باشد.
+- ⚠️ در جواب نهایی هرگز تسلیم نشو و کار را به کاربر ارجاع نده (نگو «ابزار فعال نشد»، «دستی انجام بده»). ابزارها همیشه فعال‌اند؛ اگر خطا گرفتی hint را بخوان و اصلاح کن، و اگر اطلاعات ناقص است همین‌جا از کاربر بپرس — اما انجام کار وظیفهٔ توست.
 
 ## تقویم و تاریخ
 - «امروز» و ساعت فعلی بالاتر آمده، اما برای اطمینان یا سؤالات تقویمی از ابزارهای get_current_date و date_info استفاده کن.
@@ -75,6 +77,9 @@ function buildSystemPrompt(tools: ToolDef[], maxRounds: number): string {
 
 ## قوانین ثبت (نوشتاری)
 - هر مشتری الزاماً یک «نماینده» و یک «لیست» دارد. اگر کاربر نگفته، اول بپرس — حدس نزن، چیز را خودسر ثبت نکن.
+- نمایندهٔ جدید = create_representative؛ لیست جدید = create_list؛ کارفرمای جدید = create_employer. هرگز برای ساخت آن‌ها از create_customer استفاده نکن.
+- برای «آمار به تفکیک …» (نماینده/لیست/نوع ویزا/وضعیت/کارفرما) از stats_requests استفاده کن — کوئری خام نزن.
+- برای «خروجی zip مدارک» فقط download_documents کافی است — با فیلتر (status=issued + issued_from/issued_to) مستقیم بزن؛ لازم نیست اول id جمع کنی.
 - کارفرما اختیاری است؛ «بدون کارفرما» یعنی employer=null.
 - شماره پاسپورت تکراری = خطا؛ به کاربر اطلاع بده و بپرس.
 - اگر چند هم‌نام پیدا شد، از کاربر بپرس کدام منظورش است.
@@ -360,6 +365,9 @@ export async function runAgentTurn(input: AgentTurnInput, args: RunTurnArgs): Pr
   const RAW_PROTOCOL_CORRECTION =
     "⚠️ تذکر سیستم: پیام قبلی‌ات یک JSON ابزار بود که قابل اجرا نبود (ساختار یا نام ابزار نامعتبر). دوباره تلاش کن: یا (۱) یک JSON کاملاً معتبر و مطابق پروتکل بفرست — args تخت، نام ابزار دقیقاً از فهرست، بدون هیچ متن اضافه — یا (۲) جواب متنی نهایی بده. این بار حتماً نام ابزار را با زیرخط (_) و دقیقاً از فهرست ابزارهای سیستم‌پرامپت کپی کن و ساختار args را از توضیح همان ابزار پیروی کن.";
   let fakeGuardUsed = false;
+  // Signatures (name + args) of calls that FAILED this turn — identical
+  // retries are blocked by the repeat-guard below.
+  const failedSigs = new Map<string, number>();
 
   for (let round = 0; round < maxRounds; round++) {
     if (signal?.aborted) return { kind: "aborted" };
@@ -406,13 +414,31 @@ export async function runAgentTurn(input: AgentTurnInput, args: RunTurnArgs): Pr
     for (const call of proto.calls) {
       if (signal?.aborted) return { kind: "aborted" };
       events?.onStatus?.(`اجرای ${call.name}…`);
-      const result = await registry.execute(call);
+      // Repeat-guard: a call IDENTICAL to one that already failed this turn
+      // (same name + same args) is NOT executed again — the model gets a
+      // blocking error instead. Kills the «۵ بار همان فراخوانی خطادار» burnout.
+      const sig = `${normalizeToolName(call.name)}|${JSON.stringify(call.args ?? {})}`;
+      const seenFails = failedSigs.get(sig) ?? 0;
+      let result: ToolCallResult;
+      if (seenFails >= 1) {
+        result = {
+          id: call.id, name: call.name, ok: false, ms: 0,
+          data: {
+            error: "این فراخوانی عیناً همان فراخوانی قبلی است که خطا داد — دوباره اجرا نشد",
+            hint: "تکرار بی‌تغییر ممنوع است: args را دقیقاً طبق hint قبلی اصلاح کن (نام‌های موجود را از همان hint کپی کن) یا اگر اطلاعات از کاربر لازم است، همین حالا جواب نهایی بده و از او بپرس",
+          },
+          summary: "تکرار فراخوانی ناموفق — اجرا نشد",
+        };
+      } else {
+        result = await registry.execute(call);
+        if (!result.ok) failedSigs.set(sig, seenFails + 1);
+      }
       steps.push({ call, result });
       roundResults.push(result);
       events?.onToolResult?.(result);
     }
 
-    const textPart = [
+    let textPart = [
       "TOOL RESULTS (use them; do NOT repeat these calls unless the data is insufficient):",
       ...roundResults.map((r) =>
         [
@@ -424,6 +450,11 @@ export async function runAgentTurn(input: AgentTurnInput, args: RunTurnArgs): Pr
           .join("\n"),
       ),
     ].join("\n\n");
+    // Every call in this round failed → steer the model out of the loop:
+    // fix args per hint, or ask the user and answer. Never "do it manually".
+    if (roundResults.length > 0 && roundResults.every((r) => !r.ok)) {
+      textPart += "\n\n⚠️ همهٔ فراخوانی‌های این دور خطا داد. hint هر خطا را دقیق بخوان: نام‌های مجاز و مقدارهای درست همان‌جا نوشته شده — args را با آن‌ها اصلاح کن. اگر داده‌ای که ابزار نمی‌دهد از خود کاربر باید بیاید (مثل نام نماینده یا لیست)، دیگر ابزاری صدا نزن؛ جواب نهایی بده و از کاربر بپرس. به کاربر نگو کار را دستی انجام بده — انجام دادنِ کار وظیفهٔ توست.";
+    }
     const contentParts: ContentPart[] = [{ type: "text", text: textPart }];
     for (const r of roundResults) if (r.image) contentParts.push({ type: "image_url", image_url: { url: r.image } });
 

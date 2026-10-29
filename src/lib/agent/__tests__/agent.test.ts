@@ -4,7 +4,7 @@
  */
 
 import "fake-indexeddb/auto";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 const memStore = new Map<string, string>();
 if (typeof globalThis.localStorage === "undefined") {
@@ -19,11 +19,31 @@ if (typeof globalThis.localStorage === "undefined") {
 }
 
 import { db } from "../../../db/schema";
-import { parseProtocol, normalizeToolName, looksLikeProtocolJson } from "../agent";
+import { parseProtocol, normalizeToolName, looksLikeProtocolJson, runAgentTurn } from "../agent";
 import { parseExtractionReply } from "../../ai/extract";
 import { parseDocSortReply, type DocSlotOption } from "../../ai/docsort";
 import { buildToolRegistry } from "../tools";
 import type { Customer, Employer, ListFolder, Representative, VisaRequest } from "../../../types";
+
+/* ---- module mocks (hoisted): no real network, no real browser download ---- */
+
+// The agent loop test drives runAgentTurn with a scripted model.
+vi.mock("../../ai/client", () => ({
+  aiChatRace: vi.fn(),
+  AiAllWorkersFailedError: class extends Error {
+    attempts: unknown[] = [];
+    constructor(attempts: unknown[] = []) {
+      super("all workers failed");
+      this.attempts = attempts;
+    }
+  },
+  testWorker: vi.fn(async () => ({ ok: true, ms: 5 })),
+}));
+import { aiChatRace } from "../../ai/client";
+
+// download_documents must not trigger a real browser download under test.
+vi.mock("../../../utils/export/tabular", () => ({ downloadBlob: vi.fn() }));
+import { downloadBlob } from "../../../utils/export/tabular";
 
 /* ------------------------------ protocol tests ----------------------------- */
 
@@ -469,5 +489,204 @@ describe("tool registry (live db)", () => {
     const res = await call(reg, "does_not_exist", {});
     expect(res.ok).toBe(false);
     expect((res.data as { hint: string }).hint).toContain("ابزار");
+  });
+
+  /* ---- this round's production failures: no create_representative tool,
+     repeated identical failing calls, «به تفکیک نماینده», zip export ---- */
+
+  it("create_representative registers a NEW representative («نماینده جدید اضافه کن»)", async () => {
+    const reg = await freshRegistry();
+    const res = await call(reg, "create_representative", { name: "مجتبی دفتر", phone: "079" });
+    expect(res.ok).toBe(true);
+    const data = res.data as { id: string; name: string };
+    expect(data.name).toBe("مجتبی دفتر");
+    expect(await db.representatives.get(data.id)).toBeTruthy();
+    // duplicate is rejected with the existing id
+    const dup = await call(reg, "create_representative", { name: "مجتبی دفتر" });
+    expect(dup.ok).toBe(false);
+    expect((dup.data as { error: string }).error).toContain("از قبل ثبت");
+    // missing name → hint, never a crash
+    const noName = await call(reg, "create_representative", {});
+    expect(noName.ok).toBe(false);
+    expect((noName.data as { hint: string }).hint).toBeTruthy();
+  });
+
+  it("create_list builds a new list", async () => {
+    const reg = await freshRegistry();
+    const res = await call(reg, "create_list", { name: "ویزای کاری ایران فوری", description: "فوری" });
+    expect(res.ok).toBe(true);
+    const data = res.data as { id: string; name: string };
+    expect(await db.lists.get(data.id)).toBeTruthy();
+    const dup = await call(reg, "create_list", { name: "ویزای کاری ایران فوری" });
+    expect(dup.ok).toBe(false);
+  });
+
+  it("create_customer splits a combined `name`/`full_name` into first + last (the «تقی احمدی» flow)", async () => {
+    const reg = await freshRegistry();
+    const res = await call(reg, "create_customer", {
+      name: "تقی احمدی", representative_name: "رضا محمدی", list_name: "لیست کابل",
+      passport_number: "TA555",
+    });
+    expect(res.ok).toBe(true);
+    const data = res.data as { name: string };
+    expect(data.name).toBe("تقی احمدی");
+  });
+
+  it("create_customer failure hints list the AVAILABLE representatives/lists inline (self-correct in one round)", async () => {
+    const reg = await freshRegistry();
+    const noRep = await call(reg, "create_customer", { first_name: "x" });
+    expect(noRep.ok).toBe(false);
+    expect((noRep.data as { hint: string }).hint).toContain("رضا محمدی");
+    const badRep = await call(reg, "create_customer", { first_name: "x", representative: "نماینده ناموجود" });
+    expect(badRep.ok).toBe(false);
+    expect((badRep.data as { hint: string }).hint).toContain("رضا محمدی");
+    const noList = await call(reg, "create_customer", { first_name: "x", representative: "رضا محمدی" });
+    expect(noList.ok).toBe(false);
+    expect((noList.data as { hint: string }).hint).toContain("لیست کابل");
+    const badList = await call(reg, "create_customer", { first_name: "x", representative: "رضا محمدی", list: "لیست ناموجود" });
+    expect(badList.ok).toBe(false);
+    expect((badList.data as { hint: string }).hint).toContain("لیست کابل");
+  });
+
+  it("stats_requests groups issued visas by representative («به تفکیک نماینده»)", async () => {
+    const reg = await freshRegistry();
+    const res = await call(reg, "stats_requests", {
+      group_by: "representative", status: "issued",
+      issued_from: "2026-10-20", issued_to: "2026-10-20",
+    });
+    expect(res.ok).toBe(true);
+    const data = res.data as {
+      group_by: string;
+      totals: { total: number; issued: number };
+      groups: { key: string; total: number; issued: number }[];
+      applied_filters: Record<string, string>;
+    };
+    expect(data.group_by).toBe("representative");
+    expect(data.totals.total).toBe(1); // only r1 was issued on 2026-10-20
+    expect(data.groups).toHaveLength(1);
+    expect(data.groups[0].key).toBe("رضا محمدی");
+    expect(data.groups[0].issued).toBe(1);
+    expect(data.applied_filters.issued_from).toBe("2026-10-20");
+    expect(data.applied_filters.status).toBe("issued");
+  });
+
+  it("query_table repairs model-invented filters: {status:'issued', issued_at} → issued:true + issuedAt (the exact production call)", async () => {
+    const reg = await freshRegistry();
+    const res = await call(reg, "query_table", {
+      table: "requests",
+      filters: { status: "issued", issued_at: "2026-10-20" },
+    });
+    expect(res.ok).toBe(true);
+    const data = res.data as { total: number; rows: { id: string }[] };
+    expect(data.total).toBe(1);
+    expect(data.rows[0].id).toBe("r1");
+  });
+
+  it("query_table repairs Jalali date values and entity names in filters", async () => {
+    const reg = await freshRegistry();
+    // 2026-10-20 = ۱۴۰۵/۰۷/۲۸
+    const res = await call(reg, "query_table", {
+      table: "requests",
+      filters: { issued_at: "۱۴۰۵/۰۷/۲۸" },
+    });
+    expect(res.ok).toBe(true);
+    expect((res.data as { total: number }).total).toBe(1);
+    // representative NAME → representativeId
+    const byName = await call(reg, "query_table", {
+      table: "requests",
+      filters: { representative: "رضا محمدی" },
+    });
+    expect((byName.data as { total: number }).total).toBe(2);
+  });
+
+  it("download_documents resolves customers FROM FILTERS and builds the ZIP (the «ویزاهای صادرشده را zip کن» flow)", async () => {
+    const reg = await freshRegistry();
+    // احمد (c1) got issued on 2026-10-20; give him a doc + profile photo.
+    await db.attachments.add({
+      id: "a1", customerId: "c1", paymentId: null, kind: "other",
+      name: "pass.jpg", mime: "image/jpeg", size: 3,
+      blob: new Blob(["xyz"], { type: "image/jpeg" }), createdAt: T,
+    } as never);
+    await db.customers.update("c1", { photo: "data:image/png;base64,aGVsbG8=" });
+    const res = await call(reg, "download_documents", {
+      status: "issued", issued_from: "2026-10-20", issued_to: "2026-10-20",
+      zip_name: "ویزاهای صادرشده ۶ آبان",
+    });
+    expect(res.ok).toBe(true);
+    const data = res.data as { customers: number; files: number; zip_name: string; per_representative: Record<string, number> };
+    expect(data.customers).toBe(1); // only احمد — زهرا's request is pending
+    expect(data.files).toBe(2); // 1 document + 1 profile photo
+    expect(data.zip_name).toContain("۶ آبان");
+    expect(data.per_representative["رضا محمدی"]).toBe(1);
+    expect(downloadBlob).toHaveBeenCalled();
+    // customer_ids path still works
+    (downloadBlob as Mock).mockClear();
+    const byIds = await call(reg, "download_documents", { customer_ids: ["c1", "c2"] });
+    expect(byIds.ok).toBe(true);
+    expect((byIds.data as { customers: number }).customers).toBe(2);
+    // neither ids nor filters → helpful failure, no crash
+    const none = await call(reg, "download_documents", {});
+    expect(none.ok).toBe(false);
+    expect((none.data as { hint: string }).hint).toContain("issued_from");
+  });
+});
+
+/* ------------------- agent loop: repeat-guard (no burnout) ------------------ */
+
+describe("agent loop — identical failing calls are blocked", () => {
+  it("executes the first failure, BLOCKS the identical retry, and lets the model recover", async () => {
+    const mocked = vi.mocked(aiChatRace);
+    mocked.mockReset();
+    const fakeWorker = {
+      id: "w1", label: "اکانت ۱", url: "https://w1", key: "k", model: "m",
+      enabled: true, priority: 1, createdAt: 0, updatedAt: 0,
+    } as never;
+    const badCall = `{"tool_calls":[{"id":"c1","name":"create_customer","args":{"first_name":"تقی"}}]}`;
+    const reply = (text: string) => ({ text, worker: fakeWorker, parallel: false }) as never;
+    mocked
+      .mockResolvedValueOnce(reply(badCall))
+      .mockResolvedValueOnce(reply(badCall)) // identical retry — must be blocked
+      .mockResolvedValueOnce(reply("نماینده و لیست مدنظرتان کدام است؟"));
+
+    const res = await runAgentTurn(
+      { text: "مشتری جدید ثبت کن", files: [], history: [] },
+      { ctx: noopCtx },
+    );
+    expect(res.kind).toBe("answer");
+    if (res.kind === "answer") {
+      expect(res.steps).toHaveLength(2);
+      expect(res.steps[0].result.ok).toBe(false); // real failure (missing representative)
+      expect(res.steps[1].result.ok).toBe(false); // blocked repeat — never re-executed
+      expect(JSON.stringify(res.steps[1].result.data)).toContain("عیناً همان");
+    }
+    mocked.mockReset();
+  });
+
+  it("a call that FAILED with args A can still succeed later with FIXED args B", async () => {
+    const mocked = vi.mocked(aiChatRace);
+    mocked.mockReset();
+    const fakeWorker = {
+      id: "w1", label: "اکانت ۱", url: "https://w1", key: "k", model: "m",
+      enabled: true, priority: 1, createdAt: 0, updatedAt: 0,
+    } as never;
+    const reply = (text: string) => ({ text, worker: fakeWorker, parallel: false }) as never;
+    mocked
+      .mockResolvedValueOnce(reply(`{"tool_calls":[{"id":"c1","name":"get_customer","args":{"selector":"ناموجود"}}]}`))
+      .mockResolvedValueOnce(reply(`{"tool_calls":[{"id":"c2","name":"count_customers","args":{"representative":"رضا محمدی"}}]}`))
+      .mockResolvedValueOnce(reply("رضا محمدی ۲ مشتری دارد."));
+
+    const res = await runAgentTurn(
+      { text: "مشتری‌های رضا چند است؟", files: [], history: [] },
+      { ctx: noopCtx },
+    );
+    expect(res.kind).toBe("answer");
+    if (res.kind === "answer") {
+      expect(res.steps).toHaveLength(2);
+      expect(res.steps[0].result.ok).toBe(false); // unknown customer → real failure
+      expect(res.steps[1].result.ok).toBe(true); // different args re-ran fine (not blocked)
+      expect(((res.steps[1].result.data as { total: number }))).toBeTruthy();
+      expect((res.steps[1].result.data as { total: number }).total).toBe(2);
+    }
+    mocked.mockReset();
   });
 });
