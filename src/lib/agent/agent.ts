@@ -65,8 +65,12 @@ function buildSystemPrompt(tools: ToolDef[], maxRounds: number): string {
 ## پروتکل ابزار
 - وقتی داده یا اقدام لازم داری، جواب تو ONLY این JSON است (بدون متن اضافه):
   {"tool_calls":[{"id":"c1","name":"نام_ابزار","args":{…}},{"id":"c2","name":"…","args":{…}}]}
+- ⚠️ args همیشه تخت (flat) است — هرگز کلید تودرتو مثل filters یا query نساز؛ هر پارامتر مستقیم داخل args. مثال کامل و درست:
+  {"tool_calls":[{"id":"c1","name":"count_requests","args":{"status":"issued","issued_from":"1405/08/06","issued_to":"1405/08/06"}}]}
+- «در تاریخ X» یعنی همان X را هم به *_from و هم به *_to بده. تاریخ‌ها می‌توانند شمسی (1405/08/06) یا میلادی (2026-10-28) با ارقام فارسی یا انگلیسی باشند.
 - می‌توانی چند ابزار را در یک دور با هم صدا بزنی. نتیجه‌ها به‌صورت پیام «TOOL RESULTS» برمی‌گردند و تو دور بعدی را ادامه می‌دهی (حداکثر ${toPersianDigits(maxRounds)} دور).
 - وقتی جواب نهایی آماده است، متن عادی بنویس (نه JSON). هرگز بعد از گرفتن نتیجه، ابزار بی‌مورد تکرار نکن.
+- در نتایج ابزارهای شمارش، فیلد applied_filters نشان می‌دهد دقیقاً چه فیلتری اعمال شده — قبل از جواب، آن را با سؤال کاربر تطبیق بده؛ اگر فیلتری که کاربر خواسته در applied_filters نیست، یعنی اعمال نشده — دوباره با args درست صدا بزن.
 - برای پاسخ‌های بلند، خودت ابتدا با ابزارها داده جمع کن و بعد گزارش کامل بساز.
 
 ## قوانین ثبت (نوشتاری)
@@ -274,6 +278,13 @@ function usableReply(text: string): boolean {
   return t.length >= 2 && !/^[\s`*\-_.]+$/.test(t);
 }
 
+/** Does the text look like a raw (un-executed) tool-call protocol JSON? Used by the UI too. */
+export function looksLikeProtocolJson(text: string): boolean {
+  const t = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  if (!t.startsWith("{") || !t.endsWith("}")) return false;
+  return /"(tool_calls|toolcalls|toolCalls|function_calls|functioncalls)"\s*:/.test(t);
+}
+
 /* ------------------------------ history shaping ---------------------------- */
 
 const HISTORY_KEEP = 12;
@@ -344,6 +355,10 @@ export async function runAgentTurn(input: AgentTurnInput, args: RunTurnArgs): Pr
   const NARRATION_RE = /TOOL\s*RESULTS|نتیجه[هٔ]?\s*ابزار/i;
   const FAKE_CORRECTION =
     "⚠️ تذکر سیستم: در این نوبت هنوز هیچ ابزاری واقعاً اجرا نشده است؛ «TOOL RESULTS» و آمارهایی که نوشتی را خودت از خودت ساخته‌ای — این جعل است و مطلقاً ممنوع. قانون: هر عدد/آمار/نتیجه فقط از TOOL RESULTS واقعی همین گفتگو مجاز است. الان فقط یکی از این دو کار را بکن: (۱) اگر داده لازم داری، فقط و فقط JSON خالص پروتکل را بفرست تا ابزار واقعاً اجرا شود؛ (۲) اگر دادهٔ واقعی از TOOL RESULTSهای قبلی همین گفتگو داری، فقط از همان‌ها جواب نهایی بده.";
+  // A final reply that IS a raw protocol JSON (unparseable → never executed)
+  // also gets one corrective retry instead of being dumped on the user.
+  const RAW_PROTOCOL_CORRECTION =
+    "⚠️ تذکر سیستم: پیام قبلی‌ات یک JSON ابزار بود که قابل اجرا نبود (ساختار یا نام ابزار نامعتبر). دوباره تلاش کن: یا (۱) یک JSON کاملاً معتبر و مطابق پروتکل بفرست — args تخت، نام ابزار دقیقاً از فهرست، بدون هیچ متن اضافه — یا (۲) جواب متنی نهایی بده. این بار حتماً نام ابزار را با زیرخط (_) و دقیقاً از فهرست ابزارهای سیستم‌پرامپت کپی کن و ساختار args را از توضیح همان ابزار پیروی کن.";
   let fakeGuardUsed = false;
 
   for (let round = 0; round < maxRounds; round++) {
@@ -369,15 +384,17 @@ export async function runAgentTurn(input: AgentTurnInput, args: RunTurnArgs): Pr
 
     const proto = parseProtocol(reply.text, knownTools);
     if (proto.kind === "final") {
-      // Fabricated tool results with zero real tools executed → one retry.
-      if (steps.length === 0 && !fakeGuardUsed && round < maxRounds - 1 && NARRATION_RE.test(reply.text)) {
+      // Fabricated tool results / un-executable raw protocol JSON → one retry each.
+      const narrated = steps.length === 0 && NARRATION_RE.test(reply.text);
+      const rawProtocol = steps.length === 0 && looksLikeProtocolJson(reply.text);
+      if ((narrated || rawProtocol) && !fakeGuardUsed && round < maxRounds - 1) {
         fakeGuardUsed = true;
         messages.push({ role: "assistant", content: reply.text });
-        messages.push({ role: "user", content: FAKE_CORRECTION });
-        events?.onStatus?.("مدل داشت نتیجهٔ ابزار را از خود می‌ساخت — تذکر داده شد، تلاش مجدد…");
+        messages.push({ role: "user", content: rawProtocol ? RAW_PROTOCOL_CORRECTION : FAKE_CORRECTION });
+        events?.onStatus?.(rawProtocol ? "جواب مدل JSON ابزارِ خراب بود — اصلاح و تلاش مجدد…" : "مدل داشت نتیجهٔ ابزار را از خود می‌ساخت — تذکر داده شد، تلاش مجدد…");
         continue;
       }
-      const finalText = proto.text ?? reply.text;
+      const finalText = rawProtocol && !fakeGuardUsed ? "متأسفانه مدل پاسخ قابل استفاده‌ای نداد؛ لطفاً دوباره بپرس." : (proto.text ?? reply.text);
       const worker = reply.parallel ? `${reply.worker} (موازی)` : reply.worker;
       events?.onFinal?.(finalText, worker);
       return { kind: "answer", text: finalText, worker, steps };

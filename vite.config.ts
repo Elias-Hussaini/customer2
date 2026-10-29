@@ -39,7 +39,7 @@ export default defineConfig(({ mode }) => ({
     tailwindcss(),
     githubPagesPlugin(),
     VitePWA({
-      registerType: "prompt",
+      registerType: "autoUpdate",
       includeAssets: ["favicon.svg", "favicon-64.png", "apple-touch-icon.png"],
       manifest: {
         name: "E-managment — مدیریت ویزا",

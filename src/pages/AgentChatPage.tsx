@@ -32,7 +32,7 @@ import { useToast } from "../hooks/useToast";
 import { ACCEPTED_MIME, imageFileToJpeg, pdfToJpegs } from "../lib/ai/imaging";
 import { useAiWorkers } from "../lib/ai/store";
 import { listChats, createChat, appendMessages, deleteChat, updateChatTitle } from "../lib/agent/chats";
-import { runAgentTurn } from "../lib/agent/agent";
+import { runAgentTurn, looksLikeProtocolJson } from "../lib/agent/agent";
 import type { AgentAttachment, AgentMessage, AgentToolStep } from "../lib/agent/types";
 import { Markdown } from "../components/agent/Markdown";
 import { BottomSheet, Modal } from "../components/ui/Modal";
@@ -171,7 +171,11 @@ function Bubble({ m }: { m: AgentMessage }) {
             </span>
           )}
         </div>
-        <Markdown text={m.text} />
+        {looksLikeProtocolJson(m.text) ? (
+          <p className="text-[12px] italic text-ink-400 dark:text-ink-500">درخواست اجرای ابزار (JSON خام) — نمایش داده نشد؛ دوباره بپرسید.</p>
+        ) : (
+          <Markdown text={m.text} />
+        )}
         {m.steps && m.steps.length > 0 && <ToolSteps steps={m.steps} />}
       </div>
     </div>

@@ -113,6 +113,91 @@ function pageArgs(args: Args): { limit: number; offset: number } {
   return { limit, offset };
 }
 
+/* ---------------------- lenient argument normalization -------------------- */
+/**
+ * Models don't always follow the exact arg spec: they nest everything under
+ * a wrapper ({"filters":{…}}), invent singular date keys (issued_date), or use
+ * aliases (count, rep, type…). This layer repairs ALL of that BEFORE the tool
+ * runs, using the tool's own param list as ground truth — so a filter is never
+ * silently dropped again (the root cause of wrong counts).
+ */
+
+/** Keys the model sometimes wraps all args under. */
+const ARG_WRAPPER_KEYS = ["filters", "filter", "query", "criteria", "where", "options", "params", "arguments", "parameters", "search", "input"];
+
+/** model-invented names → canonical param (applied only when the tool actually has the target AND lacks the source). */
+const ARG_ALIASES: Array<[string, string]> = [
+  ["customer_name", "customer"], ["client", "customer"], ["person", "customer"],
+  ["passport_number", "passport"], ["passport_no", "passport"],
+  ["rep", "representative"], ["emp", "employer"], ["company", "employer"],
+  ["visa", "visa_type"], ["type", "visa_type"],
+  ["count", "limit"], ["max", "limit"], ["n", "limit"], ["first", "limit"], ["top", "limit"],
+  ["q", "selector"], ["search", "selector"],
+];
+
+export function normalizeCallArgs(raw: Args, params: ToolParam[]): Args {
+  let a: Args = { ...raw };
+  const names = new Set(params.map((p) => p.name));
+  // 1) unwrap ONE nesting level: {"filters":{…}, …} → {…} (inner merged under outer extras).
+  //    A wrapper key that is a REAL param of this tool (e.g. query_table's own
+  //    `filters`) is left untouched.
+  for (const w of ARG_WRAPPER_KEYS) {
+    if (names.has(w)) continue;
+    const v = a[w];
+    if (v != null && typeof v === "object" && !Array.isArray(v)) {
+      const rest = { ...a };
+      delete rest[w];
+      a = { ...(v as Args), ...rest };
+      break;
+    }
+  }
+  // 2) `X_date` → X_from + X_to (issued_date → issued_from/issued_to = single day)
+  for (const k of Object.keys({ ...a })) {
+    const m = /^([a-z_]+)_date$/.exec(k);
+    if (!m) continue;
+    const base = m[1];
+    const fromK = `${base}_from`, toK = `${base}_to`;
+    if (!names.has(k) && (names.has(fromK) || names.has(toK))) {
+      if (names.has(fromK) && !(fromK in a)) a[fromK] = a[k];
+      if (names.has(toK) && !(toK in a)) a[toK] = a[k];
+      delete a[k];
+    }
+  }
+  // 3) bare `date` → single-day range when only one range exists (unambiguous)
+  if ("date" in a && !names.has("date")) {
+    const reg = names.has("registered_from"), iss = names.has("issued_from");
+    if (reg && !iss) {
+      if (!("registered_from" in a)) a.registered_from = a.date;
+      if (!("registered_to" in a)) a.registered_to = a.date;
+    } else if (iss && !reg) {
+      if (!("issued_from" in a)) a.issued_from = a.date;
+      if (!("issued_to" in a)) a.issued_to = a.date;
+    }
+    delete a.date;
+  }
+  // 4) aliases
+  for (const [from, to] of ARG_ALIASES) {
+    if (from in a && !names.has(from) && names.has(to) && !(to in a)) {
+      a[to] = a[from];
+      delete a[from];
+    }
+  }
+  return a;
+}
+
+/** Drop empty/undefined filter values so the model sees exactly what was applied. */
+function compactFilters(f: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(f).filter(([, v]) => v != null && v !== "" && v !== "all"),
+  );
+}
+
+/** Sort by a numeric key; default newest-first (fixes «آخرین …» questions — insertion order is NOT chronological). */
+function withOrder<T>(rows: T[], order: string | undefined, keyOf: (r: T) => number): T[] {
+  const dir = order === "oldest" ? 1 : -1;
+  return [...rows].sort((x, y) => (keyOf(x) - keyOf(y)) * dir);
+}
+
 /** Persian short date for summaries. */
 const jdate = (iso?: string | null): string => (iso ? formatJalali(iso) : "—");
 
@@ -287,6 +372,8 @@ const P = (
   required = false,
   extra?: Partial<ToolParam>,
 ): ToolParam => ({ name, type, description, required, ...extra });
+
+const ORDER_PARAM: ToolParam = P("order", "string", "newest | oldest — ترتیب نتیجه‌ها بر اساس زمان ثبت (پیش‌فرض newest)", false, { enum: ["newest", "oldest"] });
 
 export async function buildToolRegistry(ctx: ToolCtx): Promise<{
   tools: ToolDef[];
@@ -546,12 +633,13 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
   }
 
   entries.push({
-    def: { name: "list_customers", description: "جستجو/فهرست مشتریان با فیلترها. پاسخ فشرده برای ادامهٔ کار.", params: [...customerFilterArgs, P("limit", "number", "پیش‌فرض ۲۰"), P("offset", "number")], writes: false },
+    def: { name: "list_customers", description: "جستجو/فهرست مشتریان با فیلترها. پاسخ فشرده برای ادامهٔ کار. ترتیب پیش‌فرض جدیدترین است — برای «آخرین مشتری» همین کافی است.", params: [...customerFilterArgs, P("limit", "number", "پیش‌فرض ۲۰"), P("offset", "number"), ORDER_PARAM], writes: false },
     run: async (a) => {
-      const rows = await filterCustomers({
+      const f = {
         name: str(a.name), passport: str(a.passport), rep: str(a.representative), list: str(a.list),
         emp: str(a.employer), from: isoDate(str(a.registered_from)), to: isoDate(str(a.registered_to)),
-      });
+      };
+      const rows = withOrder(await filterCustomers(f), str(a.order), (c) => c.createdAt ?? 0);
       const reps = await allReps(); const lists = await allLists(); const emps = await allEmployers();
       const reqs = (await db.requests.toArray()).filter((r) => !r.archivedAt);
       const repName = (id?: string | null) => reps.find((x) => x.id === id)?.name ?? "—";
@@ -564,18 +652,19 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
         return custRow(c, repName(c.representativeId), listName(c.listId), empName(c.employerId),
           { total: mine.length, issued: mine.filter((r) => r.issued).length });
       });
-      return ok({ total: rows.length, returned: out.length, customers: out }, `${rows.length.toLocaleString("fa-IR")} مشتری`);
+      return ok({ total: rows.length, returned: out.length, order: str(a.order) ?? "newest", applied_filters: compactFilters(f), customers: out }, `${rows.length.toLocaleString("fa-IR")} مشتری`);
     },
   });
 
   entries.push({
-    def: { name: "count_customers", description: "فقط تعداد، بدون ردیف‌ها.", params: [...customerFilterArgs], writes: false },
+    def: { name: "count_customers", description: "فقط تعداد، بدون ردیف‌ها. applied_filters نشان می‌دهد دقیقاً چه فیلتری اعمال شد.", params: [...customerFilterArgs], writes: false },
     run: async (a) => {
-      const rows = await filterCustomers({
+      const f = {
         name: str(a.name), passport: str(a.passport), rep: str(a.representative), list: str(a.list),
         emp: str(a.employer), from: isoDate(str(a.registered_from)), to: isoDate(str(a.registered_to)),
-      });
-      return ok({ total: rows.length }, `${rows.length.toLocaleString("fa-IR")} مشتری`);
+      };
+      const rows = await filterCustomers(f);
+      return ok({ total: rows.length, applied_filters: compactFilters(f) }, `${rows.length.toLocaleString("fa-IR")} مشتری`);
     },
   });
 
@@ -873,36 +962,49 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
   }
 
   entries.push({
-    def: { name: "list_requests", description: "جستجو/فهرست درخواست‌های ویزا با هر ترکیب فیلتر (تاریخ ثبت، تاریخ صدور، وضعیت، نماینده، کارفرما، مشتری…).", params: [...reqFilterArgs, P("limit", "number"), P("offset", "number")], writes: false },
+    def: { name: "list_requests", description: "جستجو/فهرست درخواست‌های ویزا با هر ترکیب فیلتر (تاریخ ثبت، تاریخ صدور، وضعیت، نماینده، کارفرما، مشتری…). ترتیب پیش‌فرض جدیدترین.", params: [...reqFilterArgs, P("limit", "number"), P("offset", "number"), ORDER_PARAM], writes: false },
     run: async (a) => {
-      const { reqs, customers } = await filterRequests({
+      const f = {
         status: str(a.status), rep: str(a.representative), list: str(a.list), emp: str(a.employer),
         cust: str(a.customer), vtype: str(a.visa_type),
         rfrom: isoDate(str(a.registered_from)), rto: isoDate(str(a.registered_to)),
         ifrom: isoDate(str(a.issued_from)), ito: isoDate(str(a.issued_to)),
-      });
+      };
+      const { reqs, customers } = await filterRequests(f);
+      const sorted = withOrder(reqs, str(a.order), (r) => r.createdAt ?? 0);
       const custById = new Map(customers.map((c) => [c.id, c]));
       const reps = await allReps(); const lists = await allLists();
       const { limit, offset } = pageArgs(a);
-      const page = reqs.slice(offset, offset + limit);
+      const page = sorted.slice(offset, offset + limit);
       return ok({
         total: reqs.length, issued: reqs.filter((r) => r.issued).length, pending: reqs.filter((r) => !r.issued).length,
-        returned: page.length,
+        returned: page.length, order: str(a.order) ?? "newest", applied_filters: compactFilters({ ...f, status: f.status ?? undefined }),
         requests: page.map((r) => reqRow(r, custById, reps, lists)),
       }, `${reqs.length.toLocaleString("fa-IR")} درخواست`);
     },
   });
 
   entries.push({
-    def: { name: "count_requests", description: "فقط تعداد درخواست‌ها با فیلترها.", params: [...reqFilterArgs], writes: false },
+    def: { name: "count_requests", description: "فقط تعداد درخواست‌ها با فیلترها. applied_filters نشان می‌دهد دقیقاً چه فیلتری اعمال شد — قبل از جواب دادن آن را با سؤال کاربر تطبیق بده.", params: [...reqFilterArgs], writes: false },
     run: async (a) => {
-      const { reqs } = await filterRequests({
+      const f = {
         status: str(a.status), rep: str(a.representative), list: str(a.list), emp: str(a.employer),
         cust: str(a.customer), vtype: str(a.visa_type),
         rfrom: isoDate(str(a.registered_from)), rto: isoDate(str(a.registered_to)),
         ifrom: isoDate(str(a.issued_from)), ito: isoDate(str(a.issued_to)),
-      });
-      return ok({ total: reqs.length, issued: reqs.filter((r) => r.issued).length, pending: reqs.filter((r) => !r.issued).length }, `${reqs.length.toLocaleString("fa-IR")} درخواست`);
+      };
+      const { reqs } = await filterRequests(f);
+      const echo = {
+        ...(f.status ? { status: f.status } : {}),
+        ...(f.rep ? { representative: f.rep } : {}), ...(f.list ? { list: f.list } : {}), ...(f.emp ? { employer: f.emp } : {}),
+        ...(f.cust ? { customer: f.cust } : {}), ...(f.vtype ? { visa_type: f.vtype } : {}),
+        ...(f.rfrom ? { registered_from: f.rfrom } : {}), ...(f.rto ? { registered_to: f.rto } : {}),
+        ...(f.ifrom ? { issued_from: f.ifrom } : {}), ...(f.ito ? { issued_to: f.ito } : {}),
+      };
+      return ok({
+        total: reqs.length, issued: reqs.filter((r) => r.issued).length, pending: reqs.filter((r) => !r.issued).length,
+        applied_filters: echo,
+      }, `${reqs.length.toLocaleString("fa-IR")} درخواست`);
     },
   });
 
@@ -981,7 +1083,7 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
   /* --------------------------------- payments ---------------------------- */
 
   entries.push({
-    def: { name: "list_payments", description: "پرداخت‌های نمایندگان + مجموع هر ارز.", params: [P("representative", "string"), P("from", "string", "از تاریخ — میلادی یا شمسی"), P("to", "string", "تا تاریخ — میلادی یا شمسی"), P("currency", "string", "IRT | USD | AFN", false, { enum: ["IRT", "USD", "AFN"] }), P("limit", "number")], writes: false },
+    def: { name: "list_payments", description: "پرداخت‌های نمایندگان + مجموع هر ارز. ترتیب پیش‌فرض جدیدترین.", params: [P("representative", "string"), P("from", "string", "از تاریخ — میلادی یا شمسی"), P("to", "string", "تا تاریخ — میلادی یا شمسی"), P("currency", "string", "IRT | USD | AFN", false, { enum: ["IRT", "USD", "AFN"] }), P("limit", "number"), ORDER_PARAM], writes: false },
     run: async (a) => {
       const reps = await allReps();
       let pays = await db.payments.toArray();
@@ -992,9 +1094,10 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
       const totals: Record<string, number> = {};
       for (const p of pays) totals[p.currency] = (totals[p.currency] ?? 0) + p.amount;
       const { limit } = pageArgs(a);
+      const sorted = withOrder(pays, str(a.order), (p) => p.createdAt ?? 0);
       return ok({
         totals: Object.fromEntries(Object.entries(totals).map(([k, v]) => [k, formatMoney(v, k as "IRT")])),
-        payments: pays.slice(-limit).reverse().map((p) => ({
+        payments: sorted.slice(0, limit).map((p) => ({
           representative: reps.find((r) => r.id === p.representativeId)?.name ?? "—",
           amount: formatMoney(p.amount, p.currency), date: p.date, date_jalali: jdate(p.date), description: p.description ?? null,
         })),
@@ -1147,7 +1250,7 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
   });
 
   entries.push({
-    def: { name: "list_acc_transactions", description: "تراکنش‌های حسابداری با فیلتر.", params: [P("party", "string", "نام/کد طرف‌حساب"), P("type", "string", "نوع تراکنش"), P("status", "string", "وضعیت"), P("from", "string", "از تاریخ — میلادی یا شمسی"), P("to", "string", "تا تاریخ — میلادی یا شمسی"), P("limit", "number")], writes: false },
+    def: { name: "list_acc_transactions", description: "تراکنش‌های حسابداری با فیلتر. ترتیب پیش‌فرض جدیدترین.", params: [P("party", "string", "نام/کد طرف‌حساب"), P("type", "string", "نوع تراکنش"), P("status", "string", "وضعیت"), P("from", "string", "از تاریخ — میلادی یا شمسی"), P("to", "string", "تا تاریخ — میلادی یا شمسی"), P("limit", "number"), ORDER_PARAM], writes: false },
     run: async (a) => {
       let txs: FinTransaction[] = await db.accTransactions.toArray();
       if (a.party !== undefined) {
@@ -1163,7 +1266,7 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
       txs = txs.filter((t) => between(t.date, isoDate(str(a.from)), isoDate(str(a.to))));
       const parties = await db.accParties.toArray();
       const { limit } = pageArgs(a);
-      const page = txs.slice(-limit).reverse();
+      const page = withOrder(txs, str(a.order), (t) => t.createdAt ?? 0).slice(0, limit);
       return ok({
         total: txs.length,
         transactions: page.map((t) => ({
@@ -1265,7 +1368,9 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
       );
     } else {
       try {
-        res = await entry.run(call.args ?? {});
+        // Repair model-invented arg shapes (nested filters, *_date, aliases)
+        // BEFORE the tool runs — filters are never silently dropped.
+        res = await entry.run(normalizeCallArgs(call.args ?? {}, entry.def.params));
       } catch (e) {
         res = fail(e instanceof Error ? e.message : String(e));
       }

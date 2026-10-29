@@ -19,7 +19,7 @@ if (typeof globalThis.localStorage === "undefined") {
 }
 
 import { db } from "../../../db/schema";
-import { parseProtocol, normalizeToolName } from "../agent";
+import { parseProtocol, normalizeToolName, looksLikeProtocolJson } from "../agent";
 import { parseExtractionReply } from "../../ai/extract";
 import { parseDocSortReply, type DocSlotOption } from "../../ai/docsort";
 import { buildToolRegistry } from "../tools";
@@ -282,6 +282,81 @@ describe("tool registry (live db)", () => {
     expect(d.jalali_text).toBeTruthy();
     expect(d.weekday.fa).toBeTruthy();
     expect(d.clock).toMatch(/^\d{2}:\d{2}$/);
+  });
+
+  /* ---- the SECOND reported failure: nested `filters` args were silently
+     dropped → counts came back unfiltered and WRONG (regression) ---- */
+
+  it("count_requests with NESTED filters wrapper + issued_date (Persian digits) filters correctly — the «۳۵ در تاریخ ۶» bug", async () => {
+    const reg = await freshRegistry();
+    // exactly what the model sent in production: everything under `filters`,
+    // singular `issued_date`, Persian digits.
+    const res = await call(reg, "countrequests", { filters: { status: "issued", issued_date: "۱۴۰۵/۰۷/۲۸" } });
+    expect(res.ok).toBe(true);
+    expect(res.name).toBe("count_requests");
+    const d = res.data as { total: number; issued: number; applied_filters: Record<string, string> };
+    expect(d.total).toBe(1); // only r1 (issued 2026-10-20) — NOT both requests
+    expect(d.applied_filters.issued_from).toBe("2026-10-20");
+    expect(d.applied_filters.status).toBe("issued");
+  });
+
+  it("applied_filters is EMPTY when no filter was given (model can self-verify)", async () => {
+    const reg = await freshRegistry();
+    const res = await call(reg, "count_requests", {});
+    expect(res.ok).toBe(true);
+    const d = res.data as { total: number; applied_filters: Record<string, unknown> };
+    expect(d.total).toBe(2);
+    expect(Object.keys(d.applied_filters)).toHaveLength(0);
+  });
+
+  it("alias `type` maps to visa_type when the tool has no `type` param", async () => {
+    const reg = await freshRegistry();
+    const res = await call(reg, "count_requests", { type: "تحصیلی" });
+    expect(res.ok).toBe(true);
+    const d = res.data as { total: number; applied_filters: Record<string, string> };
+    expect(d.total).toBe(1); // r2 (تحصیلی)
+    expect(d.applied_filters.visa_type).toBe("تحصیلی");
+  });
+
+  it("alias `count` maps to limit", async () => {
+    const reg = await freshRegistry();
+    const res = await call(reg, "list_customers", { count: 1 });
+    expect(res.ok).toBe(true);
+    const d = res.data as { returned: number; customers: unknown[] };
+    expect(d.returned).toBe(1);
+    expect(d.customers).toHaveLength(1);
+  });
+
+  it("order=newest returns the freshly created customer first (fixes «آخرین مشتری»)", async () => {
+    const reg = await freshRegistry();
+    const created = await call(reg, "create_customer", {
+      first_name: "یوسف", last_name: "نوری", representative: "رضا محمدی", list: "لیست کابل", passport_number: "YN002",
+    });
+    expect(created.ok).toBe(true);
+    const res = await call(reg, "list_customers", { order: "newest", limit: 3 });
+    const d = res.data as { customers: { name: string }[]; order: string };
+    expect(d.order).toBe("newest");
+    expect(d.customers[0].name).toContain("یوسف"); // newest first (createdAt = now > seed T)
+    const oldest = await call(reg, "list_customers", { order: "oldest", limit: 3 });
+    const od = oldest.data as { customers: { name: string }[] };
+    expect(od.customers[0].name).toContain("احمد"); // oldest first (seed)
+  });
+
+  it("default list order is newest", async () => {
+    const reg = await freshRegistry();
+    const res = await call(reg, "list_customers", {});
+    const d = res.data as { order: string };
+    expect(d.order).toBe("newest");
+  });
+
+  /* ---- raw protocol JSON must never reach the user as a message ---- */
+
+  it("looksLikeProtocolJson detects raw tool-call JSON (with/without fences)", () => {
+    expect(looksLikeProtocolJson(`{"toolcalls":[{"id":"c1","name":"countrequests","args":{}}]}`)).toBe(true);
+    expect(looksLikeProtocolJson("```json\n{\"tool_calls\":[{\"name\":\"db_stats\"}]}\n```")).toBe(true);
+    expect(looksLikeProtocolJson("سلام! امروز ۳۴۶ مشتری دارید.")).toBe(false);
+    expect(looksLikeProtocolJson(`{"first_name":"احمد"}`)).toBe(false);
+    expect(looksLikeProtocolJson("")).toBe(false);
   });
 
   it("resolve_names maps a Persian name to an id", async () => {
