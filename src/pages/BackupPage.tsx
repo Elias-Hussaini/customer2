@@ -423,15 +423,10 @@ export function BackupPage() {
           </p>
         </GlassCard>
         <GlassCard className="p-4">
-          <p className="text-[11px] text-ink-500 dark:text-ink-400">رکوردهای اصلی</p>
+          <p className="text-[11px] text-ink-500 dark:text-ink-400">کل رکوردها (کل سیستم)</p>
           <p className="num mt-1 text-[13px] font-bold">
             {stats
-              ? toPersianDigits(
-                  stats.tableCounts.customers +
-                    stats.tableCounts.requests +
-                    stats.tableCounts.representatives +
-                    stats.tableCounts.payments,
-                )
+              ? toPersianDigits(Object.values(stats.tableCounts).reduce((a, b) => a + b, 0))
               : "…"}
           </p>
         </GlassCard>
@@ -459,9 +454,10 @@ export function BackupPage() {
         >
           <div className="flex flex-col gap-3.5">
             <p className="text-[12px] leading-6 text-ink-500 dark:text-ink-400">
-              <b>همه‌چیز در یک فایل:</b> مشتریان، نمایندگان، درخواست‌ها، پرداخت‌ها، لیست‌ها،
-              تنظیمات و <b>همه تصاویر و فایل‌های PDF</b> — قابل بازیابی کامل در همین برنامه.
-              بخش <b>حسابداری</b> جداگانه است و پشتیبان مخصوص خودش را داخل همان بخش دارد.
+              <b>همه‌چیز در یک فایل:</b> مشتریان، نمایندگان، کارفرماها، درخواست‌ها، پرداخت‌ها،
+              لیست‌ها، تنظیمات، <b>همه تصاویر و فایل‌های PDF</b>، کل بخش{" "}
+              <b>حسابداری</b> (طرف حساب‌ها، صندوق‌ها، تراکنش‌ها، مطالبات و اسناد) و{" "}
+              <b>گفتگوهای دستیار</b> — قابل بازیابی کامل در همین برنامه.
             </p>
             <div className="flex items-center justify-between rounded-2xl bg-brand-500/6 px-4 py-3">
               <div className="flex items-center gap-2 text-[13px] font-bold">
@@ -730,6 +726,7 @@ export function BackupPage() {
 
 const TABLE_LABELS: Record<string, string> = {
   representatives: "نمایندگان",
+  employers: "کارفرماها",
   customers: "مشتریان",
   requests: "درخواست‌ها",
   lists: "لیست‌ها",
@@ -740,4 +737,10 @@ const TABLE_LABELS: Record<string, string> = {
   docTypes: "انواع مدرک",
   activities: "فعالیت‌ها",
   attachments: "پیوست‌ها",
+  accParties: "طرف حساب‌ها (حسابداری)",
+  accAccounts: "صندوق‌ها و بانک‌ها",
+  accTransactions: "تراکنش‌های مالی",
+  accOutstanding: "مطالبات و بدهی‌ها",
+  accDocs: "اسناد حسابداری",
+  aiChats: "گفتگوهای دستیار",
 };

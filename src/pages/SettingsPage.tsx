@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   Bot,
+  BotMessageSquare,
   Briefcase,
   CheckCircle2,
   Coins,
@@ -75,6 +76,11 @@ import { FIELD_TYPE_LABELS, type CustomFieldDef, type FieldEntity, type FieldTyp
 import { toPersianDigits } from "../utils/jalali";
 import { slugify } from "../utils/normalize";
 import {
+  getRobotSettings,
+  updateRobotSettings,
+  type RobotSettings as RobotPrefs,
+} from "../lib/robot/settings";
+import {
   KNOWN_MODELS,
   DEFAULT_MODEL,
   CORE_FIELD_LABELS,
@@ -102,6 +108,7 @@ type SettingsSection =
   | "currency"
   | "defaults"
   | "ai"
+  | "robot"
   | "backup"
   | "data"
   | "pwa";
@@ -117,6 +124,7 @@ const SECTIONS: { key: SettingsSection; label: string; icon: typeof Palette }[] 
   { key: "currency", label: "واحد پول", icon: Coins },
   { key: "defaults", label: "پیش‌فرض‌های فرم", icon: Wand2 },
   { key: "ai", label: "هوش مصنوعی", icon: Bot },
+  { key: "robot", label: "ربات همراه", icon: BotMessageSquare },
   { key: "backup", label: "پشتیبان‌گیری", icon: DatabaseBackup },
   { key: "data", label: "مدیریت داده", icon: Settings2 },
   { key: "pwa", label: "درباره PWA", icon: Smartphone },
@@ -176,6 +184,7 @@ export function SettingsPage() {
           {section === "currency" && <CurrencySection />}
           {section === "defaults" && <DefaultsSection />}
           {section === "ai" && <AiSection />}
+          {section === "robot" && <RobotSection />}
           {section === "backup" && <BackupSection />}
           {section === "data" && <DataSection />}
           {section === "pwa" && <PwaSection />}
@@ -1310,6 +1319,68 @@ function BackupSection() {
       <Link to="/backup" className="btn btn-primary btn-sm w-fit">
         <DatabaseBackup size={14} /> رفتن به صفحه پشتیبان‌گیری
       </Link>
+    </SectionCard>
+  );
+}
+
+/* ------------------------------ Robot companion ---------------------------- */
+
+function RobotSection() {
+  const [prefs, setPrefs] = useState<RobotPrefs>(() => getRobotSettings());
+  const toast = useToast();
+
+  const patch = (p: Partial<RobotPrefs>) => {
+    setPrefs(updateRobotSettings(p));
+  };
+
+  return (
+    <SectionCard title="ربات همراه" icon={<BotMessageSquare size={15} className="text-brand-500" />}>
+      <div className="flex flex-col gap-4">
+        <Toggle
+          checked={prefs.enabled}
+          onChange={(v) => {
+            patch({ enabled: v });
+            toast.info(v ? "ربات همراه روشن شد" : "ربات همراه خاموش شد");
+          }}
+          label="نمایش ربات همراه"
+          hint="ربات سه‌بعدی در گوشهٔ بالا-راست صفحه همراه شما می‌ماند؛ با کلیک روی آن پنل گفتگو باز می‌شود."
+        />
+        <Toggle
+          checked={prefs.bubble}
+          onChange={(v) => patch({ bubble: v })}
+          disabled={!prefs.enabled}
+          label="حباب پیام (پیش‌نمایش پاسخ)"
+          hint="وقتی هوش مصنوعی پاسخ بدهد، خلاصهٔ آن کنار ربات دیده می‌شود. متن کامل همیشه در پنل گفتگوست."
+        />
+        <div>
+          <p className="mb-1.5 text-[12px] font-bold">خواب بعد از بی‌کاری</p>
+          <div className="flex flex-wrap items-center gap-2">
+            {[1, 3, 5, 10].map((m) => (
+              <button
+                key={m}
+                className={`chip ${prefs.sleepAfterMin === m ? "" : "chip-soft"}`}
+                disabled={!prefs.enabled}
+                onClick={() => patch({ sleepAfterMin: m })}
+              >
+                <span className="num">{toPersianDigits(m)}</span> دقیقه
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-[11px] leading-6 text-ink-500 dark:text-ink-400">
+            بعد از این مدت بی‌فعالیت، ربات چشم‌هایش را می‌بندد و آرام می‌گیرد؛ با هر حرکت یا کلیک
+            بیدار می‌شود.
+          </p>
+        </div>
+        <div className="glass rounded-2xl p-3.5 text-[11px] leading-6 text-ink-500 dark:text-ink-400">
+          <b className="text-ink-700 dark:text-ink-200">نکته‌های حریم خصوصی:</b>
+          <ul className="mt-1 list-disc space-y-1 pe-5">
+            <li>هوش ربات از همان اکانت‌های هوش مصنوعی خودتان (تنظیمات › هوش مصنوعی) می‌آید؛ ربات هیچ سرور جداگانه‌ای ندارد.</li>
+            <li>کلیدهای API هرگز در پیام‌ها ارسال نمی‌شوند.</li>
+            <li>عملیات‌های نوشتاری (ثبت/ویرایش/حذف) فقط بعد از تأیید صریح شما اجرا می‌شوند.</li>
+            <li>تنظیمات ربات فقط روی همین دستگاه ذخیره می‌شود و وارد پشتیبان داده‌ها نمی‌شود.</li>
+          </ul>
+        </div>
+      </div>
     </SectionCard>
   );
 }

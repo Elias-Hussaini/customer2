@@ -8,7 +8,21 @@ import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, it } from "vitest";
 import JSZip from "jszip";
 import { db } from "../../db/schema";
-import type { Attachment, Customer, Representative } from "../../types";
+import type {
+  Attachment,
+  Customer,
+  Employer,
+  Representative,
+} from "../../types";
+import type {
+  AccDoc,
+  AccParty,
+  AccSettings,
+  FinAccount,
+  FinTransaction,
+  OutstandingItem,
+} from "../../accounting/types";
+import type { AgentChatRecord } from "../../lib/agent/types";
 import {
   applyRestore,
   buildBackup,
@@ -75,6 +89,50 @@ const IMG_B = new Uint8Array(
 );
 const PDF_DOC = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37, 99, 42, 7]);
 
+const ACC_PDF = new Uint8Array([0x25, 0x50, 0x44, 0x46, 7, 7, 7, 1, 2, 3, 4, 5]);
+
+function mkAccParty(id: string, name: string): AccParty {
+  return {
+    id,
+    code: "P-0001",
+    type: "individual",
+    name,
+    tags: [],
+    active: true,
+    createdAt: T,
+    updatedAt: T,
+  };
+}
+
+function mkAccDoc(id: string, name: string): AccDoc {
+  const blob = new Blob([ACC_PDF as unknown as BlobPart], { type: "application/pdf" });
+  return {
+    id,
+    partyId: "accP1",
+    transactionId: null,
+    accountId: null,
+    name,
+    mime: "application/pdf",
+    size: blob.size,
+    blob,
+    category: "رسید",
+    createdAt: T,
+  };
+}
+
+function mkChat(id: string, title: string): AgentChatRecord {
+  return {
+    id,
+    title,
+    messages: [
+      { role: "user", text: "سلام", ts: T },
+      { role: "assistant", text: "درود! چطور می‌توانم کمک کنم؟", ts: T + 1 },
+    ],
+    createdAt: T,
+    updatedAt: T + 1,
+  };
+}
+
 async function seedFullDataset(): Promise<void> {
   await db.representatives.bulkAdd([
     mkRep("rep1", "علی رضایی"),
@@ -136,6 +194,14 @@ async function seedFullDataset(): Promise<void> {
     rememberLastSelections: true,
     updatedAt: T,
   });
+  await db.employers.bulkAdd([
+    {
+      id: "emp1",
+      name: "شرکت ساختمانی آریا",
+      createdAt: T,
+      updatedAt: T,
+    } as Employer,
+  ]);
   await db.attachments.bulkAdd([
     // Two attachments with the SAME filename but different ids must both survive.
     mkAttachment("att1", "c1", "scan.jpg", IMG_A),
@@ -157,6 +223,62 @@ async function seedFullDataset(): Promise<void> {
       updatedAt: T,
     },
   ]);
+  // ---- حسابداری (accounting world — v2 archives must carry it) ----
+  await db.accParties.bulkAdd([mkAccParty("accP1", "حسابداری — شخص تست")]);
+  await db.accAccounts.bulkAdd([
+    {
+      id: "accA1",
+      name: "صندوق نقدی دلار",
+      type: "cash",
+      currency: "USD",
+      active: true,
+      createdAt: T,
+      updatedAt: T,
+    } as FinAccount,
+  ]);
+  await db.accTransactions.bulkAdd([
+    {
+      id: "accT1",
+      number: "TR-1404-0001",
+      type: "receipt",
+      partyId: "accP1",
+      amount: 120,
+      currency: "USD",
+      date: "2026-01-12",
+      sourceAccountId: null,
+      destAccountId: "accA1",
+      affectsBalance: true,
+      status: "final",
+      createdAt: T,
+      updatedAt: T,
+    } as FinTransaction,
+  ]);
+  await db.accOutstanding.bulkAdd([
+    {
+      id: "accO1",
+      kind: "receivable",
+      partyId: "accP1",
+      amount: 80,
+      currency: "USD",
+      dueDate: "2026-03-01",
+      status: "open",
+      settlements: [],
+      createdAt: T,
+      updatedAt: T,
+    } as OutstandingItem,
+  ]);
+  await db.accDocs.bulkAdd([mkAccDoc("accD1", "رسید-حسابداری.pdf")]);
+  await db.accMeta.put({
+    id: "acc",
+    txCounters: { "1404": 1 },
+    partyCounter: 1,
+    defaultCurrency: "IRT",
+    txPrefix: "TR",
+    categories: ["خدمات"],
+    updatedAt: T,
+  } as AccSettings);
+  // ---- گفتگوهای دستیار (v2) ----
+  await db.aiChats.bulkAdd([mkChat("chat1", "گفتگوی تست")]);
 }
 
 async function seedOtherDataset(): Promise<void> {
@@ -291,6 +413,140 @@ describe("ZIP full backup round trip", () => {
   });
 });
 
+/* ------------------- complete-system v2 (acc + chats) -------------------- */
+
+describe("complete-system v2 archive (accounting + chats + employers)", () => {
+  it("bundles the accounting world, chat history and employers with exact counts", async () => {
+    await seedFullDataset();
+    const built = await buildFullZipBackup();
+    const parsed = await parseZipBackup(built.blob);
+
+    expect(parsed.manifest.version).toBe(2);
+    expect(parsed.manifest.counts.employers).toBe(1);
+    expect(parsed.manifest.counts.accParties).toBe(1);
+    expect(parsed.manifest.counts.accAccounts).toBe(1);
+    expect(parsed.manifest.counts.accTransactions).toBe(1);
+    expect(parsed.manifest.counts.accOutstanding).toBe(1);
+    expect(parsed.manifest.counts.accDocs).toBe(1);
+    expect(parsed.manifest.counts.aiChats).toBe(1);
+    expect(parsed.manifest.accDocs.count).toBe(1);
+    expect(parsed.manifest.accDocs.bytes).toBe(ACC_PDF.byteLength);
+
+    // Payload records survive verbatim.
+    expect(parsed.backup.data.employers?.[0]?.name).toBe("شرکت ساختمانی آریا");
+    expect(parsed.backup.data.acc?.parties[0].name).toBe("حسابداری — شخص تست");
+    expect(parsed.backup.data.acc?.transactions[0].number).toBe("TR-1404-0001");
+    expect(parsed.backup.data.acc?.outstanding[0].amount).toBe(80);
+    expect(parsed.backup.data.acc?.settings?.txCounters["1404"]).toBe(1);
+    expect(parsed.backup.data.chats?.[0]?.messages[1]?.text).toBe(
+      "درود! چطور می‌توانم کمک کنم؟",
+    );
+    // Accounting doc bytes travel as an asset, not as JSON.
+    const docBytes = new Uint8Array(await parsed.accAssets.get("accD1")!.arrayBuffer());
+    expect(Array.from(docBytes)).toEqual(Array.from(ACC_PDF));
+    expect(JSON.stringify(parsed.backup.data.acc?.docsMeta)).not.toContain("blob");
+  });
+
+  it("restores the accounting world and chats byte-for-byte on a wiped device", async () => {
+    await seedFullDataset();
+    const built = await buildFullZipBackup();
+    const parsed = await parseZipBackup(built.blob);
+
+    // Wipe EVERYTHING incl. accounting + chats.
+    await db.transaction(
+      "rw",
+      [
+        db.accParties,
+        db.accAccounts,
+        db.accTransactions,
+        db.accOutstanding,
+        db.accDocs,
+        db.accMeta,
+        db.aiChats,
+        db.employers,
+      ],
+      async () => {
+        for (const t of [
+          db.accParties,
+          db.accAccounts,
+          db.accTransactions,
+          db.accOutstanding,
+          db.accDocs,
+          db.accMeta,
+          db.aiChats,
+          db.employers,
+        ]) {
+          await t.clear();
+        }
+      },
+    );
+
+    const result = await applyZipRestore(parsed, "replace");
+    expect(result.inserted).toBeGreaterThan(0);
+
+    expect((await db.accParties.get("accP1"))?.name).toBe("حسابداری — شخص تست");
+    expect((await db.accTransactions.get("accT1"))?.amount).toBe(120);
+    expect((await db.accOutstanding.get("accO1"))?.status).toBe("open");
+    expect((await db.accMeta.get("acc"))?.txCounters["1404"]).toBe(1);
+    expect((await db.employers.get("emp1"))?.name).toBe("شرکت ساختمانی آریا");
+    const doc = await db.accDocs.get("accD1");
+    expect(doc?.name).toBe("رسید-حسابداری.pdf");
+    expect(doc?.size).toBe(ACC_PDF.byteLength);
+    expect(Array.from(new Uint8Array(await doc!.blob.arrayBuffer()))).toEqual(
+      Array.from(ACC_PDF),
+    );
+    const chat = await db.aiChats.get("chat1");
+    expect(chat?.title).toBe("گفتگوی تست");
+    expect(chat?.messages).toHaveLength(2);
+  });
+
+  it("keeps accounting & chats untouched when restoring an old v1 archive (replace)", async () => {
+    // Build a v2 archive, then rebuild it as a v1-shaped one (no acc / chats).
+    await seedFullDataset();
+    const built = await buildFullZipBackup();
+    const v1 = await mutateZip(built.blob, async (out, raw) => {
+      const dbJson = await raw.file("data/database.json")!.async("string");
+      const payload = JSON.parse(dbJson);
+      delete payload.data.acc;
+      delete payload.data.chats;
+      const manifest = JSON.parse(await raw.file("manifest.json")!.async("string"));
+      manifest.version = 1;
+      delete manifest.counts.accParties;
+      delete manifest.counts.accAccounts;
+      delete manifest.counts.accTransactions;
+      delete manifest.counts.accOutstanding;
+      delete manifest.counts.accDocs;
+      delete manifest.counts.aiChats;
+      delete manifest.accDocs;
+      // Recompute database.json checksum so the archive stays self-consistent.
+      const sums = JSON.parse(await raw.file("integrity/checksums.json")!.async("string"));
+      const data = new TextEncoder().encode(JSON.stringify(payload));
+      const hash = await crypto.subtle.digest("SHA-256", data as unknown as BufferSource);
+      sums.files["data/database.json"] = Array.from(new Uint8Array(hash))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+      out.file("manifest.json", JSON.stringify(manifest));
+      out.file("data/database.json", JSON.stringify(payload));
+      out.file("integrity/checksums.json", JSON.stringify(sums));
+      for (const id of ["att1", "att2", "att3", "att4"]) {
+        await copyEntry(raw, out, `assets/attachments/${id}`);
+      }
+    });
+
+    const parsed = await parseZipBackup(v1);
+    expect(parsed.manifest.version).toBe(1);
+    expect(parsed.warnings.some((w) => w.includes("نسخهٔ ۱"))).toBe(true);
+
+    await applyZipRestore(parsed, "replace");
+    // Main records restored; the accounting world and chats survived untouched.
+    expect(await db.customers.get("c1")).toBeDefined();
+    expect(await db.accParties.get("accP1")).toBeDefined();
+    expect(await db.accTransactions.get("accT1")).toBeDefined();
+    expect(await db.accDocs.get("accD1")).toBeDefined();
+    expect(await db.aiChats.get("chat1")).toBeDefined();
+  });
+});
+
 /* ------------------------------ encryption ------------------------------- */
 
 describe("encrypted ZIP envelope", () => {
@@ -396,7 +652,7 @@ describe("corruption and version guards", () => {
     const built = await buildFullZipBackup();
     const future = await mutateZip(built.blob, async (out, raw) => {
       await copyEntry(raw, out, "manifest.json", (s) =>
-        s.replace('"version": 1', '"version": 99'),
+        s.replace('"version": 2', '"version": 99'),
       );
       await copyEntry(raw, out, "data/database.json");
       await copyEntry(raw, out, "integrity/checksums.json");
@@ -447,6 +703,7 @@ describe("corruption and version guards", () => {
         "assets/attachments/att2",
         "assets/attachments/att3",
         "assets/attachments/att4",
+        "assets/acc-docs/accD1",
       ]) {
         await copyEntry(raw, out, name);
       }

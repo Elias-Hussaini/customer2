@@ -382,9 +382,16 @@ async function blobForVision(blob: Blob): Promise<string> {
 import { computePartyTotals } from "../../accounting/engine";
 import type { ToolParam } from "./types";
 
-/** What the page injects (navigation, toasts). */
+/** What the page injects (navigation, toasts, write-confirmation). */
 export interface ToolCtx {
   navigate: (to: string) => void;
+  /**
+   * Optional confirmation gate for WRITE tools. When provided, every write
+   * tool (writes: true) asks here first — the robot companion uses this to
+   * show a user confirmation dialog. Returning false blocks the write with a
+   * model-visible refusal. Pages that omit it keep the old auto-run behavior.
+   */
+  confirmWrite?: (req: { name: string; description: string; args: Record<string, unknown> }) => Promise<boolean>;
 }
 
 const P = (
@@ -1600,6 +1607,28 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
           : "نام دقیق را از فهرست ابزارهای سیستم‌پرامپت با زیرخط (_) کپی کن",
       );
     } else {
+      // Confirmation gate: a write tool with a confirmWrite hook must be
+      // approved by the human BEFORE it touches the database.
+      if (entry.def.writes && ctx.confirmWrite) {
+        const approved = await ctx.confirmWrite({
+          name: entry.def.name,
+          description: entry.def.description,
+          args: call.args ?? {},
+        });
+        if (!approved) {
+          return {
+            id: call.id,
+            name: entry.def.name,
+            ok: false,
+            ms: 0,
+            data: {
+              error: "کاربر اجازهٔ اجرای این عملیات نوشتاری را نداد",
+              hint: "این عملیات نیاز به تأیید کاربر دارد و کاربر آن را رد کرد. از کاربر بخواه خودش تصمیم بگیرد: یا اطلاعات را اصلاح کن و دوباره پیشنهاد بده، یا بدون این عملیات با داده‌های موجود جواب نهایی بده. اصرار و تکرار ممنوع است.",
+            },
+            summary: "کاربر عملیات را تأیید نکرد",
+          };
+        }
+      }
       try {
         // Repair model-invented arg shapes (nested filters, *_date, aliases)
         // BEFORE the tool runs — filters are never silently dropped.

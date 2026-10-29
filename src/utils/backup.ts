@@ -245,6 +245,7 @@ export async function buildRestorePreview(backup: BackupFile): Promise<RestorePr
     tags: await db.tags.count(),
     visaTypes: await db.visaTypes.count(),
     customFields: await db.customFields.count(),
+    docTypes: await db.docTypes.count(),
   };
   const d = backup.data;
   const existingIds = async (
@@ -285,7 +286,7 @@ export async function buildRestorePreview(backup: BackupFile): Promise<RestorePr
   }
   if (backup.data.acc) {
     warnings.push(
-      "این فایل قدیمی شامل داده‌های بخش حسابداری است — هنگام بازیابی، حسابداری هم بازنشانی می‌شود. پشتیبان جدید فقط داده‌های اصلی را شامل می‌شود.",
+      "این فایل شامل داده‌های بخش حسابداری است — هنگام بازیابی، حسابداری هم بازنشانی می‌شود.",
     );
   }
 
@@ -456,27 +457,54 @@ function guessExt(mime: string): string {
   return "";
 }
 
-/** Quick stats for the backup screen (main app only — accounting is separate). */
+/** Quick stats for the backup screen — the WHOLE system (main app +
+ *  accounting + AI chats), mirroring what the complete ZIP backup covers. */
 export async function getStorageStats(): Promise<{
   tableCounts: Record<string, number>;
   attachments: { count: number; bytes: number };
 }> {
-  const [reps, customers, requests, lists, payments, tags, visaTypes, customFields, activities] =
-    await Promise.all([
-      db.representatives.count(),
-      db.customers.count(),
-      db.requests.count(),
-      db.lists.count(),
-      db.payments.count(),
-      db.tags.count(),
-      db.visaTypes.count(),
-      db.customFields.count(),
-      db.activities.count(),
-    ]);
+  const [
+    reps,
+    employers,
+    customers,
+    requests,
+    lists,
+    payments,
+    tags,
+    visaTypes,
+    customFields,
+    docTypes,
+    activities,
+    accParties,
+    accAccounts,
+    accTransactions,
+    accOutstanding,
+    accDocs,
+    aiChats,
+  ] = await Promise.all([
+    db.representatives.count(),
+    db.employers.count(),
+    db.customers.count(),
+    db.requests.count(),
+    db.lists.count(),
+    db.payments.count(),
+    db.tags.count(),
+    db.visaTypes.count(),
+    db.customFields.count(),
+    db.docTypes.count(),
+    db.activities.count(),
+    db.accParties.count(),
+    db.accAccounts.count(),
+    db.accTransactions.count(),
+    db.accOutstanding.count(),
+    db.accDocs.count(),
+    db.aiChats.count(),
+  ]);
   const atts = await db.attachments.toArray();
   return {
     tableCounts: {
       representatives: reps,
+      employers,
       customers,
       requests,
       lists,
@@ -484,7 +512,14 @@ export async function getStorageStats(): Promise<{
       tags,
       visaTypes,
       customFields,
+      docTypes,
       activities,
+      accParties,
+      accAccounts,
+      accTransactions,
+      accOutstanding,
+      accDocs,
+      aiChats,
       attachments: atts.length,
     },
     attachments: {

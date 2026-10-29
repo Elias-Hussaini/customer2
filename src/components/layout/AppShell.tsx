@@ -9,6 +9,7 @@ import { QuickModals } from "../domain/QuickModals";
 import { GlobalHotkeys } from "./GlobalHotkeys";
 import { useRegisterPwaUpdate } from "../../pwa/usePwaUpdate";
 import { forceUnlockBodyScroll } from "../ui/Modal";
+import { RobotCompanion } from "../robot/RobotCompanion";
 
 /** Application shell: background, top bar, routed content and floating dock. */
 export function AppShell() {
@@ -37,6 +38,7 @@ export function AppShell() {
       <MoreSheet />
       <QuickModals />
       <GlobalHotkeys />
+      <RobotCompanion />
     </div>
   );
 }

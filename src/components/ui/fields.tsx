@@ -116,10 +116,12 @@ interface ToggleProps {
   checked: boolean;
   onChange: (checked: boolean) => void;
   label?: ReactNode;
+  /** Optional one-line hint under the label. */
+  hint?: string;
   disabled?: boolean;
 }
 
-export function Toggle({ checked, onChange, label, disabled }: ToggleProps) {
+export function Toggle({ checked, onChange, label, hint, disabled }: ToggleProps) {
   return (
     <label className={`inline-flex items-center gap-2.5 ${disabled ? "opacity-50" : "cursor-pointer"}`}>
       <span
@@ -142,7 +144,14 @@ export function Toggle({ checked, onChange, label, disabled }: ToggleProps) {
         disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
       />
-      {label}
+      {label != null || hint != null ? (
+        <span className="flex flex-col">
+          {label != null ? <span className="text-[12.5px] font-bold">{label}</span> : null}
+          {hint ? (
+            <span className="text-[11px] font-normal leading-5 text-ink-500 dark:text-ink-400">{hint}</span>
+          ) : null}
+        </span>
+      ) : null}
     </label>
   );
 }

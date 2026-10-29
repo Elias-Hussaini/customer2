@@ -1,21 +1,27 @@
 /**
- * Complete ZIP backup & restore for the main app (مدیریت ویزا).
+ * Complete ZIP backup & restore of the WHOLE system (نسخهٔ ۲ — همه‌چیز).
  *
- * Archive layout (format "emanagement-zip-backup", version 1):
+ * Archive layout (format "emanagement-zip-backup", version 2):
  *
  *   emanagement-backup-YYYY-MM-DD-HH-mm-ss.zip
  *   ├── manifest.json                     — format/version/counts/schema info
- *   ├── data/database.json                — every record of every main table
- *   │                                       (BackupFile shape + attachment
- *   │                                       metadata; blobs live in assets/)
+ *   ├── data/database.json                — every record of every table:
+ *   │                                       main app (BackupFile shape +
+ *   │                                       attachment metadata) AND the
+ *   │                                       accounting section (data.acc)
+ *   │                                       AND AI chat history (data.chats).
+ *   │                                       Blobs live in assets/.
  *   ├── assets/attachments/<attachmentId> — raw image/PDF bytes, stored as-is
+ *   ├── assets/acc-docs/<docId>           — accounting document bytes, as-is
  *   └── integrity/checksums.json          — SHA-256 of every archived file
  *
  * Design goals:
- *  - LOSSLESS: every record, key, relationship, filename, MIME type and binary
- *    byte of every attachment survives the round trip exactly.
- *  - CONSISTENT SNAPSHOT: all tables (records + attachments) are read inside
- *    one readonly IndexedDB transaction before packing starts.
+ *  - LOSSLESS & COMPLETE: every record, key, relationship, filename, MIME
+ *    type and binary byte of every attachment, accounting document, chat
+ *    history row and setting survives the round trip exactly. NOTHING is
+ *    left out — the archive is a full-system snapshot (v2).
+ *  - CONSISTENT SNAPSHOT: all tables (records + attachments + accounting +
+ *    chats) are read inside one readonly IndexedDB transaction before packing.
  *  - VERIFIED: on restore, the manifest, version, SHA-256 checksums, record
  *    counts, duplicate ids and asset↔metadata mapping are all validated
  *    BEFORE a single byte is written. The apply step runs in one atomic Dexie
@@ -24,15 +30,16 @@
  *    (PBKDF2-SHA256, 150k iterations) into a binary envelope. Encrypted
  *    backups are also the only ones that carry the AI worker accounts
  *    (API keys never travel unencrypted).
- *
- * The حسابداری (accounting) section is deliberately NOT part of this archive
- * — it has its own separate backup inside the accounting section.
+ *  - v1 archives (main app only) still restore — accounting and chats are
+ *    then left untouched with a clear warning.
  */
 
 import type { Table } from "dexie";
 import { db } from "../db/schema";
 import type { Attachment, AttachmentMeta, BackupFile } from "../types";
 import type { AiSettings, AiWorker } from "../lib/ai/types";
+import type { AccBackupData, AccDoc } from "../accounting/types";
+import type { AgentChatRecord } from "../lib/agent/types";
 import { logActivity } from "../db/activities";
 import {
   BACKUP_FORMAT,
@@ -47,7 +54,7 @@ import {
 import pkg from "../../package.json";
 
 export const ZIP_BACKUP_FORMAT = "emanagement-zip-backup";
-export const ZIP_BACKUP_VERSION = 1;
+export const ZIP_BACKUP_VERSION = 2;
 /** Binary magic at the start of every encrypted backup envelope. */
 export const ENC_ZIP_MAGIC = "EMENCZIP";
 export const ENC_ZIP_FORMAT = "emanagement-encrypted-zip";
@@ -66,8 +73,20 @@ const MANIFEST_PATH = "manifest.json";
 const DATABASE_PATH = "data/database.json";
 const CHECKSUMS_PATH = "integrity/checksums.json";
 const ASSET_PREFIX = "assets/attachments/";
+const ACC_ASSET_PREFIX = "assets/acc-docs/";
 
-/** Tables the ZIP backup reads/writes (records + attachments + optional AI). */
+/** Accounting tables — bundled into the full-system snapshot (v2). */
+const ACC_TABLES = [
+  db.accParties,
+  db.accAccounts,
+  db.accTransactions,
+  db.accOutstanding,
+  db.accDocs,
+  db.accMeta,
+] as const;
+
+/** Tables the ZIP backup reads/writes (records + attachments + accounting +
+ *  chats + optional AI). */
 const RESTORE_TABLES = [
   db.representatives,
   db.employers,
@@ -82,6 +101,13 @@ const RESTORE_TABLES = [
   db.activities,
   db.preferences,
   db.attachments,
+  db.accParties,
+  db.accAccounts,
+  db.accTransactions,
+  db.accOutstanding,
+  db.accDocs,
+  db.accMeta,
+  db.aiChats,
 ];
 
 /** Record tables whose rows are upserted by id (used for counting/duplicates). */
@@ -138,13 +164,15 @@ export interface ZipManifest {
   createdAt: number;
   appVersion: string;
   schemaVersion: number;
-  /** Rows per table, including "attachments". */
+  /** Rows per table, including "attachments" and (v2) accounting + chats. */
   counts: Record<string, number>;
   attachments: { count: number; bytes: number };
   /** True when the archive was built with a password (then it travels sealed). */
   encrypted: boolean;
   /** AI worker accounts (with keys) are only included in encrypted backups. */
   aiConfigIncluded: boolean;
+  /** v2: accounting documents bundled under assets/acc-docs/. */
+  accDocs: { count: number; bytes: number };
   generator: string;
 }
 
@@ -153,12 +181,14 @@ interface ChecksumsFile {
   files: Record<string, string>;
 }
 
-/** What data/database.json holds: legacy BackupFile + attachment meta (+ AI). */
+/** What data/database.json holds: legacy BackupFile + attachment meta
+ *  (+ accounting + chats + AI when present). */
 export interface ZipDatabasePayload extends BackupFile {
   data: BackupFile["data"] & {
     attachments?: AttachmentMeta[];
     aiWorkers?: AiWorker[];
     aiMeta?: AiSettings | null;
+    chats?: AgentChatRecord[];
   };
 }
 
@@ -167,6 +197,8 @@ export interface ParsedZipBackup {
   backup: ZipDatabasePayload;
   /** attachmentId → binary content (SHA-256 verified). */
   assets: Map<string, Blob>;
+  /** Accounting docId → binary content (SHA-256 verified). v2 archives only. */
+  accAssets: Map<string, Blob>;
   /** Non-fatal notes detected while parsing (unknown files, dangling refs…). */
   warnings: string[];
 }
@@ -217,6 +249,11 @@ function stripAttachmentBlob(att: Attachment): AttachmentMeta {
   };
 }
 
+function stripAccDocBlob(doc: AccDoc): Omit<AccDoc, "blob"> {
+  const { blob: _blob, ...meta } = doc;
+  return meta;
+}
+
 /* ------------------------------ build (export) ---------------------------- */
 
 export interface BuiltZipBackup {
@@ -239,20 +276,44 @@ export async function buildFullZipBackup(
   const onProgress = opts.onProgress;
   assertNotCancelled(opts);
 
-  // ---- Phase 1: consistent snapshot of every table -----------------------
+  // ---- Phase 1: consistent snapshot of EVERY table ------------------------
   onProgress?.({ phase: "reading", percent: 2 });
   let data: BackupFile["data"] | null = null;
   let attachments: Attachment[] = [];
   let aiWorkers: AiWorker[] = [];
   let aiMeta: AiSettings | null = null;
+  let acc: AccBackupData | null = null;
+  let accDocs: AccDoc[] = [];
+  let chats: AgentChatRecord[] = [];
 
   const snapshotTables = encrypted
     ? [...RESTORE_TABLES, db.aiWorkers, db.aiMeta]
-    : RESTORE_TABLES;
+    : [...RESTORE_TABLES];
 
   await db.transaction("r", snapshotTables, async () => {
     data = await readMainBackupData({ allActivities: true });
     attachments = await db.attachments.toArray();
+    // Accounting section — the complete financial world (v2).
+    const [accParties, accAccounts, accTransactions, accOutstanding, accAllDocs, accSettings] =
+      await Promise.all([
+        db.accParties.toArray(),
+        db.accAccounts.toArray(),
+        db.accTransactions.orderBy("date").toArray(),
+        db.accOutstanding.toArray(),
+        db.accDocs.orderBy("createdAt").toArray(),
+        db.accMeta.get("acc"),
+      ]);
+    accDocs = accAllDocs;
+    acc = {
+      parties: accParties,
+      accounts: accAccounts,
+      transactions: accTransactions,
+      outstanding: accOutstanding,
+      docsMeta: accAllDocs.map(stripAccDocBlob),
+      settings: accSettings ?? null,
+    };
+    // AI assistant chat history (v2).
+    chats = await db.aiChats.toArray();
     if (encrypted) {
       // API keys only ever leave the device inside an encrypted archive.
       aiWorkers = await db.aiWorkers.toArray();
@@ -260,7 +321,9 @@ export async function buildFullZipBackup(
     }
   });
   if (!data) throw new Error("خواندن داده‌ها برای پشتیبان ناموفق بود.");
+  if (!acc) throw new Error("خواندن داده‌های حسابداری برای پشتیبان ناموفق بود.");
   const recordData: BackupFile["data"] = data;
+  const accData: AccBackupData = acc;
   assertNotCancelled(opts);
   onProgress?.({ phase: "reading", percent: 22 });
 
@@ -282,6 +345,14 @@ export async function buildFullZipBackup(
     docTypes: recordData.docTypes?.length ?? 0,
     activities: recordData.activities.length,
     attachments: attMetas.length,
+    // حسابداری (v2)
+    accParties: accData.parties.length,
+    accAccounts: accData.accounts.length,
+    accTransactions: accData.transactions.length,
+    accOutstanding: accData.outstanding.length,
+    accDocs: accData.docsMeta.length,
+    // گفتگوهای دستیار (v2)
+    aiChats: chats.length,
   };
 
   const payload: ZipDatabasePayload = {
@@ -293,6 +364,8 @@ export async function buildFullZipBackup(
     counts,
     data: {
       ...recordData,
+      acc: accData,
+      chats,
       attachments: attMetas,
       ...(encrypted ? { aiWorkers, aiMeta } : {}),
     },
@@ -311,6 +384,10 @@ export async function buildFullZipBackup(
     },
     encrypted,
     aiConfigIncluded: encrypted,
+    accDocs: {
+      count: accDocs.length,
+      bytes: accDocs.reduce((s, d) => s + d.size, 0),
+    },
     generator: "E-managment",
   };
 
@@ -330,7 +407,22 @@ export async function buildFullZipBackup(
     packed++;
     onProgress?.({
       phase: "reading",
-      percent: 22 + Math.round((packed / Math.max(1, attachments.length)) * 16),
+      percent: 22 + Math.round((packed / Math.max(1, attachments.length)) * 10),
+    });
+  }
+
+  // Accounting document files — same STORE-as-is treatment (v2).
+  const accAssetBytes = new Map<string, Uint8Array>();
+  let accPacked = 0;
+  for (const doc of accDocs) {
+    assertNotCancelled(opts);
+    const bytes = new Uint8Array(await doc.blob.arrayBuffer());
+    accAssetBytes.set(doc.id, bytes);
+    checksumFiles[`${ACC_ASSET_PREFIX}${doc.id}`] = await sha256Hex(bytes);
+    accPacked++;
+    onProgress?.({
+      phase: "reading",
+      percent: 32 + Math.round((accPacked / Math.max(1, accDocs.length)) * 8),
     });
   }
 
@@ -344,6 +436,10 @@ export async function buildFullZipBackup(
   for (const [id, bytes] of assetBytes) {
     // Images/PDFs are already compressed — STORE keeps bytes exact and fast.
     assetFolder.file(id, bytes, { compression: "STORE" });
+  }
+  const accDocFolder = zip.folder("assets")!.folder("acc-docs")!;
+  for (const [id, bytes] of accAssetBytes) {
+    accDocFolder.file(id, bytes, { compression: "STORE" });
   }
 
   assertNotCancelled(opts);
@@ -603,8 +699,10 @@ export async function parseZipBackup(
   }
 
   const assetEntries = entryNames.filter((n) => n.startsWith(ASSET_PREFIX));
+  const accAssetEntries = entryNames.filter((n) => n.startsWith(ACC_ASSET_PREFIX));
   const knownPaths = new Set<string>([MANIFEST_PATH, DATABASE_PATH, CHECKSUMS_PATH]);
   for (const e of assetEntries) knownPaths.add(e);
+  for (const e of accAssetEntries) knownPaths.add(e);
   const unknownFiles = entryNames.filter((n) => !knownPaths.has(n));
   if (unknownFiles.length > 0) {
     warnings.push(
@@ -649,6 +747,79 @@ export async function parseZipBackup(
     );
   }
 
+  // ---- accounting (v2): records + document bytes ----------------------------
+  const accAssets = new Map<string, Blob>();
+  const accData = payload.data.acc;
+  if (accData) {
+    const accCountKeys = [
+      ["accParties", accData.parties],
+      ["accAccounts", accData.accounts],
+      ["accTransactions", accData.transactions],
+      ["accOutstanding", accData.outstanding],
+      ["accDocs", accData.docsMeta],
+    ] as const;
+    for (const [key, rows] of accCountKeys) {
+      const list = (rows ?? []) as { id: string }[];
+      if (manifest.counts[key] != null && list.length !== manifest.counts[key]) {
+        throw new Error(
+          `تعداد رکوردهای حسابداری «${key}» با manifest نمی‌خواند — بایگانی ناقص یا خراب است.`,
+        );
+      }
+      const ids = new Set(list.map((r) => r.id));
+      if (ids.size !== list.length) {
+        throw new Error("شناسه‌های تکراری در داده‌های حسابداری — بایگانی خراب است.");
+      }
+    }
+    const accMetaById = new Map(accData.docsMeta.map((d) => [d.id, d]));
+    let accBytes = 0;
+    for (const entryName of accAssetEntries) {
+      const id = entryName.slice(ACC_ASSET_PREFIX.length);
+      const meta = accMetaById.get(id);
+      if (!meta) {
+        throw new Error(`فایل سند حسابداری بدون متادیتا در بایگانی: ${id}`);
+      }
+      const entry = loaded.file(entryName);
+      if (!entry) continue;
+      const bytes = new Uint8Array(await entry.async("uint8array"));
+      accBytes += bytes.length;
+      if (totalBytes + accBytes > MAX_UNCOMPRESSED_BYTES) {
+        throw new Error("حجم باز شدهٔ بایگانی بیش از حد مجاز است.");
+      }
+      if ((await sha256Hex(bytes)) !== sums.files[entryName]) {
+        throw new Error(`فایل سند حسابداری «${meta.name}» با چک‌سام نمی‌خواند — خراب یا دستکاری شده است.`);
+      }
+      if (bytes.length !== meta.size) {
+        throw new Error(`حجم فایل سند حسابداری «${meta.name}» با متادیتا نمی‌خواند.`);
+      }
+      accAssets.set(id, new Blob([bytes], { type: meta.mime }));
+    }
+    if (accAssets.size !== accMetaById.size) {
+      const missing = accData.docsMeta.filter((d) => !accAssets.has(d.id)).length;
+      throw new Error(
+        `بایگانی ناقص است — ${missing} فایل سند حسابداری کم دارد. از نسخهٔ سالم پشتیبان استفاده کنید.`,
+      );
+    }
+  } else if (accAssetEntries.length > 0) {
+    throw new Error("فایل‌های سند حسابداری بدون دادهٔ حسابداری در بایگانی — فایل خراب است.");
+  }
+
+  // ---- AI chat history (v2) -------------------------------------------------
+  const chats = payload.data.chats ?? [];
+  if (manifest.counts.aiChats != null && chats.length !== manifest.counts.aiChats) {
+    throw new Error("تعداد گفتگوهای دستیار با manifest نمی‌خواند — بایگانی ناقص است.");
+  }
+  const chatIds = new Set(chats.map((c) => c.id));
+  if (chatIds.size !== chats.length) {
+    throw new Error("شناسه گفتگوی تکراری در بایگانی — فایل خراب است.");
+  }
+
+  // v1 archives predate the complete-system format.
+  if (manifest.version < 2) {
+    warnings.push(
+      "این پشتیبان نسخهٔ ۱ است و داده‌های حسابداری و گفتگوهای دستیار را شامل نمی‌شود — آن بخش‌ها دست‌نخورده می‌مانند. برای پشتیبان کامل جدید، از نسخهٔ فعلی برنامه خروجی بگیرید.",
+    );
+  }
+
   // ---- referential notes (non-fatal) --------------------------------------
   const customerIds = new Set(payload.data.customers.map((c) => c.id));
   const paymentIds = new Set(payload.data.payments.map((p) => p.id));
@@ -675,7 +846,7 @@ export async function parseZipBackup(
   }
 
   onProgress?.({ phase: "validating", percent: 75 });
-  return { manifest, backup: payload, assets, warnings };
+  return { manifest, backup: payload, assets, accAssets, warnings };
 }
 
 /* ------------------------------ unified facade ---------------------------- */
@@ -835,6 +1006,7 @@ export async function applyZipRestore(
 ): Promise<UnifiedRestoreResult> {
   const d = parsed.backup.data;
   const restoreAi = Array.isArray(d.aiWorkers);
+  const restoreAcc = d.acc != null;
   const tables: AnyTable[] = restoreAi
     ? [...RESTORE_TABLES, db.aiWorkers, db.aiMeta]
     : [...RESTORE_TABLES];
@@ -849,7 +1021,20 @@ export async function applyZipRestore(
     onProgress?.({ phase: "writing", percent: 78 });
     await db.transaction("rw", tables, async () => {
       if (mode === "replace") {
-        for (const t of tables) await t.clear();
+        // v1 archives never carried accounting/chats — replacing from them
+        // must NOT wipe those worlds (they stay untouched by design).
+        const PRESERVE_ON_V1 = new Set([
+          "accParties",
+          "accAccounts",
+          "accTransactions",
+          "accOutstanding",
+          "accDocs",
+          "accMeta",
+          "aiChats",
+        ]);
+        const clearList =
+          parsed.manifest.version >= 2 ? tables : tables.filter((t) => !PRESERVE_ON_V1.has(t.name));
+        for (const t of clearList) await t.clear();
       }
       const upsert = async (table: AnyTable, records: { id: string }[]) => {
         for (const rec of records) {
@@ -886,6 +1071,33 @@ export async function applyZipRestore(
         for (const w of d.aiWorkers ?? []) await db.aiWorkers.put(w as never);
         if (d.aiMeta) await db.aiMeta.put(d.aiMeta as never);
       }
+
+      // حسابداری — parties / accounts / transactions / outstanding / docs / settings.
+      if (restoreAcc && d.acc) {
+        for (const party of d.acc.parties ?? []) {
+          await db.accParties.put(party as never);
+        }
+        for (const account of d.acc.accounts ?? []) {
+          await db.accAccounts.put(account as never);
+        }
+        for (const tx of d.acc.transactions ?? []) {
+          await db.accTransactions.put(tx as never);
+        }
+        for (const item of d.acc.outstanding ?? []) {
+          await db.accOutstanding.put(item as never);
+        }
+        for (const meta of d.acc.docsMeta ?? []) {
+          const blob = parsed.accAssets.get(meta.id);
+          if (!blob) throw new Error(`فایل سند حسابداری «${meta.name}» در بایگانی نیست.`);
+          await db.accDocs.put({ ...meta, blob } as never);
+        }
+        if (d.acc.settings) await db.accMeta.put(d.acc.settings as never);
+      }
+
+      // گفتگوهای دستیار — chat history.
+      for (const chat of d.chats ?? []) {
+        await db.aiChats.put(chat as never);
+      }
     });
 
     // Post-apply verification: every backed-up id must exist, attachment
@@ -910,6 +1122,26 @@ export async function applyZipRestore(
         throw new Error("تأیید نهایی پیوست‌ها ناموفق بود.");
       }
     }
+    if (restoreAcc && d.acc) {
+      const accChecks: Array<[AnyTable, { id: string }[]]> = [
+        [db.accParties as AnyTable, d.acc.parties as { id: string }[]],
+        [db.accAccounts as AnyTable, d.acc.accounts as { id: string }[]],
+        [db.accTransactions as AnyTable, d.acc.transactions as { id: string }[]],
+        [db.accOutstanding as AnyTable, d.acc.outstanding as { id: string }[]],
+        [db.accDocs as AnyTable, d.acc.docsMeta as { id: string }[]],
+      ];
+      for (const [table, rows] of accChecks) await checkIds(table, rows);
+      for (const meta of d.acc.docsMeta ?? []) {
+        const row = (await db.accDocs.get(meta.id)) as AccDoc | undefined;
+        if (!row || row.size !== meta.size) {
+          throw new Error("تأیید نهایی اسناد حسابداری ناموفق بود.");
+        }
+      }
+    }
+    for (const chat of d.chats ?? []) {
+      const row = await db.aiChats.get(chat.id);
+      if (row == null) throw new Error("تأیید نهایی گفتگوها ناموفق بود.");
+    }
   } catch (e) {
     // The transaction itself is atomic; this covers post-commit verification
     // failures and any unexpected error path — restore the pre-apply state.
@@ -929,7 +1161,7 @@ export async function applyZipRestore(
         mode === "replace"
           ? "بازیابی کامل از پشتیبان ZIP انجام شد"
           : "بازیابی ادغامی از پشتیبان ZIP انجام شد",
-      detail: `${inserted} رکورد جدید، ${updated} به‌روزرسانی، ${d.attachments?.length ?? 0} پیوست`,
+      detail: `${inserted} رکورد جدید، ${updated} به‌روزرسانی، ${d.attachments?.length ?? 0} پیوست${restoreAcc ? `، ${d.acc?.docsMeta?.length ?? 0} سند حسابداری` : ""}${d.chats?.length ? `، ${d.chats.length} گفتگو` : ""}`,
     });
   } catch {
     /* activity log is best-effort */

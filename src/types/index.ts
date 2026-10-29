@@ -328,11 +328,14 @@ export interface BackupFile {
     docTypes?: DocType[];
     activities: Activity[];
     preferences: AppPreferences | null;
-    /** Accounting section data — LEGACY: only old backups (made while the
-     *  accounting module was bundled into the main backup) contain it. New
-     *  full backups never include accounting; it has its own separate backup
-     *  inside the حسابداری section. Kept optional so old files still restore. */
+    /** Accounting section data (بخش حسابداری) — complete-system ZIP backups
+     *  (format v2+) bundle the whole financial world here: parties, accounts,
+     *  transactions, outstanding items, document metadata (bytes under
+     *  assets/acc-docs/) and module settings. Older v1 archives and legacy
+     *  JSON exports may lack it; the field stays optional for compatibility. */
     acc?: import("../accounting/types").AccBackupData;
+    /** AI assistant chat history (گفتگوهای دستیار) — ZIP v2+ only. */
+    chats?: import("../lib/agent/types").AgentChatRecord[];
     /** ZIP full backup only: attachment metadata (bytes live in assets/).
      *  A legacy JSON restore refuses files carrying this field — the
      *  complete ZIP archive must be used instead. */
