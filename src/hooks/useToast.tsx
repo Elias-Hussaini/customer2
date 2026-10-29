@@ -8,15 +8,21 @@ import {
   type ReactNode,
 } from "react";
 import { CheckCircle2, Info, X, XCircle } from "lucide-react";
+import { robotBus } from "../lib/robot/eventBus";
 
 export interface ToastAction {
   label: string;
   onClick: () => void;
 }
 
+/** What the user just did — drives the companion robot's reaction. */
+export type ToastCause = "save" | "delete" | "export" | "import" | "report";
+
 interface ToastOptions {
   duration?: number;
   action?: ToastAction;
+  /** Optional cause hint: makes the robot react to the REAL action. */
+  cause?: ToastCause;
 }
 
 interface ToastItem {
@@ -26,6 +32,36 @@ interface ToastItem {
   duration: number;
   action?: ToastAction;
   closing?: boolean;
+}
+
+/** Robot bridge: success/error toasts with a known cause drive the robot. */
+function robotToastEvent(kind: ToastItem["kind"], cause?: ToastCause): Parameters<typeof robotBus.emit>[0] | null {
+  if (!cause) return null;
+  if (kind === "success") {
+    switch (cause) {
+      case "save":
+      case "delete":
+        return { type: "app:save_success" };
+      case "export":
+        return { type: "app:export_done" };
+      case "import":
+        return { type: "app:import_done" };
+      case "report":
+        return { type: "app:report_generated" };
+    }
+  }
+  if (kind === "error") {
+    switch (cause) {
+      case "save":
+      case "delete":
+        return { type: "app:save_error" };
+      case "export":
+        return { type: "app:export_error" };
+      case "import":
+        return { type: "app:import_error" };
+    }
+  }
+  return null;
 }
 
 interface ToastContextValue {
@@ -64,6 +100,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         const timer = setTimeout(() => dismiss(id), options?.duration ?? 3600);
         timers.current.set(id, timer);
       }
+      // Companion robot reacts to what the user just did (in the moment).
+      const robotEvent = robotToastEvent(kind, options?.cause);
+      if (robotEvent) robotBus.emit(robotEvent);
     },
     [dismiss],
   );

@@ -14,9 +14,13 @@
  */
 
 import { useEffect, useMemo, useRef } from "react";
-import { useFrame, useThree } from "@react-three/fiber";
+import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import type { RobotState } from "../../lib/robot/types";
+import {
+  ensureGlobalPointerTracking,
+  getGlobalPointer,
+} from "../../lib/robot/pointerStore";
 import { clipForState, findEyeNodes, findGlowMaterials } from "./glbMapping";
 
 export { clipForState, findEyeNodes, findGlowMaterials };
@@ -150,7 +154,10 @@ export function RobotModel({ state, glb }: RobotModelProps) {
   const actionRef = useRef<THREE.AnimationAction | null>(null);
   const glbEye = useRef<THREE.Object3D | null>(null);
   const glbGlow = useRef<THREE.MeshStandardMaterial[]>([]);
-  const { pointer } = useThree();
+
+  // Whole-viewport pointer tracking (R3F's `pointer` only knows the tiny
+  // canvas — that's why the eyes used to lag behind the mouse).
+  useEffect(() => ensureGlobalPointerTracking(), []);
 
   // Smoothed values (refs — never per-frame setState).
   const smooth = useRef({
@@ -230,11 +237,14 @@ export function RobotModel({ state, glb }: RobotModelProps) {
     s.eyeOpen += (profile.eyeOpen - s.eyeOpen) * k * 1.6;
     s.antenna += (profile.antenna - s.antenna) * k;
 
-    // Bounded pointer look: ±0.55 rad yaw, ±0.3 rad pitch, eased.
-    const targetX = THREE.MathUtils.clamp(pointer.x * 0.55, -0.55, 0.55);
-    const targetY = THREE.MathUtils.clamp(pointer.y * 0.28, -0.28, 0.28);
-    s.lookX += (targetX - s.lookX) * k;
-    s.lookY += (targetY - s.lookY) * k;
+    // Whole-viewport look with a FAST follow (the complaint was "slow eyes
+    // that get left behind by the mouse") — one smoothing stage, wide range.
+    const gp = getGlobalPointer();
+    const targetX = THREE.MathUtils.clamp(gp.x * 0.9, -0.9, 0.9);
+    const targetY = THREE.MathUtils.clamp(gp.y * 0.55, -0.55, 0.55);
+    const lookK = 1 - Math.exp(-11 * dt); // ≈0.17/frame @60fps — snappy
+    s.lookX += (targetX - s.lookX) * lookK;
+    s.lookY += (targetY - s.lookY) * lookK;
 
     const t = clock.current;
     // Horizontal error shake (amplitude from the profile). Hoisted so head can
@@ -244,11 +254,15 @@ export function RobotModel({ state, glb }: RobotModelProps) {
       // Floating bob + (error) horizontal shake + gentle sway.
       group.current.position.y = Math.sin(t * s.bobSpeed * 2) * s.bob - (state === "sleeping" ? 0.12 : 0);
       group.current.rotation.z = Math.sin(t * s.bobSpeed) * s.sway + s.tilt * 0.4;
-      group.current.rotation.y = shake + (state === "sleeping" ? 0.3 : 0);
+      // The whole body LEANS toward the cursor — works for the GLB too (the
+      // clips never touch the root rotation: they animate salto/corpo/forma/
+      // occhi/antenna channels only).
+      group.current.rotation.y = s.lookX * 0.45 + shake + (state === "sleeping" ? 0.3 : 0);
+      group.current.rotation.x = -s.lookY * 0.3;
     }
     if (head.current) {
-      head.current.rotation.y = s.lookX + shake * 0.5;
-      head.current.rotation.x = -s.lookY + (state === "sleeping" ? 0.28 : 0);
+      head.current.rotation.y = s.lookX * 1.15 + shake * 0.5;
+      head.current.rotation.x = -s.lookY * 1.1 + (state === "sleeping" ? 0.28 : 0);
       head.current.rotation.z = s.tilt;
     }
 
@@ -270,19 +284,12 @@ export function RobotModel({ state, glb }: RobotModelProps) {
     if (eyeR.current) eyeR.current.scale.y = THREE.MathUtils.lerp(eyeR.current.scale.y, open, 0.55);
 
     // GLB eyes ("occhi"): the clips own the SCALE (blink); the ROTATION is
-    // ours — a bounded, eased pointer-follow for the eyes group.
+    // ours. Direct assignment (single smoothing stage above) — the double
+    // lerp here is what made the eyes feel sluggish.
     if (glbEye.current && glb) {
       const sleeping = state === "sleeping";
-      glbEye.current.rotation.y = THREE.MathUtils.lerp(
-        glbEye.current.rotation.y,
-        sleeping ? 0 : s.lookX * 0.6,
-        0.12,
-      );
-      glbEye.current.rotation.x = THREE.MathUtils.lerp(
-        glbEye.current.rotation.x,
-        sleeping ? 0.25 : -s.lookY * 0.6,
-        0.12,
-      );
+      glbEye.current.rotation.y = sleeping ? 0 : s.lookX * 0.85;
+      glbEye.current.rotation.x = sleeping ? 0.25 : -s.lookY * 0.7;
     }
 
     // Antenna glow pulse.

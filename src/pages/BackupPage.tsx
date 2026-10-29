@@ -141,6 +141,7 @@ export function BackupPage() {
       localStorage.setItem("customer2-last-backup", String(Date.now()));
       toast.success(
         useEncryption ? "پشتیبان کامل رمزنگاری‌شده دانلود شد" : "پشتیبان کامل دانلود شد",
+        { cause: "export" },
       );
       setPassword("");
       setPassword2("");
@@ -150,7 +151,7 @@ export function BackupPage() {
         toast.info("ساخت پشتیبان لغو شد");
       } else {
         console.error(e);
-        toast.error(e instanceof Error ? e.message : "خطا در ساخت پشتیبان");
+        toast.error(e instanceof Error ? e.message : "خطا در ساخت پشتیبان", { cause: "export" });
       }
     } finally {
       setBusy(null);
@@ -162,11 +163,11 @@ export function BackupPage() {
     setBusy("json");
     try {
       exportBackupFile(await buildBackup());
-      toast.success("پشتیبان JSON قدیمی دانلود شد");
+      toast.success("پشتیبان JSON قدیمی دانلود شد", { cause: "export" });
       await refreshStats();
     } catch (e) {
       console.error(e);
-      toast.error("خطا در ساخت پشتیبان JSON");
+      toast.error("خطا در ساخت پشتیبان JSON", { cause: "export" });
     } finally {
       setBusy(null);
     }
@@ -177,9 +178,9 @@ export function BackupPage() {
     setZipProgress(0);
     try {
       await buildAttachmentsZip((p) => setZipProgress(p));
-      toast.success("بایگانی ZIP پیوست‌ها دانلود شد");
+      toast.success("بایگانی ZIP پیوست‌ها دانلود شد", { cause: "export" });
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "خطا در ساخت بایگانی");
+      toast.error(e instanceof Error ? e.message : "خطا در ساخت بایگانی", { cause: "export" });
     } finally {
       setBusy(null);
       setZipProgress(null);
@@ -218,7 +219,7 @@ export function BackupPage() {
       setNeedsPassword(null);
       setRestoreState({ any, preview, mode: "merge" });
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "خطا در رمزگشایی");
+      toast.error(e instanceof Error ? e.message : "خطا در رمزگشایی", { cause: "import" });
     } finally {
       setBusy(null);
     }
@@ -245,12 +246,13 @@ export function BackupPage() {
         `بازیابی انجام شد — ${toPersianDigits(result.inserted)} رکورد جدید، ${toPersianDigits(
           result.updated,
         )} به‌روزرسانی، ${toPersianDigits(result.attachments)} پیوست`,
+        { cause: "import" },
       );
       setRestoreState(null);
       await refreshStats();
     } catch (e) {
       console.error(e);
-      toast.error(e instanceof Error ? e.message : "خطا در بازیابی — داده‌ها تغییر نکرد");
+      toast.error(e instanceof Error ? e.message : "خطا در بازیابی — داده‌ها تغییر نکرد", { cause: "import" });
     } finally {
       setBusy(null);
       setProgress(null);

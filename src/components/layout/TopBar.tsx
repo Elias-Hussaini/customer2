@@ -6,7 +6,8 @@ import { GlobalSearch } from "./GlobalSearch";
 import { Menu, type MenuItem } from "../ui/Menu";
 import { uiActions } from "./uiStore";
 
-const SECTION_TITLES: { match: (p: string) => boolean; title: string }[] = [
+/** Route → section title. Shared with the robot's page-aware reactions. */
+export const SECTION_TITLES: { match: (p: string) => boolean; title: string }[] = [
   { match: (p) => p === "/", title: "داشبورد" },
   { match: (p) => p.startsWith("/lists"), title: "لیست‌ها" },
   { match: (p) => p.startsWith("/customers"), title: "مشتریان" },

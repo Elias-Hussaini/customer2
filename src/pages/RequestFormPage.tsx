@@ -190,7 +190,7 @@ export function RequestFormPage() {
       listId: form.listId,
       registrationDate: todayIso(),
     });
-    toast.success(`مشتری «${customerFullName(created)}» ساخته شد`);
+    toast.success(`مشتری «${customerFullName(created)}» ساخته شد`, { cause: "save" });
     patch({ customerId: created.id });
     setQuickCustomer({ open: false, firstName: "", lastName: "", passportNo: "" });
   };
@@ -231,11 +231,11 @@ export function RequestFormPage() {
       let savedId = id;
       if (isEdit && id) {
         await updateRequest(id, input);
-        toast.success("درخواست به‌روزرسانی شد");
+        toast.success("درخواست به‌روزرسانی شد", { cause: "save" });
       } else {
         const created = await createRequest(input);
         savedId = created.id;
-        toast.success("درخواست ویزا ثبت شد");
+        toast.success("درخواست ویزا ثبت شد", { cause: "save" });
       }
       // Remember last selections for faster next entry.
       if (!isEdit && prefs.rememberLastSelections) {
@@ -248,7 +248,7 @@ export function RequestFormPage() {
       navigate(`/requests/${savedId}/edit`);
     } catch (e) {
       console.error(e);
-      toast.error("خطا در ذخیره درخواست");
+      toast.error("خطا در ذخیره درخواست", { cause: "save" });
     } finally {
       setSaving(false);
     }

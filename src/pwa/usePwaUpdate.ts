@@ -3,9 +3,6 @@ import { useToast } from "../hooks/useToast";
 
 type ToastApi = ReturnType<typeof useToast>;
 
-/** Manual check outcome for the Settings → PWA «بررسی به‌روزرسانی» button. */
-export type PwaUpdateCheck = "updated" | "latest" | "unsupported";
-
 /**
  * Module-level state so the React effect (and StrictMode double-invocation)
  * can't double-register the service worker or double-arm watchers.
@@ -15,12 +12,11 @@ let updateFnRef: ((reload?: boolean) => Promise<void>) | null = null;
 let watchersArmed = false;
 let lastPromptAt = 0;
 
-/** Set by the hook; lets checkForPwaUpdate() re-surface the sticky toast. */
+/** Set by the hook; surfaces the sticky update toast when a new deploy lands. */
 let showUpdatePrompt: (() => void) | null = null;
 
 /** Re-check for a new deploy every 5 minutes while the app stays open. */
 const UPDATE_POLL_MS = 5 * 60_000;
-
 function armUpdateWatchers(): void {
   if (watchersArmed || !registrationRef) return;
   watchersArmed = true;
@@ -99,26 +95,4 @@ export function useRegisterPwaUpdate(): void {
       cancelled = true;
     };
   }, []);
-}
-
-/**
- * Manual «بررسی به‌روزرسانی» — forces a service-worker update check right
- * now. Returns "updated" when a new version is installed/waiting (the sticky
- * update toast is re-surfaced), "latest" when this device already runs the
- * newest deploy, "unsupported" when no service worker is available (dev).
- */
-export async function checkForPwaUpdate(): Promise<PwaUpdateCheck> {
-  if (!("serviceWorker" in navigator) || !registrationRef) return "unsupported";
-  try {
-    await registrationRef.update();
-  } catch {
-    // Offline or transient failure — treat as "no news".
-    return "latest";
-  }
-  const pending = registrationRef.waiting || registrationRef.installing;
-  if (pending) {
-    showUpdatePrompt?.();
-    return "updated";
-  }
-  return "latest";
 }

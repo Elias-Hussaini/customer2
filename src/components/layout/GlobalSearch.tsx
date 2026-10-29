@@ -5,6 +5,7 @@ import type { Customer, CustomFieldDef, Employer, ListFolder, Representative, Ta
 import { buildSearchDataset, searchDataset, type SearchHit } from "../../services/search";
 import { customerFullName } from "../../db/customers";
 import { normalizeFa } from "../../utils/normalize";
+import { robotBus } from "../../lib/robot/eventBus";
 import { Floating, isFloatingPanel } from "../ui/Floating";
 
 const TYPE_LABELS: Record<string, string> = {
@@ -56,6 +57,13 @@ export function GlobalSearch({
     return searchDataset(query, dataset, {}, 3);
   }, [query, dataset]);
 
+  /** Live search typing → the robot reacts (query-aware lines). */
+  const onQuery = (q: string) => {
+    setQuery(q);
+    setOpen(true);
+    if (normalizeFa(q).length >= 2) robotBus.emit({ type: "app:search", query: q });
+  };
+
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node | null;
@@ -87,10 +95,7 @@ export function GlobalSearch({
           data-global-search
           value={query}
           onFocus={() => setOpen(true)}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setOpen(true);
-          }}
+          onChange={(e) => onQuery(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && query.trim()) {
               navigate(`/search?q=${encodeURIComponent(query.trim())}`);

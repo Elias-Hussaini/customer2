@@ -30,6 +30,9 @@ const DEFAULT_COOLDOWN_MS: Partial<Record<RobotAppEventType, number>> = {
   "app:import_start": 800,
   "app:import_done": 800,
   "app:import_error": 800,
+  // Fun extras — rare enough that they never feel spammy.
+  "app:theme_toggle": 4000,
+  "app:layout_change": 600,
   // AI lifecycle: NEVER dedup — a request/tool/response sequence must keep
   // its exact order (the robot's typing indicator depends on it).
   "ai:request_start": 0,

@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { robotBus } from "../lib/robot/eventBus";
 
 export type Theme = "light" | "dark";
 const STORAGE_KEY = "customer2-theme";
@@ -63,6 +64,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       applyThemeSideEffects(theme);
       return;
     }
+    // The companion robot reacts to every real theme flip (not on load).
+    robotBus.emit({ type: "app:theme_toggle", dark: theme === "dark" });
     /** Animate the switch: native View Transition crossfade when available,
      *  otherwise a short global color transition (.theme-anim on <html>). */
     const doc = document as Document & {

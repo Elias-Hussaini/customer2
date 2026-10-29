@@ -141,17 +141,17 @@ export function PaymentFormModal({ open, onClose, payment, defaultRepresentative
         } else if (receiptRemoved && existingReceipt) {
           await deleteAttachment(existingReceipt.id);
         }
-        toast.success("پرداخت ویرایش شد");
+        toast.success("پرداخت ویرایش شد", { cause: "save" });
       } else {
         const created = await createPayment(input);
         if (receiptFile) await saveReceipt(created.id, receiptFile);
-        toast.success("پرداخت ثبت شد");
+        toast.success("پرداخت ثبت شد", { cause: "save" });
       }
       onSaved?.();
       onClose();
     } catch (e) {
       console.error(e);
-      toast.error("خطا در ذخیره پرداخت");
+      toast.error("خطا در ذخیره پرداخت", { cause: "save" });
     } finally {
       setSaving(false);
     }

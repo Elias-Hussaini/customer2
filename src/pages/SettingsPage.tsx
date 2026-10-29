@@ -13,12 +13,12 @@ import {
   FileImage,
   Keyboard,
   Layers,
+  LayoutGrid,
   Monitor,
   Moon,
   Palette,
   Pencil,
   Plus,
-  RefreshCw,
   Settings2,
   Signal,
   Smartphone,
@@ -68,8 +68,14 @@ import {
   deleteDocType,
 } from "../db/docTypes";
 import { seedDemoData } from "../db/seed";
+import { useSyncExternalStore } from "react";
+import {
+  defaultLayout,
+  getLauncherLayout,
+  resetLauncherLayout,
+  subscribeLauncherLayout,
+} from "../lib/launcher/layoutStore";
 import { useToast } from "../hooks/useToast";
-import { checkForPwaUpdate } from "../pwa/usePwaUpdate";
 import { buildLabel, buildStamp } from "../pwa/version";
 import { useConfirm } from "../hooks/useConfirm";
 import { FIELD_TYPE_LABELS, type CustomFieldDef, type FieldEntity, type FieldType, type Tag } from "../types";
@@ -109,6 +115,7 @@ type SettingsSection =
   | "defaults"
   | "ai"
   | "robot"
+  | "layout"
   | "backup"
   | "data"
   | "pwa";
@@ -125,6 +132,7 @@ const SECTIONS: { key: SettingsSection; label: string; icon: typeof Palette }[] 
   { key: "defaults", label: "پیش‌فرض‌های فرم", icon: Wand2 },
   { key: "ai", label: "هوش مصنوعی", icon: Bot },
   { key: "robot", label: "ربات همراه", icon: BotMessageSquare },
+  { key: "layout", label: "چیدمان دکمه‌ها", icon: LayoutGrid },
   { key: "backup", label: "پشتیبان‌گیری", icon: DatabaseBackup },
   { key: "data", label: "مدیریت داده", icon: Settings2 },
   { key: "pwa", label: "درباره PWA", icon: Smartphone },
@@ -185,6 +193,7 @@ export function SettingsPage() {
           {section === "defaults" && <DefaultsSection />}
           {section === "ai" && <AiSection />}
           {section === "robot" && <RobotSection />}
+          {section === "layout" && <LayoutSection />}
           {section === "backup" && <BackupSection />}
           {section === "data" && <DataSection />}
           {section === "pwa" && <PwaSection />}
@@ -1343,14 +1352,14 @@ function RobotSection() {
             toast.info(v ? "ربات همراه روشن شد" : "ربات همراه خاموش شد");
           }}
           label="نمایش ربات همراه"
-          hint="ربات سه‌بعدی در گوشهٔ بالا-راست صفحه همراه شما می‌ماند؛ با کلیک روی آن پنل گفتگو باز می‌شود."
+          hint="ربات سه‌بعدی در صفحه همراه شما می‌ماند؛ به کارهایی که می‌کنید واکنش نشان می‌دهد و با کلیک، خوشحال می‌پرد."
         />
         <Toggle
           checked={prefs.bubble}
           onChange={(v) => patch({ bubble: v })}
           disabled={!prefs.enabled}
-          label="حباب پیام (پیش‌نمایش پاسخ)"
-          hint="وقتی هوش مصنوعی پاسخ بدهد، خلاصهٔ آن کنار ربات دیده می‌شود. متن کامل همیشه در پنل گفتگوست."
+          label="حباب واکنش‌ها"
+          hint="جمله‌های کوتاه و بامزهٔ ربات کنارش دیده می‌شود. الگوریتم ضدتکرار دارد — یک جمله دوبار پشت‌سرهم نمی‌آید."
         />
         <div>
           <p className="mb-1.5 text-[12px] font-bold">خواب بعد از بی‌کاری</p>
@@ -1372,14 +1381,60 @@ function RobotSection() {
           </p>
         </div>
         <div className="glass rounded-2xl p-3.5 text-[11px] leading-6 text-ink-500 dark:text-ink-400">
-          <b className="text-ink-700 dark:text-ink-200">نکته‌های حریم خصوصی:</b>
+          <b className="text-ink-700 dark:text-ink-200">نکته‌ها:</b>
           <ul className="mt-1 list-disc space-y-1 pe-5">
-            <li>هوش ربات از همان اکانت‌های هوش مصنوعی خودتان (تنظیمات › هوش مصنوعی) می‌آید؛ ربات هیچ سرور جداگانه‌ای ندارد.</li>
-            <li>کلیدهای API هرگز در پیام‌ها ارسال نمی‌شوند.</li>
-            <li>عملیات‌های نوشتاری (ثبت/ویرایش/حذف) فقط بعد از تأیید صریح شما اجرا می‌شوند.</li>
+            <li>ربات فقط یک همراه بصری است؛ گفتگو ندارد و چیزی از شما نمی‌پرسد.</li>
+            <li>واکنش‌هایش (انیمیشن و جمله‌ها) کاملاً محلی و آفلاین است — هیچ سرور جداگانه‌ای ندارد.</li>
+            <li>چشم‌های ربات نشانگر موس/انگشت شما را دنبال می‌کنند.</li>
             <li>تنظیمات ربات فقط روی همین دستگاه ذخیره می‌شود و وارد پشتیبان داده‌ها نمی‌شود.</li>
           </ul>
         </div>
+      </div>
+    </SectionCard>
+  );
+}
+
+/* ---------------------------- Launcher layout ------------------------------ */
+
+function LayoutSection() {
+  const toast = useToast();
+  const layout = useSyncExternalStore(subscribeLauncherLayout, getLauncherLayout, getLauncherLayout);
+  const dockCount = layout.filter((i) => i.place === "dock").length;
+  const freeCount = layout.filter((i) => i.place === "free").length;
+  const isDefault = JSON.stringify(layout.map(({ id, place, order, fx, fy }) => ({ id, place, order, fx, fy })))
+    === JSON.stringify(defaultLayout().map(({ id, place, order, fx, fy }) => ({ id, place, order, fx, fy })));
+
+  return (
+    <SectionCard title="چیدمان دکمه‌ها" icon={<LayoutGrid size={15} className="text-brand-500" />}>
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-2.5 rounded-2xl bg-brand-500/6 px-4 py-3.5 text-[12px]">
+          <div className="flex items-center justify-between">
+            <span className="font-bold">دکمه‌های داخل نوار پایین</span>
+            <b className="num">{toPersianDigits(dockCount)}</b>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="font-bold">دکمه‌های شناور (بیرون کشیده‌شده)</span>
+            <b className="num">{toPersianDigits(freeCount)}</b>
+          </div>
+        </div>
+        <p className="text-[11px] leading-6 text-ink-500 dark:text-ink-400">
+          روی هر دکمهٔ نوار پایین یا دکمهٔ گرد شناور <b>نگه دارید و بکشید</b>:
+          داخل نوار، جای دکمه‌ها عوض می‌شود؛ و اگر بیرون از نوار رها کنید، همان‌جا
+          مثل دکمهٔ حسابداری گرد می‌شود و می‌ماند. هر دکمهٔ شناور را هم می‌توانید
+          هرجای صفحه بگذارید یا دوباره داخل نوار برگردانید. چیدمان فقط روی همین
+          دستگاه ذخیره می‌شود.
+        </p>
+        <button
+          type="button"
+          className="btn btn-glass btn-sm w-fit"
+          disabled={isDefault}
+          onClick={() => {
+            resetLauncherLayout();
+            toast.success("چیدمان دکمه‌ها به حالت پیش‌فرض برگشت");
+          }}
+        >
+          بازگردانی به پیش‌فرض
+        </button>
       </div>
     </SectionCard>
   );
@@ -1797,7 +1852,6 @@ function PwaSection() {
   const [storage, setStorage] = useState("");
   const [storagePct, setStoragePct] = useState<number | null>(null);
   const [persisted, setPersisted] = useState<boolean | null>(null);
-  const [checking, setChecking] = useState(false);
 
   const refreshPersisted = () => {
     void navigator.storage?.persisted?.().then(setPersisted).catch(() => setPersisted(null));
@@ -1847,7 +1901,7 @@ function PwaSection() {
           <span>حالت نصب‌شده</span>
           <b>{standalone ? "نصب شده به‌عنوان برنامه" : "در حال اجرا در مرورگر"}</b>
         </div>
-        {/* ---- build identity + manual update check ---- */}
+        {/* ---- build identity (updates arrive as a notification toast) ---- */}
         <div className="flex flex-col gap-2.5 rounded-2xl bg-brand-500/6 px-4 py-3.5 text-[12px]">
           <div className="flex items-center justify-between">
             <span className="font-bold">نسخهٔ در حال اجرا</span>
@@ -1857,34 +1911,9 @@ function PwaSection() {
             <span className="text-ink-500 dark:text-ink-400">زمان ساخت این نسخه</span>
             <b>{buildLabel()}</b>
           </div>
-          <button
-            type="button"
-            className="btn btn-glass btn-sm w-fit"
-            disabled={checking}
-            onClick={async () => {
-              if (checking) return;
-              setChecking(true);
-              try {
-                const result = await checkForPwaUpdate();
-                if (result === "updated") {
-                  toast.info("نسخهٔ جدید پیدا شد — روی دکمه «به‌روزرسانی» که الان ظاهر شده بزنید");
-                } else if (result === "latest") {
-                  toast.success("بروزرسانی بررسی شد — همین نسخه آخرین نسخهٔ منتشرشده است");
-                } else {
-                  toast.info("در حالت توسعه، بروزرسانی فعال نیست");
-                }
-              } finally {
-                setChecking(false);
-              }
-            }}
-          >
-            <RefreshCw size={14} className={checking ? "animate-spin" : ""} />
-            {checking ? "در حال بررسی…" : "بررسی بروزرسانی"}
-          </button>
           <p className="leading-5 text-ink-400">
-            با هر تغییر و اصلاحی که منتشر می‌شود، نسخهٔ جدیدی روی سایت قرار می‌گیرد. شماره و
-            زمان بالا نشان می‌دهد کدام نسخه همین حالا روی دستگاه شما اجرا است — اگر بعد از
-            اعلام اصلاحات، این زمان قدیمی ماند، دکمهٔ بررسی بروزرسانی را بزنید.
+            با انتشار هر تغییر، خود برنامه آن را تشخیص می‌دهد و همان‌جا یک اعلان «به‌روزرسانی»
+            برایتان می‌آید — نیازی به بررسی دستی نیست.
           </p>
         </div>
         {storage && (

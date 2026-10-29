@@ -53,17 +53,17 @@ export function RepresentativeFormModal({ open, onClose, representative, onSaved
     try {
       if (representative) {
         await updateRepresentative(representative.id, form);
-        toast.success("نماینده ویرایش شد");
+        toast.success("نماینده ویرایش شد", { cause: "save" });
         onSaved?.({ ...representative, ...form });
       } else {
         const created = await createRepresentative(form);
-        toast.success(`نماینده «${created.name}» ثبت شد`);
+        toast.success(`نماینده «${created.name}» ثبت شد`, { cause: "save" });
         onSaved?.(created);
       }
       onClose();
     } catch (e) {
       console.error(e);
-      toast.error("خطا در ذخیره نماینده");
+      toast.error("خطا در ذخیره نماینده", { cause: "save" });
     } finally {
       setSaving(false);
     }

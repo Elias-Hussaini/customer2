@@ -194,7 +194,7 @@ export function ExportDialog({
     try {
       if (format === "csv") {
         exportCsv(name, activeColumns, orderedRows);
-        toast.success("خروجی CSV دانلود شد");
+        toast.success("خروجی CSV دانلود شد", { cause: "export" });
       } else if (format === "xlsx") {
         await exportXlsx(
           name,
@@ -208,7 +208,7 @@ export function ExportDialog({
           activeReceipts,
           { sections: summarySections, partySummary },
         );
-        toast.success("خروجی اکسل دانلود شد");
+        toast.success("خروجی اکسل دانلود شد", { cause: "export" });
       } else {
         // PDF / PNG: render the print document off-screen, wait until its
         // auto-width layout is measured (fonts loaded), then rasterize.
@@ -226,17 +226,17 @@ export function ExportDialog({
         if (!el) throw new Error("export doc not ready");
         if (format === "pdf") {
           await exportElementAsPdf(el, name);
-          toast.success("خروجی PDF دانلود شد");
+          toast.success("خروجی PDF دانلود شد", { cause: "export" });
         } else {
           await exportElementAsPng(el, name);
-          toast.success("خروجی تصویر دانلود شد");
+          toast.success("خروجی تصویر دانلود شد", { cause: "export" });
         }
         setPendingDoc(false);
       }
       onClose();
     } catch (e) {
       console.error(e);
-      toast.error("خطا در تولید خروجی — دوباره تلاش کنید");
+      toast.error("خطا در تولید خروجی — دوباره تلاش کنید", { cause: "export" });
       setPendingDoc(false);
     } finally {
       setBusy(false);

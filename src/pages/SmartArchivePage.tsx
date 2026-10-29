@@ -549,13 +549,14 @@ export function SmartArchivePage() {
         res.via === "picker"
           ? `بایگانی ZIP با ${toPersianDigits(plan.items.length)} فایل در محل انتخاب‌شده ذخیره شد`
           : `فایل ZIP با ${toPersianDigits(plan.items.length)} فایل دانلود شد`,
+        { cause: "export" },
       );
     } catch (e) {
       if ((e as DOMException)?.name === "AbortError") {
         toast.info("ذخیره بایگانی لغو شد");
       } else {
         console.error(e);
-        toast.error("خطا در ساخت بایگانی — دوباره تلاش کنید");
+        toast.error("خطا در ساخت بایگانی — دوباره تلاش کنید", { cause: "export" });
       }
     } finally {
       setBusy(false);

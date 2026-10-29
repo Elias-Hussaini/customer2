@@ -80,6 +80,10 @@ export type RobotAppEvent =
   | { type: "app:import_start"; what?: string }
   | { type: "app:import_done"; what?: string }
   | { type: "app:import_error"; what?: string }
+  /** User flipped the light/dark theme. */
+  | { type: "app:theme_toggle"; dark: boolean }
+  /** A launcher button was dragged (personalization). */
+  | { type: "app:layout_change"; what: "pin_out" | "pin_in" | "move"; label?: string }
   | { type: "ai:request_start"; prompt?: string }
   | { type: "ai:tool_running"; name?: string }
   | { type: "ai:response_final"; text?: string }

@@ -62,7 +62,7 @@ export function ListFormModal({ open, onClose, list, onSaved }: Props) {
           endDate: form.endDate ?? undefined,
           description: form.description,
         });
-        toast.success("لیست ویرایش شد");
+        toast.success("لیست ویرایش شد", { cause: "save" });
         onSaved?.({ ...list });
       } else {
         const created = await createList({
@@ -72,13 +72,13 @@ export function ListFormModal({ open, onClose, list, onSaved }: Props) {
           endDate: form.endDate ?? undefined,
           description: form.description,
         });
-        toast.success(`لیست «${created.name}» ساخته شد`);
+        toast.success(`لیست «${created.name}» ساخته شد`, { cause: "save" });
         onSaved?.(created);
       }
       onClose();
     } catch (e) {
       console.error(e);
-      toast.error("خطا در ذخیره لیست");
+      toast.error("خطا در ذخیره لیست", { cause: "save" });
     } finally {
       setSaving(false);
     }

@@ -202,6 +202,14 @@ export function stateForEvent(
     case "app:search":
       controller.enter("attentive");
       break;
+    case "app:theme_toggle":
+      // A playful "hm!" — the bubble line carries the fun.
+      controller.enter("attentive");
+      break;
+    case "app:layout_change":
+      // The user personalized their launcher — little celebration jump.
+      controller.enter("success");
+      break;
     case "ai:tool_running":
       controller.enter("working");
       break;

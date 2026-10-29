@@ -651,7 +651,7 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
       };
       if (customer) {
         await updateCustomer(customer.id, input);
-        toast.success("مشتری ویرایش شد");
+        toast.success("مشتری ویرایش شد", { cause: "save" });
         onSaved?.({ ...customer, ...input });
       } else {
         const created = await createCustomer(input);
@@ -684,9 +684,9 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
             rejected: false,
             rejectedAt: null,
           });
-          toast.success(`مشتری «${customerFullName(created)}» با درخواست «${reqVisaType}» ثبت شد`);
+          toast.success(`مشتری «${customerFullName(created)}» با درخواست «${reqVisaType}» ثبت شد`, { cause: "save" });
         } else {
-          toast.success(`مشتری «${customerFullName(created)}» ثبت شد`);
+          toast.success(`مشتری «${customerFullName(created)}» ثبت شد`, { cause: "save" });
         }
         onSaved?.(created);
       }
@@ -702,7 +702,7 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
       onClose();
     } catch (e) {
       console.error(e);
-      toast.error("خطا در ذخیره مشتری");
+      toast.error("خطا در ذخیره مشتری", { cause: "save" });
     } finally {
       setSaving(false);
     }

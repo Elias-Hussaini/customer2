@@ -482,15 +482,16 @@
     box-shadow: 0 4px 18px -4px rgba(139, 131, 255, 0.45);
   }
 
-  /* Round accounting button — far-left edge of the page (حسابداری). */
-  .acc-orbit {
+  /* Launcher — floating round buttons pulled out of the dock + drag ghost. */
+  .launcher-free-layer {
     position: fixed;
-    left: max(env(safe-area-inset-left, 0px), 14px);
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 7.5rem);
+    inset: 0;
     z-index: 39;
+    pointer-events: none;
   }
-  .acc-orbit-btn {
-    position: relative;
+  .launcher-fab {
+    position: absolute;
+    translate: -50% -50%;
     width: 3.4rem;
     height: 3.4rem;
     border-radius: 999px;
@@ -503,34 +504,35 @@
     place-items: center;
     color: var(--color-ink-600);
     cursor: pointer;
+    pointer-events: auto;
     transition: transform 0.25s cubic-bezier(0.3, 1.5, 0.5, 1), color 0.18s ease, box-shadow 0.25s ease;
     -webkit-tap-highlight-color: transparent;
   }
-  .dark .acc-orbit-btn {
+  .dark .launcher-fab {
     background: rgba(24, 26, 44, 0.82);
     border-color: rgba(255, 255, 255, 0.12);
     box-shadow: 0 18px 50px -12px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.08);
     color: var(--color-ink-300);
   }
-  .acc-orbit-btn:hover {
+  .launcher-fab:hover {
     color: var(--color-brand-600);
     transform: scale(1.06);
   }
-  .dark .acc-orbit-btn:hover {
+  .dark .launcher-fab:hover {
     color: var(--color-brand-300);
   }
-  .acc-orbit-btn.active {
+  .launcher-fab.active {
     color: var(--color-brand-600);
     box-shadow: var(--shadow-dock), inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 0 0 4px rgba(99, 91, 255, 0.16);
   }
-  .dark .acc-orbit-btn.active {
+  .dark .launcher-fab.active {
     color: var(--color-brand-300);
     box-shadow: 0 18px 50px -12px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 0 0 4px rgba(139, 131, 255, 0.2);
   }
-  .acc-orbit-ring {
+  .launcher-fab-ring {
     display: none;
   }
-  .acc-orbit-tip {
+  .launcher-fab-tip {
     position: absolute;
     left: calc(100% + 10px);
     top: 50%;
@@ -547,10 +549,57 @@
     transform: translateX(-4px);
     transition: opacity 0.18s ease, transform 0.18s ease;
   }
-  .acc-orbit-btn:hover .acc-orbit-tip,
-  .acc-orbit-btn:focus-visible .acc-orbit-tip {
+  .launcher-fab:hover .launcher-fab-tip,
+  .launcher-fab:focus-visible .launcher-fab-tip {
     opacity: 1;
     transform: translateX(0);
+  }
+
+  /* Drag ghost — the round preview that follows the finger outside the dock. */
+  .launcher-ghost {
+    position: fixed;
+    z-index: 60;
+    pointer-events: none;
+    translate: -50% -62%;
+  }
+  .launcher-ghost-fab {
+    display: grid;
+    place-items: center;
+    width: 3.6rem;
+    height: 3.6rem;
+    border-radius: 999px;
+    color: var(--color-brand-600);
+    border: 2px solid rgba(99, 91, 255, 0.55);
+    background: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 22px 46px -14px rgba(99, 91, 255, 0.55), 0 0 0 6px rgba(99, 91, 255, 0.12);
+    animation: launcher-ghost-pop 0.22s cubic-bezier(0.3, 1.5, 0.5, 1) both;
+  }
+  .dark .launcher-ghost-fab {
+    color: var(--color-brand-300);
+    background: rgba(24, 26, 44, 0.92);
+    border-color: rgba(139, 131, 255, 0.6);
+    box-shadow: 0 22px 46px -14px rgba(0, 0, 0, 0.7), 0 0 0 6px rgba(139, 131, 255, 0.18);
+  }
+  @keyframes launcher-ghost-pop {
+    from {
+      scale: 0.6;
+      opacity: 0;
+    }
+    to {
+      scale: 1;
+      opacity: 1;
+    }
+  }
+
+  /* Dock item being preview-dragged over the dock. */
+  .dock-item.launcher-dragging {
+    color: var(--color-brand-600);
+    box-shadow: inset 0 0 0 2px rgba(99, 91, 255, 0.45), inset 0 0 0 6px rgba(99, 91, 255, 0.1);
+    border-radius: 999px;
+  }
+  .dark .dock-item.launcher-dragging {
+    color: var(--color-brand-300);
+    box-shadow: inset 0 0 0 2px rgba(139, 131, 255, 0.5), inset 0 0 0 6px rgba(139, 131, 255, 0.12);
   }
 }
 
