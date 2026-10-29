@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef, useSyncExternalStore } from "react";
+import { useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   Calculator,
@@ -11,6 +11,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
+  clampFree,
   commitDrag,
   getLauncherLayout,
   nearestSlotIndex,
@@ -30,10 +31,14 @@ const ICONS: Record<string, LucideIcon> = {
   accounting: Calculator,
 };
 
-/** Hold this long before the drag engages (ms). */
+/** Hold this long before the drag engages (ms) — touch/pen long-press. */
 const HOLD_MS = 300;
 /** Moving further than this before the hold fires = scroll/tap, not drag. */
 const HOLD_SLOP_PX = 10;
+/** Mouse: moving further than this WHILE HOLDING = drag intent — engage
+ *  immediately, no long-press gymnastics (desktop drags used to feel dead
+ *  because a quick move cancelled the hold timer). */
+const MOUSE_DRAG_PX = 12;
 
 interface DragSession {
   id: string;
@@ -76,12 +81,27 @@ export function Launcher() {
   const [, force] = useReducer((n: number) => n + 1, 0);
   const dragRef = useRef<DragSession | null>(null);
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const downItem = useRef<LauncherItem | null>(null);
   const startX = useRef(0);
   const startY = useRef(0);
   const suppressClick = useRef(false);
   const docListeners = useRef(false);
   const dockRef = useRef<HTMLDivElement>(null);
   const preventTouch = useRef<((e: TouchEvent) => void) | null>(null);
+
+  // Viewport size: stored free positions are re-clamped on every render, so
+  // a button parked at an edge never becomes unreachable after a window
+  // resize or a phone rotation (it used to be possible to lose a button
+  // off-screen for good).
+  const [vp, setVp] = useState(() => ({
+    w: typeof window === "undefined" ? 390 : window.innerWidth,
+    h: typeof window === "undefined" ? 844 : window.innerHeight,
+  }));
+  useEffect(() => {
+    const onResize = () => setVp({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   /* ------------------------------ drag engine ------------------------------ */
 
@@ -116,11 +136,20 @@ export function Launcher() {
   function onDocMove(e: PointerEvent): void {
     const d = dragRef.current;
     if (!d) {
-      // Pre-engage: moving further than the slop means scroll/tap — cancel.
+      // Pre-engage: no drag session yet.
       if (holdTimer.current) {
         const dx = e.clientX - startX.current;
         const dy = e.clientY - startY.current;
-        if (Math.hypot(dx, dy) > HOLD_SLOP_PX) {
+        const dist = Math.hypot(dx, dy);
+        if (e.pointerType === "mouse" && dist > MOUSE_DRAG_PX) {
+          // Desktop: moving while the button is held IS the drag intent.
+          clearTimeout(holdTimer.current);
+          holdTimer.current = null;
+          engageDrag(e.clientX, e.clientY);
+          return;
+        }
+        if (dist > HOLD_SLOP_PX) {
+          // Touch: moving before the long-press fires = scroll/tap — cancel.
           clearTimeout(holdTimer.current);
           holdTimer.current = null;
           clearDocListeners();
@@ -160,11 +189,46 @@ export function Launcher() {
     force();
   }
 
+  /** Lift the button: long-press elapsed (touch) or the mouse moved while
+   *  held. Kills page scrolling and starts the drag session. */
+  function engageDrag(clientX: number, clientY: number): void {
+    const item = downItem.current;
+    if (!item) return;
+    // Kill page scrolling while dragging.
+    preventTouch.current = (te: TouchEvent) => te.preventDefault();
+    document.addEventListener("touchmove", preventTouch.current, { passive: false });
+    suppressClick.current = true;
+    const dockEl = dockRef.current;
+    const r = dockEl?.getBoundingClientRect();
+    const startsInsideDock =
+      !!r && clientY > (r?.top ?? 0) - 30 && clientY < (r?.bottom ?? 0) + 18;
+    const overDockAtStart = item.place === "dock" ? true : startsInsideDock;
+    let dockIndex = -1;
+    if (overDockAtStart && dockEl) {
+      const centers = Array.from(dockEl.querySelectorAll<HTMLElement>("[data-slot]")).map((el) => {
+        const er = el.getBoundingClientRect();
+        return er.left + er.width / 2;
+      });
+      dockIndex = Math.max(0, nearestSlotIndex(centers, clientX));
+    }
+    dragRef.current = {
+      id: item.id,
+      fromPlace: item.place,
+      draft: items,
+      x: clientX,
+      y: clientY,
+      overDock: overDockAtStart,
+      dockIndex,
+    };
+    force();
+  }
+
   /** pointerdown on a launcher button (dock or free). */
   const onItemDown = (e: React.PointerEvent, item: LauncherItem) => {
     if (e.button !== 0 && e.pointerType === "mouse") return;
     if (holdTimer.current) clearTimeout(holdTimer.current);
     suppressClick.current = false;
+    downItem.current = item;
     startX.current = e.clientX;
     startY.current = e.clientY;
     if (!docListeners.current) {
@@ -175,33 +239,9 @@ export function Launcher() {
     }
     holdTimer.current = setTimeout(() => {
       holdTimer.current = null;
-      // Engage: lift the button. Kill page scrolling while dragging.
-      preventTouch.current = (te: TouchEvent) => te.preventDefault();
-      document.addEventListener("touchmove", preventTouch.current, { passive: false });
-      suppressClick.current = true;
-      const dockEl = dockRef.current;
-      const r = dockEl?.getBoundingClientRect();
-      const startsInsideDock = !!r && e.clientY > (r?.top ?? 0) - 30 && e.clientY < (r?.bottom ?? 0) + 18;
-      const overDockAtStart = item.place === "dock" ? true : startsInsideDock;
-      let dockIndex = -1;
-      if (overDockAtStart && dockEl) {
-        const centers = Array.from(dockEl.querySelectorAll<HTMLElement>("[data-slot]")).map((el) => {
-          const er = el.getBoundingClientRect();
-          return er.left + er.width / 2;
-        });
-        dockIndex = Math.max(0, nearestSlotIndex(centers, e.clientX));
-      }
-      dragRef.current = {
-        id: item.id,
-        fromPlace: item.place,
-        draft: items,
-        x: e.clientX,
-        y: e.clientY,
-        overDock: overDockAtStart,
-        dockIndex,
-      };
-      onDocMove(e as unknown as PointerEvent);
-      force();
+      // Engage: lift the button. Touch/pen need the long-press; the mouse
+      // engages earlier — on movement — inside onDocMove.
+      engageDrag(e.clientX, e.clientY);
     }, HOLD_MS);
   };
 
@@ -243,12 +283,15 @@ export function Launcher() {
         {freeItems.map((item) => {
           const Icon = ICONS[item.icon] ?? LayoutDashboard;
           const active = isActive(item);
+          // Clamp against the CURRENT viewport so a stored edge position is
+          // always fully on-screen (and grabbable) — see the resize tracker.
+          const p = clampFree(item.fx ?? 0.1, item.fy ?? 0.5, vp.w, vp.h);
           return (
             <button
               key={item.id}
               type="button"
               className={`launcher-fab ${active ? "active" : ""}`}
-              style={{ left: `${(item.fx ?? 0.1) * 100}%`, top: `${(item.fy ?? 0.5) * 100}%` }}
+              style={{ left: `${p.fx * 100}%`, top: `${p.fy * 100}%` }}
               onPointerDown={(e) => onItemDown(e, item)}
               onClick={() => activate(item)}
               aria-label={item.label}

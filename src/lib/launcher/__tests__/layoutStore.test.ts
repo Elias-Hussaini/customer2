@@ -83,12 +83,28 @@ describe("clampFree", () => {
   it("keeps in-range positions untouched", () => {
     expect(clampFree(0.5, 0.5)).toEqual({ fx: 0.5, fy: 0.5 });
   });
-  it("clamps into the safe viewport margins", () => {
-    expect(clampFree(-3, 0.5).fx).toBeCloseTo(0.07);
-    expect(clampFree(9, 0.5).fx).toBeCloseTo(0.9);
-    expect(clampFree(0.5, -1).fy).toBeCloseTo(0.14);
-    expect(clampFree(0.5, 99).fy).toBeCloseTo(0.78);
-    expect(clampFree(NaN, 0.5).fx).toBeCloseTo(0.07);
+  it("reaches the WHOLE screen — corners included (desktop)", () => {
+    // 1920×1080: a button may sit 34px from any edge — not the old fat
+    // 7%–90% / 14%–78% bands that fenced off most of the screen.
+    expect(clampFree(0.001, 0.001, 1920, 1080).fx).toBeCloseTo(34 / 1920, 4);
+    expect(clampFree(0.001, 0.001, 1920, 1080).fy).toBeCloseTo(34 / 1080, 4);
+    expect(clampFree(0.999, 0.999, 1920, 1080).fx).toBeCloseTo(1 - 34 / 1920, 4);
+    expect(clampFree(0.999, 0.999, 1920, 1080).fy).toBeCloseTo(1 - 34 / 1080, 4);
+  });
+  it("clamps drops so the button always stays fully visible", () => {
+    // defaults are a 390×844 phone: 34px padding on each side
+    expect(clampFree(-3, 0.5).fx).toBeCloseTo(34 / 390, 4);
+    expect(clampFree(9, 0.5).fx).toBeCloseTo(1 - 34 / 390, 4);
+    expect(clampFree(0.5, -1).fy).toBeCloseTo(34 / 844, 4);
+    expect(clampFree(0.5, 99).fy).toBeCloseTo(1 - 34 / 844, 4);
+    expect(clampFree(NaN, 0.5).fx).toBeCloseTo(34 / 390, 4);
+  });
+  it("stays sane on ultra-tiny viewports (never inverts)", () => {
+    const c = clampFree(0.5, 0.5, 60, 60);
+    expect(c.fx).toBeGreaterThanOrEqual(0);
+    expect(c.fx).toBeLessThanOrEqual(1);
+    expect(c.fy).toBeGreaterThanOrEqual(0);
+    expect(c.fy).toBeLessThanOrEqual(1);
   });
 });
 
@@ -139,7 +155,7 @@ describe("previewDrop", () => {
     expect(preview.find((i) => i.id === "acc-accounting")?.place).toBe("free");
   });
 
-  it("clamps an off-screen drop back into the safe area", () => {
+  it("clamps an off-screen drop so the button stays fully visible", () => {
     const items = getLauncherLayout();
     const preview = previewDrop(items, "nav-dashboard", {
       overDock: false,
@@ -150,8 +166,22 @@ describe("previewDrop", () => {
       vh: 1000,
     });
     const dragged = preview.find((i) => i.id === "nav-dashboard");
-    expect(dragged?.fx).toBeCloseTo(0.07);
-    expect(dragged?.fy).toBeCloseTo(0.78);
+    expect(dragged?.fx).toBeCloseTo(34 / 400, 4);
+    expect(dragged?.fy).toBeCloseTo(1 - 34 / 1000, 4);
+  });
+  it("a drop deep in a corner lands 34px from the edges (fully visible, not fenced off)", () => {
+    const items = getLauncherLayout();
+    const preview = previewDrop(items, "nav-dashboard", {
+      overDock: false,
+      dockIndex: 0,
+      px: 1,
+      py: 1,
+      vw: 1920,
+      vh: 1080,
+    });
+    const dragged = preview.find((i) => i.id === "nav-dashboard");
+    expect(dragged?.fx).toBeCloseTo(34 / 1920, 4);
+    expect(dragged?.fy).toBeCloseTo(34 / 1080, 4);
   });
 });
 

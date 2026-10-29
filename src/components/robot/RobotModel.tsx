@@ -152,7 +152,9 @@ export function RobotModel({ state, glb }: RobotModelProps) {
   const antennaBulb = useRef<THREE.MeshStandardMaterial>(null);
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
   const actionRef = useRef<THREE.AnimationAction | null>(null);
-  const glbEye = useRef<THREE.Object3D | null>(null);
+  /** Pivot AT the eyes' centroid — the glance rotates around this, never
+   *  around the head center (which used to fling an eye off the face). */
+  const glbPivot = useRef<THREE.Group | null>(null);
   const glbGlow = useRef<THREE.MeshStandardMaterial[]>([]);
 
   // Whole-viewport pointer tracking (R3F's `pointer` only knows the tiny
@@ -178,14 +180,42 @@ export function RobotModel({ state, glb }: RobotModelProps) {
     if (!glb) return;
     // One mixer for the whole session (single GLB, single mixer).
     mixerRef.current = new THREE.AnimationMixer(glb.scene);
-    glbEye.current = glb.eyeNode;
     glbGlow.current = glb.glowMaterials;
+
+    // THE EYE FIX. In the real GLB the "occhi" group sits at the HEAD
+    // CENTER while the eye blobs float ~0.58 units IN FRONT of the face.
+    // Rotating the group therefore sent an eye swinging on a 0.58-radius
+    // arc — far past the head silhouette and into the canvas mask's fade
+    // zone: "one eye disappears when it looks left/right". Reparenting the
+    // group under a pivot AT the eyes' own centroid turns the same
+    // rotation into a subtle eyeball glance that can never leave the face.
+    // (The blink clip still owns occhi.scale — PropertyBinding resolves by
+    // node name and the node stays inside the mixer's root, so it keeps
+    // working untouched under the new parent.)
+    const eye = glb.eyeNode;
+    if (eye?.parent) {
+      const parent = eye.parent;
+      parent.updateMatrixWorld(true);
+      const center = new THREE.Box3().setFromObject(eye).getCenter(new THREE.Vector3());
+      const pivotPos = parent.worldToLocal(center.clone());
+      const oldPos = eye.position.clone();
+      const pivot = new THREE.Group();
+      pivot.name = "__robotEyePivot";
+      pivot.position.copy(pivotPos);
+      parent.add(pivot);
+      pivot.add(eye);
+      eye.position.copy(oldPos).sub(pivotPos); // eyes stay exactly put
+      glbPivot.current = pivot;
+    } else {
+      glbPivot.current = null;
+    }
+
     return () => {
       mixerRef.current?.stopAllAction();
       mixerRef.current?.uncacheRoot(glb.scene);
       mixerRef.current = null;
       actionRef.current = null;
-      glbEye.current = null;
+      glbPivot.current = null;
       glbGlow.current = [];
     };
   }, [glb]);
@@ -261,7 +291,7 @@ export function RobotModel({ state, glb }: RobotModelProps) {
       group.current.rotation.x = -s.lookY * 0.3;
     }
     if (head.current) {
-      head.current.rotation.y = s.lookX * 1.15 + shake * 0.5;
+      head.current.rotation.y = s.lookX * 0.9 + shake * 0.5;
       head.current.rotation.x = -s.lookY * 1.1 + (state === "sleeping" ? 0.28 : 0);
       head.current.rotation.z = s.tilt;
     }
@@ -283,13 +313,14 @@ export function RobotModel({ state, glb }: RobotModelProps) {
     if (eyeL.current) eyeL.current.scale.y = THREE.MathUtils.lerp(eyeL.current.scale.y, open, 0.55);
     if (eyeR.current) eyeR.current.scale.y = THREE.MathUtils.lerp(eyeR.current.scale.y, open, 0.55);
 
-    // GLB eyes ("occhi"): the clips own the SCALE (blink); the ROTATION is
-    // ours. Direct assignment (single smoothing stage above) — the double
-    // lerp here is what made the eyes feel sluggish.
-    if (glbEye.current && glb) {
+    // GLB eyes: the pivot (at the eyes' centroid) does a quick, subtle
+    // glance; the body lean above carries the big turn. Direct assignment
+    // of the already-smoothed value — snappy, never left behind, and the
+    // ±0.34 rad orbit can never swing an eye off the face.
+    if (glbPivot.current && glb) {
       const sleeping = state === "sleeping";
-      glbEye.current.rotation.y = sleeping ? 0 : s.lookX * 0.85;
-      glbEye.current.rotation.x = sleeping ? 0.25 : -s.lookY * 0.7;
+      glbPivot.current.rotation.y = sleeping ? 0 : s.lookX * 0.34;
+      glbPivot.current.rotation.x = sleeping ? 0.1 : -s.lookY * 0.22;
     }
 
     // Antenna glow pulse.

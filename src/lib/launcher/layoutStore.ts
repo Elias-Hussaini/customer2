@@ -67,7 +67,7 @@ export function defaultLayout(): LauncherItem[] {
     { id: "nav-archive", to: "/smart-archive", label: "بایگانی هوشمند", icon: "archive", place: "dock", order: 4 },
     // The accounting button starts as a round floating button on the left
     // edge — its old home — and can be dragged anywhere (or into the dock).
-    { id: "acc-accounting", to: "/accounting", label: "حسابداری", icon: "accounting", place: "free", order: 0, fx: 0.08, fy: 0.68 },
+    { id: "acc-accounting", to: "/accounting", label: "حسابداری", icon: "accounting", place: "free", order: 0, fx: 0.1, fy: 0.68 },
   ];
 }
 
@@ -134,15 +134,34 @@ export function resetLauncherLayout(): LauncherItem[] {
 
 /* ------------------------- pure drag-geometry helpers --------------------- */
 
-/** Safe margins for floating buttons (fractions of the viewport). */
-const FREE_BOUNDS = { fxMin: 0.07, fxMax: 0.9, fyMin: 0.14, fyMax: 0.78 };
+/**
+ * Floating buttons may be dropped ANYWHERE on the screen — corners and all.
+ * The only rule: the button must stay fully visible (and therefore
+ * grabbable). The old fixed fractions (7%–90% × 14%–78%) fenced off big
+ * bands of the screen, which is exactly why drags felt "limited".
+ *
+ * .launcher-fab is 3.4rem ≈ 54px (+ focus ring) — we clamp the button CENTER
+ * to keep the whole circle on-screen with a small breathing margin.
+ */
+const FAB_SIZE_PX = 56;
+const EDGE_PX = 6;
 
-export function clampFree(fx: number, fy: number): { fx: number; fy: number } {
+/** Clamp a free position (fractions of the viewport, button-center) so the
+ *  whole button stays on screen — any corner reachable. */
+export function clampFree(
+  fx: number,
+  fy: number,
+  vw = 390,
+  vh = 844,
+): { fx: number; fy: number } {
+  const half = FAB_SIZE_PX / 2 + EDGE_PX;
+  const padX = Math.min(0.45, half / Math.max(1, vw));
+  const padY = Math.min(0.45, half / Math.max(1, vh));
   const clamp = (v: number, lo: number, hi: number) =>
     Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : lo));
   return {
-    fx: clamp(fx, FREE_BOUNDS.fxMin, FREE_BOUNDS.fxMax),
-    fy: clamp(fy, FREE_BOUNDS.fyMin, FREE_BOUNDS.fyMax),
+    fx: clamp(fx, padX, 1 - padX),
+    fy: clamp(fy, padY, 1 - padY),
   };
 }
 
@@ -186,7 +205,7 @@ export function previewDrop(
     const idx = Math.max(0, Math.min(dockIndex, base.length));
     base.splice(idx, 0, { ...dragged, place: "dock" });
   } else {
-    const c = clampFree(px / Math.max(1, vw), py / Math.max(1, vh));
+    const c = clampFree(px / Math.max(1, vw), py / Math.max(1, vh), vw, vh);
     freeItems.push({ ...dragged, place: "free", fx: c.fx, fy: c.fy });
   }
 

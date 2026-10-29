@@ -61,6 +61,8 @@ export function RobotCompanion() {
   const [bubble, setBubble] = useState<RobotMessage | null>(null);
   const [bubbleMs, setBubbleMs] = useState<number | undefined>(undefined);
   const [tabVisible, setTabVisible] = useState(true);
+  /** The robot button — the bubble anchors to it by measurement. */
+  const btnRef = useRef<HTMLButtonElement>(null);
 
   /* --------------------------- state subscriptions -------------------------- */
 
@@ -135,25 +137,36 @@ export function RobotCompanion() {
   const paused = !tabVisible;
 
   return (
-    <div className="no-print fixed top-20 right-6 z-50 select-none sm:top-24 sm:right-12">
-      <div className="relative">
-        {/* transient reaction bubble */}
-        {settings.bubble ? (
-          <RobotBubble
-            message={bubble}
-            ms={bubbleMs}
-            onDismiss={() => setBubble(null)}
-          />
-        ) : null}
+    <>
+      {/* transient reaction bubble — a fixed, viewport-clamped SIBLING
+          anchored to the robot by measurement. It used to render inside the
+          robot's corner box, which pushed half of it (the RTL text half!)
+          off-screen — invisible text, bubble "cut in half". */}
+      {settings.bubble ? (
+        <RobotBubble
+          message={bubble}
+          ms={bubbleMs}
+          anchorRef={btnRef}
+          onDismiss={() => setBubble(null)}
+        />
+      ) : null}
 
+      <div className="no-print fixed top-20 right-6 z-50 select-none sm:top-24 sm:right-12">
         {/* the robot itself — bigger, lower, a touch more to the left */}
         <button
+          ref={btnRef}
           className={`robot-in group relative block h-[6.75rem] w-[5.75rem] cursor-pointer rounded-3xl transition-transform duration-200 hover:scale-[1.05] active:scale-95 sm:h-[7.75rem] sm:w-[6.75rem] ${
             state === "sleeping" ? "robot-sleep" : ""
           }`}
           style={{
-            maskImage: "radial-gradient(ellipse 78% 88% at 50% 52%, #000 72%, transparent 100%)",
-            WebkitMaskImage: "radial-gradient(ellipse 78% 88% at 50% 52%, #000 72%, transparent 100%)",
+            // Soft fade at the very EDGE of the canvas only. The previous
+            // tight ellipse (78%/88%, fade from 72%) reached into the model:
+            // a turned head or swinging eye landed in the fade zone and
+            // "disappeared". This one clears the whole silhouette.
+            maskImage:
+              "radial-gradient(ellipse 95% 102% at 50% 52%, #000 82%, transparent 100%)",
+            WebkitMaskImage:
+              "radial-gradient(ellipse 95% 102% at 50% 52%, #000 82%, transparent 100%)",
           }}
           onClick={onTap}
           title="ربات همراه — برای واکنش، کلیک کنید"
@@ -176,6 +189,6 @@ export function RobotCompanion() {
           />
         </button>
       </div>
-    </div>
+    </>
   );
 }
