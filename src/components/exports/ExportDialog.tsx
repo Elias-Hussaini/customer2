@@ -4,7 +4,12 @@ import { FileSpreadsheet, FileText, FileType2, Image, Layers } from "lucide-reac
 import { Modal } from "../ui/Modal";
 import { Button } from "../ui/Button";
 import { Input, Checkbox } from "../ui/fields";
-import type { ExportColumn, ExportRow } from "../../utils/export/tabular";
+import type {
+  ExportColumn,
+  ExportRow,
+  PartySummaryData,
+  SummarySection,
+} from "../../utils/export/tabular";
 import {
   exportCsv,
   exportXlsx,
@@ -63,6 +68,10 @@ interface ExportDialogProps {
   rows: ExportRow[];
   defaultFilename: string;
   summary?: { label: string; value: string }[];
+  /** Grouped summary (accounting) — currency-badged chip rows. */
+  summarySections?: SummarySection[];
+  /** Per-party breakdown table for the export doc footer + XLSX. */
+  partySummary?: PartySummaryData;
   /** Optional section grouping (offered automatically when >1 group exists). */
   grouping?: ExportGrouping;
   /** Optional per-row photos (e.g. customer photo beside their name). */
@@ -94,6 +103,8 @@ export function ExportDialog({
   rows,
   defaultFilename,
   summary,
+  summarySections,
+  partySummary,
   grouping,
   rowPhotos,
   theme = "visa",
@@ -179,6 +190,7 @@ export function ExportDialog({
           grouping?.photos,
           grouping?.label,
           rowPhotos,
+          { sections: summarySections, partySummary },
         );
         toast.success("خروجی اکسل دانلود شد");
       } else {
@@ -332,6 +344,8 @@ export function ExportDialog({
               columns={activeColumns}
               rows={orderedRows}
               summary={summary}
+              summarySections={summarySections}
+              partySummary={partySummary}
               groups={effectiveGroups}
               groupMeta={{
                 photos: grouping?.photos,

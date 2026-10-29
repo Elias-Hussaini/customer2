@@ -83,7 +83,9 @@ export function TopBar() {
             <Search size={18} />
           </button>
           <button className="icon-btn" onClick={toggle} aria-label="تغییر تم">
-            {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+            <span key={theme} className="theme-icon-anim">
+              {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+            </span>
           </button>
           <Menu
             align="end"

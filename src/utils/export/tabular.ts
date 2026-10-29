@@ -7,6 +7,36 @@ export interface ExportColumn {
 
 export type ExportRow = Record<string, unknown>;
 
+/* ------------------------------------------------------------------ */
+/* Grouped summary (accounting) — currency sections + per-party table  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A summary section rendered as a chip row led by a small currency badge
+ * (تومان / دلار). The badge carries the unit, so item labels and values
+ * never repeat it — no «جمع برداشت (دلار): ۲۰۰ دلار» duplication.
+ */
+export interface SummarySection {
+  /** Badge label — e.g. تومان / دلار. Omit for a neutral group. */
+  tag?: string;
+  items: { label: string; value: string }[];
+}
+
+/**
+ * Per-party breakdown table appended under the data table (and mirrored in
+ * XLSX) — «جمع‌بندی به تفکیک طرف حساب» plus a bold «جمع کل» row, i.e. the
+ * جمع‌بندی کلی. Built only when the report covers MORE than one party.
+ */
+export interface PartySummaryData {
+  title: string;
+  /** Column headers (RTL order). */
+  columns: string[];
+  /** One row of pre-formatted cells per party. */
+  rows: string[][];
+  /** Bold «جمع کل» row (same width as columns). */
+  totalRow: string[];
+}
+
 export function downloadBlob(blob: Blob, filename: string): void {
   saveAs(blob, filename);
 }
@@ -288,6 +318,11 @@ export async function exportXlsx(
     idKey: string;
     photos: Record<string, string | undefined>;
   },
+  /** Optional accounting summary — currency sections + per-party table. */
+  accSummary?: {
+    sections?: SummarySection[];
+    partySummary?: PartySummaryData;
+  },
 ): Promise<void> {
   const stats = computeExportStats(columns, rows);
   try {
@@ -411,6 +446,66 @@ export async function exportXlsx(
       }
     } else {
       rows.forEach((r, i) => addDataRow(r, i % 2 === 1));
+    }
+
+    // — Accounting extras: per-party breakdown table + currency sections —
+    if (accSummary?.partySummary && accSummary.partySummary.rows.length > 0) {
+      const ps = accSummary.partySummary;
+      ws.addRow([]);
+      const titleIdx = ws.rowCount + 1;
+      const titleRow = ws.addRow([ps.title]);
+      if (columns.length > 1) ws.mergeCells(titleIdx, 1, titleIdx, columns.length);
+      ws.getCell(titleIdx, 1).style = {
+        font: { bold: true, size: 12, color: { argb: "FF07815A" } },
+        alignment: { horizontal: "right", vertical: "middle", readingOrder: "rtl" },
+      } satisfies CellStyle;
+      void titleRow;
+      const headIdx = ws.rowCount + 1;
+      ws.addRow(ps.columns);
+      for (let c = 1; c <= ps.columns.length; c++) {
+        ws.getCell(headIdx, c).style = {
+          fill: { type: "pattern", pattern: "solid", fgColor: { argb: "FFEAF9F3" } },
+          font: { bold: true, size: 11, color: { argb: "FF07815A" } },
+          border: thinBorders(),
+          alignment: { horizontal: "center", vertical: "middle", readingOrder: "rtl" },
+        } satisfies CellStyle;
+      }
+      for (const row of [...ps.rows, ps.totalRow]) {
+        const isTotal = row === ps.totalRow;
+        const rIdx = ws.rowCount + 1;
+        ws.addRow(row);
+        for (let c = 1; c <= ps.columns.length; c++) {
+          ws.getCell(rIdx, c).style = {
+            border: thinBorders(),
+            font: { bold: isTotal || c === 1, size: 10.5 },
+            ...(isTotal
+              ? { fill: { type: "pattern", pattern: "solid", fgColor: { argb: "FFEAF9F3" } } }
+              : rIdx % 2 === 0
+                ? { fill: { type: "pattern", pattern: "solid", fgColor: { argb: XL_ZEBRA } } }
+                : {}),
+            alignment: {
+              horizontal: c === 1 ? "right" : "center",
+              vertical: "middle",
+              readingOrder: "rtl",
+            },
+          } satisfies CellStyle;
+        }
+      }
+    }
+    if (accSummary?.sections && accSummary.sections.length > 0) {
+      ws.addRow([]);
+      for (const sec of accSummary.sections) {
+        const line = [sec.tag ? `— ${sec.tag} —` : "", ...sec.items.map((it) => `${it.label}: ${it.value}`)]
+          .filter(Boolean)
+          .join("     ");
+        const sIdx = ws.rowCount + 1;
+        ws.addRow([line]);
+        if (columns.length > 1) ws.mergeCells(sIdx, 1, sIdx, columns.length);
+        ws.getCell(sIdx, 1).style = {
+          font: { bold: true, size: 11, color: { argb: "FF07815A" } },
+          alignment: { horizontal: "right", vertical: "middle", readingOrder: "rtl" },
+        } satisfies CellStyle;
+      }
     }
 
     // Smart summary footer

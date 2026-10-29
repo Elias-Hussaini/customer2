@@ -1,5 +1,11 @@
 import { forwardRef, useLayoutEffect, useMemo, useRef, useState, Fragment } from "react";
-import type { ExportColumn, ExportGroup, ExportRow } from "../../utils/export/tabular";
+import type {
+  ExportColumn,
+  ExportGroup,
+  ExportRow,
+  PartySummaryData,
+  SummarySection,
+} from "../../utils/export/tabular";
 import { computeExportStats, groupLabel } from "../../utils/export/tabular";
 import { formatJalali, formatTimestamp, todayIso, toPersianDigits } from "../../utils/jalali";
 import { LOGO_DATA_URL } from "../../assets/logo";
@@ -274,6 +280,12 @@ export const ExportDoc = forwardRef<
     columns: ExportColumn[];
     rows: ExportRow[];
     summary?: { label: string; value: string }[];
+    /** Grouped summary (accounting) — currency-badged chip rows; replaces
+     *  `summary` when provided (kills duplicated currency words). */
+    summarySections?: SummarySection[];
+    /** Per-party breakdown table rendered above the footer chips —
+     *  «جمع‌بندی به تفکیک طرف حساب» + bold جمع کل row. */
+    partySummary?: PartySummaryData;
     /** Optional grouping (e.g. by representative) — see groupExportRows. */
     groups?: ExportGroup[];
     /** Photos + wording for the section bands. */
@@ -286,7 +298,20 @@ export const ExportDoc = forwardRef<
     onReady?: () => void;
   }
 >(function ExportDoc(
-  { title, subtitle, columns, rows, summary, groups, groupMeta, rowPhotos, theme = "visa", onReady },
+  {
+    title,
+    subtitle,
+    columns,
+    rows,
+    summary,
+    summarySections,
+    partySummary,
+    groups,
+    groupMeta,
+    rowPhotos,
+    theme = "visa",
+    onReady,
+  },
   ref,
 ) {
   const th = THEMES[theme] ?? THEMES.visa;
@@ -449,26 +474,66 @@ export const ExportDoc = forwardRef<
         </div>
       </div>
 
-      {/* Summary chips */}
-      {summary && summary.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "18px" }}>
-          {summary.map((s) => (
+      {/* Summary — grouped currency sections (accounting) or flat chips (visa).
+          Every chip is a single centered line: whiteSpace nowrap + flex
+          centering keep the text INSIDE its pill, never wrapped or clipped. */}
+      {summarySections && summarySections.length > 0
+        ? summarySections.map((sec, i) => (
             <div
-              key={s.label}
+              key={`sec-${i}`}
               style={{
-                border: `1px solid ${BORDER}`,
-                borderRadius: "999px",
-                padding: "6px 14px",
-                fontSize: "11.5px",
-                backgroundColor: th.soft,
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                gap: "7px",
+                marginBottom: i === summarySections.length - 1 ? "18px" : "9px",
               }}
             >
-              <span style={{ color: MUTED }}>{s.label}: </span>
-              <span style={{ fontWeight: 700 }}>{s.value}</span>
+              {sec.tag && <CurrencyBadge label={sec.tag} theme={theme} />}
+              {sec.items.map((s) => (
+                <div
+                  key={s.label}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    border: `1px solid ${BORDER}`,
+                    borderRadius: "999px",
+                    padding: "5px 13px",
+                    fontSize: "11.5px",
+                    backgroundColor: "#ffffff",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  <span style={{ color: MUTED }}>{s.label}:</span>
+                  <span style={{ fontWeight: 800 }}>{s.value}</span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      )}
+          ))
+        : summary &&
+          summary.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "18px" }}>
+              {summary.map((s) => (
+                <div
+                  key={s.label}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    border: `1px solid ${BORDER}`,
+                    borderRadius: "999px",
+                    padding: "6px 14px",
+                    fontSize: "11.5px",
+                    backgroundColor: th.soft,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  <span style={{ color: MUTED }}>{s.label}: </span>
+                  <span style={{ fontWeight: 700 }}>{s.value}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
       {/* Table — auto width, single-line centered cells */}
       {layout && (
@@ -572,9 +637,9 @@ export const ExportDoc = forwardRef<
       )}
 
       {/* Smart summary footer — describes exactly what this output contains.
-          Visa scope: rows, representative/list scope, issued/in-progress/rejected.
-          Accounting scope: rows, party count, قطعی/برگشت/ابطال tx counts,
-          open/overdue outstanding items. */}
+          Accounting reports with several parties first get a per-party
+          breakdown table («جمع‌بندی به تفکیک طرف حساب») with a bold جمع کل
+          row — the جمع‌بندی کلی — then the scope chips. */}
       <div
         data-export-footer
         style={{
@@ -583,8 +648,13 @@ export const ExportDoc = forwardRef<
           borderTop: `1.5px solid ${BORDER}`,
         }}
       >
+        {partySummary && partySummary.rows.length > 0 && (
+          <PartySummaryTable data={partySummary} theme={theme} />
+        )}
         <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
-          <span style={{ fontSize: "12px", fontWeight: 800, color: th.brandDark }}>جمع‌بندی:</span>
+          <span style={{ fontSize: "12px", fontWeight: 800, color: th.brandDark }}>
+            {partySummary && partySummary.rows.length > 0 ? "جمع‌بندی کلی:" : "جمع‌بندی:"}
+          </span>
           <FooterChip label="کل رکوردها" value={toPersianDigits(stats.total)} theme={theme} />
           {stats.hasRepresentative &&
             (stats.representatives.length === 1 ? (
@@ -931,5 +1001,126 @@ function FooterChip({
       <span style={{ color: fg ? undefined : MUTED }}>{label}:</span>
       <span style={{ fontWeight: 800 }}>{value}</span>
     </span>
+  );
+}
+
+/** Small rounded currency badge (تومان / دلار) leading a summary chip row. */
+function CurrencyBadge({ label, theme }: { label: string; theme: ExportTheme }) {
+  const th = THEMES[theme] ?? THEMES.visa;
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "5px 14px",
+        borderRadius: "10px",
+        backgroundColor: th.brand,
+        color: "#ffffff",
+        fontSize: "11.5px",
+        fontWeight: 800,
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+        boxShadow: `0 3px 10px -4px ${th.brandDark}`,
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+/** Per-party breakdown table — «جمع‌بندی به تفکیک طرف حساب».
+ *  Every row (and the header) is single-line nowrap; rows carry
+ *  data-export-row so PDF pagination cuts exactly BETWEEN rows and the
+ *  whole block carries data-export-section so it never gets sliced. */
+function PartySummaryTable({ data, theme }: { data: PartySummaryData; theme: ExportTheme }) {
+  const th = THEMES[theme] ?? THEMES.visa;
+  return (
+    <div data-export-section style={{ marginBottom: "14px" }}>
+      <div
+        style={{
+          fontSize: "12px",
+          fontWeight: 800,
+          color: th.brandDark,
+          marginBottom: "7px",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {data.title}:
+      </div>
+      <table
+        style={{
+          width: "100%",
+          borderCollapse: "collapse",
+          tableLayout: "auto",
+          border: `1px solid ${th.tableBorder}`,
+          borderRadius: "12px",
+          overflow: "hidden",
+        }}
+      >
+        <thead>
+          <tr style={{ backgroundColor: th.soft }}>
+            {data.columns.map((h, i) => (
+              <th
+                key={i}
+                style={{
+                  padding: "7px 12px",
+                  fontSize: "11px",
+                  fontWeight: 800,
+                  color: th.brandDark,
+                  textAlign: i === 0 ? "right" : "center",
+                  whiteSpace: "nowrap",
+                  borderBottom: `1.5px solid ${th.tableBorder}`,
+                  ...(i > 0 ? { borderRight: `1px solid ${th.tableBorder}` } : {}),
+                }}
+              >
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {data.rows.map((row, r) => (
+            <tr key={r} data-export-row style={{ backgroundColor: r % 2 === 1 ? ZEBRA : "#ffffff" }}>
+              {row.map((cell, c) => (
+                <td
+                  key={c}
+                  style={{
+                    padding: "6.5px 12px",
+                    fontSize: "11.5px",
+                    textAlign: c === 0 ? "right" : "center",
+                    whiteSpace: "nowrap",
+                    color: cell === "—" ? "#b6bbcd" : INK,
+                    fontWeight: c === 0 ? 800 : 700,
+                    ...(c > 0 ? { borderRight: `1px solid ${ROW_BORDER}` } : {}),
+                    borderBottom: `1px solid ${ROW_BORDER}`,
+                  }}
+                >
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+          <tr data-export-row style={{ backgroundColor: th.soft }}>
+            {data.totalRow.map((cell, c) => (
+              <td
+                key={c}
+                style={{
+                  padding: "7.5px 12px",
+                  fontSize: "11.5px",
+                  fontWeight: 800,
+                  color: th.brandDark,
+                  textAlign: c === 0 ? "right" : "center",
+                  whiteSpace: "nowrap",
+                  ...(c > 0 ? { borderRight: `1px solid ${th.tableBorder}` } : {}),
+                }}
+              >
+                {cell}
+              </td>
+            ))}
+          </tr>
+        </tbody>
+      </table>
+    </div>
   );
 }
