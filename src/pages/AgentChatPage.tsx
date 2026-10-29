@@ -29,6 +29,7 @@ import {
 import { db } from "../db/schema";
 import { useConfirm } from "../hooks/useConfirm";
 import { useToast } from "../hooks/useToast";
+import { buildFullLabel, buildStamp } from "../pwa/version";
 import { ACCEPTED_MIME, imageFileToJpeg, pdfToJpegs } from "../lib/ai/imaging";
 import { useAiWorkers } from "../lib/ai/store";
 import { listChats, createChat, appendMessages, deleteChat, updateChatTitle } from "../lib/agent/chats";
@@ -445,6 +446,13 @@ export function AgentChatPage() {
                   {activeChat ? activeChat.title : "مغز متفکر برنامه — هر درخواستی، هر کاری"}
                 </p>
               </div>
+              <span
+                className="num shrink-0 rounded-full bg-brand-500/10 px-2 py-0.5 text-[9.5px] font-bold text-brand-600 dark:text-brand-300"
+                dir="ltr"
+                title={buildFullLabel()}
+              >
+                {buildStamp()}
+              </span>
             </div>
             {activeChat && (
               <div className="flex items-center gap-1">

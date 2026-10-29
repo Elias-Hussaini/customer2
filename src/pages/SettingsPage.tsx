@@ -17,6 +17,7 @@ import {
   Palette,
   Pencil,
   Plus,
+  RefreshCw,
   Settings2,
   Signal,
   Smartphone,
@@ -67,6 +68,8 @@ import {
 } from "../db/docTypes";
 import { seedDemoData } from "../db/seed";
 import { useToast } from "../hooks/useToast";
+import { checkForPwaUpdate } from "../pwa/usePwaUpdate";
+import { buildLabel, buildStamp } from "../pwa/version";
 import { useConfirm } from "../hooks/useConfirm";
 import { FIELD_TYPE_LABELS, type CustomFieldDef, type FieldEntity, type FieldType, type Tag } from "../types";
 import { toPersianDigits } from "../utils/jalali";
@@ -1723,6 +1726,7 @@ function PwaSection() {
   const [storage, setStorage] = useState("");
   const [storagePct, setStoragePct] = useState<number | null>(null);
   const [persisted, setPersisted] = useState<boolean | null>(null);
+  const [checking, setChecking] = useState(false);
 
   const refreshPersisted = () => {
     void navigator.storage?.persisted?.().then(setPersisted).catch(() => setPersisted(null));
@@ -1771,6 +1775,46 @@ function PwaSection() {
         <div className="flex items-center justify-between rounded-2xl bg-brand-500/6 px-4 py-3 text-[12px]">
           <span>حالت نصب‌شده</span>
           <b>{standalone ? "نصب شده به‌عنوان برنامه" : "در حال اجرا در مرورگر"}</b>
+        </div>
+        {/* ---- build identity + manual update check ---- */}
+        <div className="flex flex-col gap-2.5 rounded-2xl bg-brand-500/6 px-4 py-3.5 text-[12px]">
+          <div className="flex items-center justify-between">
+            <span className="font-bold">نسخهٔ در حال اجرا</span>
+            <b className="num" dir="ltr">{buildStamp()}</b>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-ink-500 dark:text-ink-400">زمان ساخت این نسخه</span>
+            <b>{buildLabel()}</b>
+          </div>
+          <button
+            type="button"
+            className="btn btn-glass btn-sm w-fit"
+            disabled={checking}
+            onClick={async () => {
+              if (checking) return;
+              setChecking(true);
+              try {
+                const result = await checkForPwaUpdate();
+                if (result === "updated") {
+                  toast.info("نسخهٔ جدید پیدا شد — روی دکمه «به‌روزرسانی» که الان ظاهر شده بزنید");
+                } else if (result === "latest") {
+                  toast.success("بروزرسانی بررسی شد — همین نسخه آخرین نسخهٔ منتشرشده است");
+                } else {
+                  toast.info("در حالت توسعه، بروزرسانی فعال نیست");
+                }
+              } finally {
+                setChecking(false);
+              }
+            }}
+          >
+            <RefreshCw size={14} className={checking ? "animate-spin" : ""} />
+            {checking ? "در حال بررسی…" : "بررسی بروزرسانی"}
+          </button>
+          <p className="leading-5 text-ink-400">
+            با هر تغییر و اصلاحی که منتشر می‌شود، نسخهٔ جدیدی روی سایت قرار می‌گیرد. شماره و
+            زمان بالا نشان می‌دهد کدام نسخه همین حالا روی دستگاه شما اجرا است — اگر بعد از
+            اعلام اصلاحات، این زمان قدیمی ماند، دکمهٔ بررسی بروزرسانی را بزنید.
+          </p>
         </div>
         {storage && (
           <div className="flex flex-col gap-2.5 rounded-2xl bg-brand-500/6 px-4 py-3.5 text-[12px]">
