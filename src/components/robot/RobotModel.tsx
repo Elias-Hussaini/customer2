@@ -1,45 +1,98 @@
 /**
- * Robot Companion — the 3D model (GLB with a procedural fallback).
+ * Robot Companion — the 3D model (real GLB with a procedural fallback).
  *
  * Loading strategy (honest, no guessing):
  *  1. HEAD-probe `${BASE_URL}agente-robot.glb`; when present, load it with
- *     GLTFLoader, inspect its REAL animation clips / eye-like nodes and drive
- *     them from the state machine.
- *  2. When the file is absent (current state of the repo) render a polished
- *     procedural robot built from Three.js primitives — same states, same eye
- *     behaviour. Dropping the GLB into public/ later switches automatically.
+ *     GLTFLoader (+ the meshopt decoder — the real GLB is compressed),
+ *     auto-fit it to the canvas, map its REAL clips (fluttua/lavora/dorme/
+ *     salto) to states and aim its real eyes group ("occhi") at the pointer.
+ *  2. When the file is absent or unloadable, render a polished procedural
+ *     robot from Three.js primitives — same states, same eye behaviour.
  *
  * All animation runs through refs inside useFrame — zero per-frame React
  * state, one mixer max, disposed on unmount.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import type { RobotState } from "../../lib/robot/types";
+import { clipForState, findEyeNodes, findGlowMaterials } from "./glbMapping";
+
+export { clipForState, findEyeNodes, findGlowMaterials };
 
 /* ------------------------------ GLB loading ------------------------------- */
 
+/**
+ * The REAL agente-robot.glb (inspected — glTF-Transform, no skeleton):
+ *
+ *   robot → salto → corpo → forma → pelle / occhi (occhio_sinistro,
+ *   occhio_destro) / cuffie (headphones) / antenna (pallina, emissive)
+ *
+ *   clips: "fluttua" (float 4s) · "lavora" (work 2s) · "dorme" (sleep 6s)
+ *          · "salto" (jump 1.2s)
+ *
+ * Clips animate salto.translation, corpo.scale, forma.rotation,
+ * occhi.scale (blink) and antenna.rotation. The eyes' ROTATION is free —
+ * that is where the pointer-look goes. The mapping below is grounded in
+ * these actual names; unknown future GLBs fall back to generic matching.
+ */
 export interface GlbResult {
   scene: THREE.Group;
   animations: THREE.AnimationClip[];
+  /** The eyes group ("occhi"/"eyes") — rotation free for pointer-look. */
+  eyeNode: THREE.Object3D | null;
+  /** Emissive materials (antenna light…) to pulse per state. */
+  glowMaterials: THREE.MeshStandardMaterial[];
 }
+
+/** Vertical size the model is auto-fitted to (scene units). */
+const GLB_TARGET_HEIGHT = 1.5;
+
 /** Resolve the public GLB URL under the deployed base path (GitHub Pages). */
 export function robotGlbUrl(): string {
   const base = import.meta.env.BASE_URL ?? "/";
   return `${base.endsWith("/") ? base : `${base}/`}agente-robot.glb`;
 }
 
-/** HEAD-probe the GLB; resolve null when it is not deployed (the normal case). */
+/** HEAD-probe the GLB; resolve null when it is not deployed (the fallback path). */
 export async function probeGlb(): Promise<GlbResult | null> {
   try {
     const url = robotGlbUrl();
     const head = await fetch(url, { method: "HEAD" });
     if (!head.ok) return null;
-    const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
+    const [{ GLTFLoader }, { MeshoptDecoder }] = await Promise.all([
+      import("three/examples/jsm/loaders/GLTFLoader.js"),
+      // The real GLB is meshopt-compressed (EXT_meshopt_compression) — without
+      // this decoder the load fails and the procedural fallback would show.
+      import("three/examples/jsm/libs/meshopt_decoder.module.js"),
+    ]);
     const loader = new GLTFLoader();
+    loader.setMeshoptDecoder(MeshoptDecoder);
     const gltf = await loader.loadAsync(url);
-    return { scene: gltf.scene, animations: gltf.animations ?? [] };
+    const scene = gltf.scene;
+
+    // Auto-fit: never guess a model's real-world scale — measure its box.
+    scene.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(scene);
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    if (maxDim > 0 && Number.isFinite(maxDim)) {
+      scene.scale.setScalar(GLB_TARGET_HEIGHT / maxDim);
+      scene.updateMatrixWorld(true);
+      const centered = new THREE.Box3().setFromObject(scene);
+      const c = centered.getCenter(new THREE.Vector3());
+      scene.position.x -= c.x;
+      scene.position.y -= c.y;
+      scene.position.z -= c.z;
+    }
+
+    return {
+      scene,
+      animations: gltf.animations ?? [],
+      eyeNode: findEyeNodes(scene)[0] ?? null,
+      glowMaterials: findGlowMaterials(scene),
+    };
   } catch {
     return null;
   }
@@ -79,39 +132,6 @@ const PROFILES: Record<RobotState, MotionProfile> = {
   hidden:    { bob: 0, bobSpeed: 0, sway: 0, tilt: 0, eyeOpen: 0, antenna: 0, antennaColor: "#475569" },
 };
 
-/** Find a clip for a state by lenient name matching (GLB path). */
-export function clipForState(clips: THREE.AnimationClip[], state: RobotState): THREE.AnimationClip | undefined {
-  const wants: Record<string, string[]> = {
-    idle: ["idle", "float", "hover", "breath"],
-    attentive: ["idle", "attentive", "alert"],
-    thinking: ["think", "idea", "ponder"],
-    working: ["work", "run", "type", "build", "action"],
-    success: ["success", "happy", "wave", "cheer", "win"],
-    error: ["error", "fail", "sad", "no", "deny"],
-    waiting: ["wait", "patience", "look"],
-    speaking: ["talk", "speak", "say", "greet"],
-    sleeping: ["sleep", "rest", "tired"],
-    hidden: [],
-  };
-  const keys = wants[state] ?? wants.idle;
-  for (const k of keys) {
-    const hit = clips.find((c) => c.name.toLowerCase().includes(k));
-    if (hit) return hit;
-  }
-  return clips[0];
-}
-
-/* ------------------------------ eye helpers ------------------------------- */
-
-/** Nodes whose names suggest eyes (GLB path — best effort, degrades to none). */
-export function findEyeNodes(root: THREE.Object3D): THREE.Object3D[] {
-  const out: THREE.Object3D[] = [];
-  root.traverse((o) => {
-    if (/\b(eye|eyes|augen|oculo)\b/i.test(o.name)) out.push(o);
-  });
-  return out;
-}
-
 /* ------------------------------- the model -------------------------------- */
 
 export interface RobotModelProps {
@@ -128,7 +148,8 @@ export function RobotModel({ state, glb }: RobotModelProps) {
   const antennaBulb = useRef<THREE.MeshStandardMaterial>(null);
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
   const actionRef = useRef<THREE.AnimationAction | null>(null);
-  const glbEyes = useRef<THREE.Object3D[]>([]);
+  const glbEye = useRef<THREE.Object3D | null>(null);
+  const glbGlow = useRef<THREE.MeshStandardMaterial[]>([]);
   const { pointer } = useThree();
 
   // Smoothed values (refs — never per-frame setState).
@@ -145,18 +166,20 @@ export function RobotModel({ state, glb }: RobotModelProps) {
   const clock = useRef(0);
   const blink = useRef({ next: 2 + Math.random() * 3, phase: 0 });
 
-  // GLB: attach scene, map clips per state, collect eye-like nodes.
+  // GLB: attach scene, map clips per state, wire eyes + glow materials.
   useEffect(() => {
     if (!glb) return;
     // One mixer for the whole session (single GLB, single mixer).
     mixerRef.current = new THREE.AnimationMixer(glb.scene);
-    glbEyes.current = findEyeNodes(glb.scene);
+    glbEye.current = glb.eyeNode;
+    glbGlow.current = glb.glowMaterials;
     return () => {
       mixerRef.current?.stopAllAction();
       mixerRef.current?.uncacheRoot(glb.scene);
       mixerRef.current = null;
       actionRef.current = null;
-      glbEyes.current = [];
+      glbEye.current = null;
+      glbGlow.current = [];
     };
   }, [glb]);
 
@@ -246,16 +269,35 @@ export function RobotModel({ state, glb }: RobotModelProps) {
     if (eyeL.current) eyeL.current.scale.y = THREE.MathUtils.lerp(eyeL.current.scale.y, open, 0.55);
     if (eyeR.current) eyeR.current.scale.y = THREE.MathUtils.lerp(eyeR.current.scale.y, open, 0.55);
 
-    // GLB eyes: aim the discovered eye-ish nodes at the pointer.
-    for (const e of glbEyes.current) {
-      e.rotation.y = s.lookX;
-      e.rotation.x = -s.lookY;
+    // GLB eyes ("occhi"): the clips own the SCALE (blink); the ROTATION is
+    // ours — a bounded, eased pointer-follow for the eyes group.
+    if (glbEye.current && glb) {
+      const sleeping = state === "sleeping";
+      glbEye.current.rotation.y = THREE.MathUtils.lerp(
+        glbEye.current.rotation.y,
+        sleeping ? 0 : s.lookX * 0.6,
+        0.12,
+      );
+      glbEye.current.rotation.x = THREE.MathUtils.lerp(
+        glbEye.current.rotation.x,
+        sleeping ? 0.25 : -s.lookY * 0.6,
+        0.12,
+      );
     }
 
     // Antenna glow pulse.
+    const pulse =
+      state === "working" || state === "thinking" ? 1.25 + Math.sin(t * 9) * 0.55 : s.antenna;
     if (antennaBulb.current) {
-      const pulse = state === "working" || state === "thinking" ? 1.25 + Math.sin(t * 9) * 0.55 : s.antenna;
       antennaBulb.current.emissiveIntensity = pulse;
+    }
+    // GLB emissive materials (antenna light…): same pulse, scaled to their
+    // baked intensity so nothing blows out.
+    for (const m of glbGlow.current) {
+      if (m.userData.baseGlow == null) m.userData.baseGlow = m.emissiveIntensity;
+      const base = m.userData.baseGlow as number;
+      const target = base * (state === "sleeping" ? 0.25 : 0.8 + pulse * 0.6);
+      m.emissiveIntensity = THREE.MathUtils.lerp(m.emissiveIntensity, target, 0.15);
     }
 
     // GLB mixer tick.
@@ -265,10 +307,11 @@ export function RobotModel({ state, glb }: RobotModelProps) {
   /* ------------------------------- rendering ------------------------------ */
 
   if (glb) {
-    return <primitive object={glb.scene} ref={group} scale={1.15} />;
+    // The scene was auto-fitted + centered in probeGlb — no scale guessing.
+    return <primitive object={glb.scene} ref={group} />;
   }
 
-  // Procedural robot (fallback — the repo currently ships no GLB).
+  // Procedural robot (fallback — used when the GLB is absent or unloadable).
   return (
     <group ref={group} position={[0, 0, 0]}>
       {/* body */}
