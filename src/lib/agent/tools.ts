@@ -19,7 +19,14 @@ import type { ToolDef, ToolCallRequest, ToolCallResult } from "./types";
 import { testWorker } from "../ai/client";
 import type { AiWorker as AiWorkerType } from "../ai/types";
 import { setThemeGlobal } from "../../hooks/useTheme";
-import { todayIso, formatJalali } from "../../utils/jalali";
+import {
+  isLeapJalaaliYear as jalaliIsLeap,
+  isValidJalaaliDate,
+  jalaaliMonthLength,
+  toGregorian as jalaliToGregorian,
+  toJalaali,
+} from "jalaali-js";
+import { todayIso, formatJalali, toLatinDigits, isoFromDate, dateFromIso } from "../../utils/jalali";
 import { formatMoney } from "../../utils/num";
 import { customerFullName, findDuplicatePassport, createCustomer } from "../../db/customers";
 import { createRequest, setRequestIssued } from "../../db/requests";
@@ -43,15 +50,53 @@ const str = (v: unknown): string | undefined =>
   typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : undefined;
 const strAll = (v: unknown): string[] | undefined =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").map((s) => s.trim()).filter(Boolean) : undefined;
-const num = (v: unknown): number | undefined =>
-  typeof v === "number" && Number.isFinite(v) ? v : typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)) ? Number(v) : undefined;
-const bool = (v: unknown): boolean | undefined => (typeof v === "boolean" ? v : undefined);
+/** Numbers accept Persian/Arabic digits and thousand separators: "۱٬۲۳۴" → 1234 */
+const num = (v: unknown): number | undefined => {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(toLatinDigits(v).replace(/[,_٬\s]/g, ""));
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+};
+const bool = (v: unknown): boolean | undefined => {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "string") {
+    const s = toLatinDigits(v).trim().toLowerCase();
+    if (["true", "yes", "1"].includes(s)) return true;
+    if (["false", "no", "0"].includes(s)) return false;
+  }
+  return undefined;
+};
 
 const norm = (s: string): string => s.replace(/[\s\u200c]+/g, " ").trim().toLowerCase();
 const normPassport = (s: string): string => s.replace(/[\s\-_.]/g, "").toUpperCase();
 
-const isoDate = (v: string | undefined): string | undefined =>
-  v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined;
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+
+/**
+ * Parse a model-supplied date FLEXIBLY → ISO yyyy-mm-dd:
+ *  "2026-01-05" ✓  "۱۴۰۴/۱۰/۱۵" ✓  "1404-10-15" (Jalali) ✓
+ * Persian digits are normalized, and a 1300–1500 year is auto-detected as
+ * Jalali and converted — a 1900–2100 year passes through as Gregorian.
+ * Anything unparseable returns undefined (the filter is then ignored loudly
+ * upstream, instead of silently mismatching).
+ */
+const isoDate = (v: string | undefined): string | undefined => {
+  if (!v) return undefined;
+  const s = toLatinDigits(v).trim().replace(/[.\\/-]+/g, "/");
+  const m = /^(\d{4})\/(\d{1,2})\/(\d{1,2})$/.exec(s);
+  if (!m) return undefined;
+  const y = +m[1];
+  const mo = +m[2];
+  const d = +m[3];
+  if (y >= 1900 && y <= 2100) return `${y}-${pad2(mo)}-${pad2(d)}`;
+  if (y >= 1300 && y <= 1500 && isValidJalaaliDate(y, mo, d)) {
+    const g = jalaliToGregorian(y, mo, d);
+    return `${g.gy}-${pad2(g.gm)}-${pad2(g.gd)}`;
+  }
+  return undefined;
+};
 
 function between(v: string | undefined | null, from?: string, to?: string): boolean {
   if (!v) return !from && !to;
@@ -296,6 +341,77 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
     },
   });
 
+  /* --------------------------------- calendar ----------------------------- */
+
+  /** Shared: describe one ISO date in BOTH calendars (weekday, leap, month…). */
+  function describeDate(iso: string): Record<string, unknown> {
+    const d = dateFromIso(iso)!;
+    const j = toJalaali(d);
+    const today = todayIso();
+    const t0 = dateFromIso(today)!;
+    const diffDays = Math.round((d.getTime() - t0.getTime()) / 86_400_000);
+    return {
+      gregorian: iso,
+      gregorian_text: `${iso} (${d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })})`,
+      jalali: { year: j.jy, month: j.jm, day: j.jd },
+      jalali_text: formatJalali(iso, "long"),
+      jalali_month_name: ["فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور", "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"][j.jm - 1],
+      weekday: { fa: d.toLocaleDateString("fa-IR", { weekday: "long" }), en: d.toLocaleDateString("en-US", { weekday: "long" }) },
+      jalali_leap_year: jalaliIsLeap(j.jy),
+      jalali_month_length: jalaaliMonthLength(j.jy, j.jm),
+      days_from_today: diffDays,
+      relative: diffDays === 0 ? "امروز" : diffDays > 0 ? `${diffDays} روز آینده` : `${Math.abs(diffDays)} روز گذشته`,
+      today,
+    };
+  }
+
+  entries.push({
+    def: {
+      name: "get_current_date",
+      description: "تاریخ و ساعت همین حالا به هر دو تقویم (شمسی + میلادی) + روز هفته. برای هر سؤال «امروز چندمه؟» / «حالا چه ساعتی است؟» / «چند شنبه است؟» اول این را صدا بزن — هرگز از حدس خودت استفاده نکن.",
+      params: [],
+      writes: false,
+    },
+    run: async () => {
+      const now = new Date();
+      const g = isoFromDate(now);
+      const info = describeDate(g);
+      return ok({
+        ...info,
+        clock: `${pad2(now.getHours())}:${pad2(now.getMinutes())}`,
+        clock_24h: `${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`,
+        note: "تاریخ‌های ذخیره‌شدهٔ برنامه میلادی ISO هستند؛ شکل شمسی‌شان در نتایج ابزار با پسوند jalali آمده.",
+      }, `امروز ${formatJalali(g)} — ${info.weekday && (info.weekday as { fa: string }).fa}`);
+    },
+  });
+
+  entries.push({
+    def: {
+      name: "date_info",
+      description: "تقویم کامل: هر تاریخ شمسی (مثل 1404/07/12 یا ۱۴۰۴/۰۷/۱۲) یا میلادی (2025-10-02 یا 2025/10/2) را به هر دو تقویم تبدیل می‌کند + روز هفته + کبیسه + طول ماه + فاصله تا امروز. با to، فاصلهٔ دقیق دو تاریخ را هم می‌دهد. برای هر محاسبه/تبدیل/مقایسهٔ تاریخ از این استفاده کن.",
+      params: [
+        P("date", "string", "تاریخ شمسی یا میلادی (ارقام فارسی هم OK)", true),
+        P("to", "string", "تاریخ دوم برای محاسبهٔ فاصله (اختیاری، شمسی یا میلادی)"),
+      ],
+      writes: false,
+    },
+    run: async (a) => {
+      const d1 = isoDate(str(a.date));
+      if (!d1) return fail("تاریخ قابل فهم نبود", "فرمت‌های مجاز: 1404/07/12 یا 2025-10-02 یا 2025/10/2 (ارقام فارسی هم OK)");
+      const out: Record<string, unknown> = { input: str(a.date), ...describeDate(d1) };
+      const toRaw = str(a.to);
+      if (toRaw) {
+        const d2 = isoDate(toRaw);
+        if (!d2) return fail(`تاریخ دوم «${toRaw}» قابل فهم نبود`, "همان فرمت‌های مجاز date");
+        const a1 = dateFromIso(d1)!;
+        const a2 = dateFromIso(d2)!;
+        out.to = describeDate(d2);
+        out.days_between = Math.round((a2.getTime() - a1.getTime()) / 86_400_000);
+      }
+      return ok(out, `${formatJalali(d1)}${out.days_between != null ? ` — فاصله ${toLatinDigits(String(out.days_between))} روز` : ""}`);
+    },
+  });
+
   entries.push({
     def: {
       name: "query_table",
@@ -397,8 +513,8 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
     P("representative", "string", "نام یا id نماینده"),
     P("list", "string", "نام یا id لیست"),
     P("employer", "string", "نام/id کارفرما یا «none» برای بدون کارفرما"),
-    P("registered_from", "string", "از تاریخ ثبت yyyy-mm-dd"),
-    P("registered_to", "string", "تا تاریخ ثبت yyyy-mm-dd"),
+    P("registered_from", "string", "از تاریخ ثبت — میلادی 2026-01-05 یا شمسی 1404/10/15"),
+    P("registered_to", "string", "تا تاریخ ثبت — میلادی یا شمسی"),
   ];
 
   async function filterCustomers(f: CustFilter): Promise<Customer[]> {
@@ -507,10 +623,10 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
       description: "ثبت مشتری جدید. representative و list الزامی‌اند (قانون برنامه)؛ employer اختیاری است («none» = بدون کارفرما). اگر چیزی نامعلوم است از کاربر بپرس، حدس نزن.",
       params: [
         P("first_name", "string", "نام", true), P("last_name", "string", "نام خانوادگی"),
-        P("passport_number", "string", "شماره پاسپورت"), P("birth_date", "string", "yyyy-mm-dd"),
+        P("passport_number", "string", "شماره پاسپورت"), P("birth_date", "string", "تاریخ تولد — میلادی یا شمسی"),
         P("representative", "string", "نام یا id نماینده", true), P("list", "string", "نام یا id لیست", true),
         P("employer", "string", "نام/id کارفرما یا none"), P("notes", "string", "یادداشت"),
-        P("registration_date", "string", "yyyy-mm-dd (پیش‌فرض امروز)"),
+        P("registration_date", "string", "تاریخ ثبت — میلادی یا شمسی (پیش‌فرض امروز)"),
       ],
       writes: true,
     },
@@ -716,8 +832,8 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
     ...customerFilterArgs.filter((p) => p.name === "representative" || p.name === "list" || p.name === "employer"),
     P("customer", "string", "نام/پاسپورت/id مشتری"),
     P("visa_type", "string", "نوع ویزا"),
-    P("registered_from", "string"), P("registered_to", "string"),
-    P("issued_from", "string", "از تاریخ صدور"), P("issued_to", "string", "تا تاریخ صدور"),
+    P("registered_from", "string", "از تاریخ ثبت — میلادی یا شمسی"), P("registered_to", "string", "تا تاریخ ثبت"),
+    P("issued_from", "string", "از تاریخ صدور — میلادی یا شمسی"), P("issued_to", "string", "تا تاریخ صدور"),
   ];
 
   async function filterRequests(f: ReqFilter): Promise<{ reqs: import("../../types").VisaRequest[]; customers: Customer[] }> {
@@ -812,7 +928,7 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
         P("currency", "string", "IRT | USD | AFN", false, { enum: ["IRT", "USD", "AFN"] }),
         P("representative", "string", "نام/id (پیش‌فرض: نمایندهٔ مشتری)"),
         P("list", "string", "نام/id (پیش‌فرض: لیست مشتری)"),
-        P("notes", "string", "یادداشت"), P("registration_date", "string", "yyyy-mm-dd"),
+        P("notes", "string", "یادداشت"), P("registration_date", "string", "تاریخ ثبت — میلادی یا شمسی"),
         P("tags", "array", "نام برچسب‌ها", false, { items: { type: "string" } }),
       ],
       writes: true,
@@ -851,7 +967,7 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
   });
 
   entries.push({
-    def: { name: "set_request_issued", description: "علامت‌گذاری درخواست به «صادر شده» (یا برگرداندن آن با undo=true).", params: [P("request", "string", "id درخواست", true), P("issued_date", "string", "yyyy-mm-dd (پیش‌فرض امروز)"), P("undo", "boolean", "برگشت به در حال کار")], writes: true },
+    def: { name: "set_request_issued", description: "علامت‌گذاری درخواست به «صادر شده» (یا برگرداندن آن با undo=true).", params: [P("request", "string", "id درخواست", true), P("issued_date", "string", "تاریخ صدور — میلادی یا شمسی (پیش‌فرض امروز)"), P("undo", "boolean", "برگشت به در حال کار")], writes: true },
     run: async (a) => {
       const id = str(a.request);
       const r = id ? await db.requests.get(id) : undefined;
@@ -865,7 +981,7 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
   /* --------------------------------- payments ---------------------------- */
 
   entries.push({
-    def: { name: "list_payments", description: "پرداخت‌های نمایندگان + مجموع هر ارز.", params: [P("representative", "string"), P("from", "string"), P("to", "string"), P("currency", "string", "IRT | USD | AFN", false, { enum: ["IRT", "USD", "AFN"] }), P("limit", "number")], writes: false },
+    def: { name: "list_payments", description: "پرداخت‌های نمایندگان + مجموع هر ارز.", params: [P("representative", "string"), P("from", "string", "از تاریخ — میلادی یا شمسی"), P("to", "string", "تا تاریخ — میلادی یا شمسی"), P("currency", "string", "IRT | USD | AFN", false, { enum: ["IRT", "USD", "AFN"] }), P("limit", "number")], writes: false },
     run: async (a) => {
       const reps = await allReps();
       let pays = await db.payments.toArray();
@@ -1031,7 +1147,7 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
   });
 
   entries.push({
-    def: { name: "list_acc_transactions", description: "تراکنش‌های حسابداری با فیلتر.", params: [P("party", "string", "نام/کد طرف‌حساب"), P("type", "string", "نوع تراکنش"), P("status", "string", "وضعیت"), P("from", "string"), P("to", "string"), P("limit", "number")], writes: false },
+    def: { name: "list_acc_transactions", description: "تراکنش‌های حسابداری با فیلتر.", params: [P("party", "string", "نام/کد طرف‌حساب"), P("type", "string", "نوع تراکنش"), P("status", "string", "وضعیت"), P("from", "string", "از تاریخ — میلادی یا شمسی"), P("to", "string", "تا تاریخ — میلادی یا شمسی"), P("limit", "number")], writes: false },
     run: async (a) => {
       let txs: FinTransaction[] = await db.accTransactions.toArray();
       if (a.party !== undefined) {
@@ -1118,13 +1234,35 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
 
   /* --------------------------------- execute ----------------------------- */
 
-  const byName = new Map(entries.map((e) => [e.def.name, e]));
+  /** "countcustomers" ≡ "count_customers" ≡ "Count Customers" */
+  const normKey = (s: string): string => s.toLowerCase().replace(/[\s_\-.]/g, "");
+  const byExact = new Map(entries.map((e) => [e.def.name, e] as const));
+  const byNorm = new Map(entries.map((e) => [normKey(e.def.name), e] as const));
+
   async function execute(call: ToolCallRequest): Promise<ToolCallResult> {
-    const entry = byName.get(call.name);
     const started = performance.now();
+    const nk = normKey(call.name);
+    // exact → separator-insensitive → substring (either direction, ≥4 chars)
+    let entry = byExact.get(call.name) ?? byNorm.get(nk);
+    if (!entry && nk.length >= 4) {
+      entry = entries.find((e) => {
+        const en = normKey(e.def.name);
+        return (en.includes(nk) || nk.includes(en)) && en.length >= 3;
+      });
+    }
     let res: ToolCallResult;
     if (!entry) {
-      res = fail(`ابزار «${call.name}» وجود ندارد`, "فهرست ابزارها را از سیستم‌پرامپت بخوان");
+      // Helpful hint: closest real tool names (share a ≥4-char prefix chunk)
+      const stem = nk.slice(0, 4);
+      const close = [...byNorm.keys()]
+        .filter((n) => n.includes(stem) || nk.includes(n.slice(0, 4)))
+        .slice(0, 6);
+      res = fail(
+        `ابزار «${call.name}» وجود ندارد`,
+        close.length > 0
+          ? `شاید منظورت این‌ها بود: ${close.map((n) => byNorm.get(n)!.def.name).join("، ")} — نام دقیق را از فهرست ابزارهای سیستم‌پرامپت با زیرخط (_) کپی کن`
+          : "نام دقیق را از فهرست ابزارهای سیستم‌پرامپت با زیرخط (_) کپی کن",
+      );
     } else {
       try {
         res = await entry.run(call.args ?? {});
@@ -1132,7 +1270,8 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
         res = fail(e instanceof Error ? e.message : String(e));
       }
     }
-    return { ...res, id: call.id, name: call.name, ms: Math.round(performance.now() - started) };
+    // Report the CANONICAL name back so the model self-corrects next round.
+    return { ...res, id: call.id, name: entry ? entry.def.name : call.name, ms: Math.round(performance.now() - started) };
   }
 
   return { tools: entries.map((e) => e.def), execute };

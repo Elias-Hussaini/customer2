@@ -49,6 +49,19 @@ function buildSystemPrompt(tools: ToolDef[], maxRounds: number): string {
 - میلادی: ${g} — ${now.toLocaleDateString("en-US", { weekday: "long" })}
 - شمسی: ${j} — ${weekday}
 
+## قوانین ضدتوهم (حیاتی — تخطی مطلقاً ممنوع)
+- هرگز هیچ عدد، آمار، تاریخ یا نتیجه‌ای را از خودت نساز. هر عدد در جواب نهایی باید عیناً از TOOL RESULTS واقعی همین گفتگو آمده باشد؛ اگر نداری، ابزار صدا بزن.
+- «TOOL RESULTS» را فقط سیستم بعد از اجرای واقعی ابزار می‌فرستد. تو هرگز خودت چنین بخشی نساز و نتیجهٔ ابزار را شبیه‌سازی نکن.
+- وقتی ابزار لازم است، جواب تو فقط و فقط JSON خالص پروتکل است — هیچ متن، توضیح یا بلوکِ کد قبل و بعدش ننویس.
+- نام ابزار را دقیقاً با زیرخط (_) از فهرست پایین کپی کن (مثلاً count_customers نه countcustomers).
+- برای هر سؤال آماری/تعدادی، قبل از جواب دادن حتماً ابزار مربوطه (db_stats، count_customers، …) را صدا بزن؛ حدس و تخمین ممنوع.
+- اگر ابزار خطا داد، args را اصلاح کن و دوباره امتحان کن؛ از جواب خطا چیزی نساز.
+
+## تقویم و تاریخ
+- «امروز» و ساعت فعلی بالاتر آمده، اما برای اطمینان یا سؤالات تقویمی از ابزارهای get_current_date و date_info استفاده کن.
+- date_info هر تاریخ شمسی (مثل 1404/07/12 حتی با ارقام فارسی ۱۴۰۴/۰۷/۱۲) یا میلادی را به هر دو تقویم تبدیل می‌کند، روز هفته و فاصله تا امروز را می‌دهد.
+- تاریخ‌های ذخیره‌شده در داده‌ها میلادی ISO هستند (در نتایج ابزار، شکل شمسی‌شان کنارشان با پسوند _jalali آمده). در فیلترهای ابزار می‌توانی تاریخ شمسی هم بدهی؛ خودکار تبدیل می‌شود.
+
 ## پروتکل ابزار
 - وقتی داده یا اقدام لازم داری، جواب تو ONLY این JSON است (بدون متن اضافه):
   {"tool_calls":[{"id":"c1","name":"نام_ابزار","args":{…}},{"id":"c2","name":"…","args":{…}}]}
@@ -77,41 +90,182 @@ ${tools.map(renderTool).join("\n")}`;
 
 export type Protocol =
   | { kind: "tool_calls"; calls: ToolCallRequest[] }
-  | { kind: "final" };
+  | { kind: "final"; text?: string };
+
+/** Normalize a tool name for matching: lowercase + strip separators.
+ *  "count_customers" ≡ "countcustomers" ≡ "Count Customers" */
+export function normalizeToolName(s: string): string {
+  return s.toLowerCase().replace(/[\s_\-.]/g, "");
+}
+
+/** Keys that UNAMBIGUOUSLY mean "run these tools" (strong aliases). */
+const STRONG_CALL_KEYS = new Set(["toolcalls", "functioncalls", "toolcall"]);
+/** Weaker aliases — only accepted when a call matches a real registered tool. */
+const WEAK_CALL_KEYS = new Set(["calls", "tools", "invocations", "actions"]);
+/** Where the call's name may live. */
+const NAME_KEYS = ["name", "tool", "tool_name", "toolname", "function", "function_name"];
+/** Where the call's args may live. */
+const ARGS_KEYS = ["args", "arguments", "parameters", "params", "input"];
+/** Models sometimes wrap their final answer in JSON — unwrap these. */
+const FINAL_KEYS = ["final", "answer", "text", "reply", "response", "message"];
+
+/** Skip a JSON string literal starting at `start` (quote char at start). */
+function skipStringLiteral(text: string, start: number): number {
+  let i = start + 1;
+  while (i < text.length) {
+    if (text[i] === "\\") i += 2;
+    else if (text[i] === '"') return i + 1;
+    else i++;
+  }
+  return i;
+}
+
+/** Find the index of the bracket matching the one at `start` (or text end). */
+function findMatchingBracket(text: string, start: number): number {
+  const open = text[start];
+  const close = open === "{" ? "}" : "]";
+  let depth = 0;
+  let i = start;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '"') {
+      i = skipStringLiteral(text, i);
+      continue;
+    }
+    if (ch === open) depth++;
+    else if (ch === close) {
+      depth--;
+      if (depth === 0) return i;
+    }
+    i++;
+  }
+  return text.length - 1; // truncated tail — the loose parser will try to repair it
+}
+
+/** Every balanced (or trailing truncated) {...}/[...] span in the text. */
+function jsonSpans(text: string): string[] {
+  const spans: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '"') {
+      i = skipStringLiteral(text, i);
+      continue;
+    }
+    if (ch === "{" || ch === "[") {
+      const end = findMatchingBracket(text, i);
+      spans.push(text.slice(i, end + 1));
+      i = end + 1;
+      continue;
+    }
+    i++;
+  }
+  return spans;
+}
+
+function parseCall(e: unknown, i: number): { call: ToolCallRequest; hadArgs: boolean } | null {
+  if (e == null || typeof e !== "object" || Array.isArray(e)) return null;
+  const rec = e as Record<string, unknown>;
+  let name = "";
+  for (const k of NAME_KEYS) {
+    const v = rec[k];
+    if (typeof v === "string" && v.trim()) {
+      name = v.trim();
+      break;
+    }
+  }
+  if (!name) return null;
+  let args: Record<string, unknown> = {};
+  let hadArgs = false;
+  for (const k of ARGS_KEYS) {
+    const v = rec[k];
+    if (v != null && typeof v === "object" && !Array.isArray(v)) {
+      args = v as Record<string, unknown>;
+      hadArgs = true;
+      break;
+    }
+  }
+  return {
+    call: {
+      id: typeof rec.id === "string" && rec.id.trim() ? rec.id.trim() : `c${i + 1}`,
+      name,
+      args,
+    },
+    hadArgs,
+  };
+}
+
+/** Does this (possibly mangled) name refer to a real registered tool? */
+function matchesKnown(name: string, known: Set<string>): boolean {
+  const nk = normalizeToolName(name);
+  if (known.has(nk)) return true;
+  if (nk.length >= 4) {
+    for (const k of known) if (k.includes(nk) || nk.includes(k)) return true;
+  }
+  return false;
+}
+
+function callsFromValue(val: unknown): { call: ToolCallRequest; hadArgs: boolean }[] | null {
+  const arr = Array.isArray(val) ? val : [val];
+  if (arr.length === 0) return null;
+  const calls = arr.map(parseCall).filter((c): c is { call: ToolCallRequest; hadArgs: boolean } => !!c);
+  return calls.length > 0 ? calls : null;
+}
 
 /**
- * Decide whether a model reply is a tool round. Only a JSON object that
- * actually contains a "tool_calls" array counts — anything else (including
- * JSON the user asked to see) is a final answer.
+ * Decide whether a model reply is a tool round. The protocol JSON is hunted
+ * ANYWHERE in the reply (before/after prose, inside fences, truncated) and
+ * under any key alias the model invents ("tool_calls", "toolcalls", …).
+ * Tool names are matched leniently ("countcustomers" ≡ "count_customers").
+ * Anything without a real tool-call payload is a final answer.
  */
-export function parseProtocol(text: string): Protocol {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("```")) return { kind: "final" };
-  let parsed: unknown;
-  try {
-    parsed = parseJsonLoose(trimmed);
-  } catch {
-    return { kind: "final" };
+export function parseProtocol(text: string, knownTools?: Set<string>): Protocol {
+  const known = knownTools ?? new Set<string>();
+  for (const span of jsonSpans(text)) {
+    let parsed: unknown;
+    try {
+      parsed = parseJsonLoose(span);
+    } catch {
+      continue; // not JSON — keep scanning
+    }
+    if (parsed == null) continue;
+
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const obj = parsed as Record<string, unknown>;
+      for (const [key, val] of Object.entries(obj)) {
+        const nk = normalizeToolName(key);
+        const strong = STRONG_CALL_KEYS.has(nk);
+        const weak = WEAK_CALL_KEYS.has(nk);
+        if (!strong && !weak) continue;
+        const calls = callsFromValue(val);
+        if (!calls) continue;
+        // Weak aliases must reference at least one REAL tool (an explanatory
+        // example listing pseudo-tools is not a tool round).
+        if (weak && !calls.some((c) => matchesKnown(c.call.name, known))) continue;
+        return { kind: "tool_calls", calls: calls.map((c) => c.call) };
+      }
+      // No calls — maybe a wrapped final answer like {"final": "..."}.
+      for (const k of FINAL_KEYS) {
+        const v = obj[k];
+        if (typeof v === "string" && v.trim()) return { kind: "final", text: v };
+      }
+      continue;
+    }
+
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      const calls = parsed.map(parseCall).filter((c): c is { call: ToolCallRequest; hadArgs: boolean } => !!c);
+      // A bare array counts only when it is purely calls, references a real
+      // tool AND carries args — JSON data the user asked to see must stay data.
+      if (
+        calls.length === parsed.length &&
+        calls.some((c) => c.hadArgs) &&
+        calls.some((c) => matchesKnown(c.call.name, known))
+      ) {
+        return { kind: "tool_calls", calls: calls.map((c) => c.call) };
+      }
+    }
   }
-  if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) return { kind: "final" };
-  const obj = parsed as Record<string, unknown>;
-  const rawCalls = obj.tool_calls ?? obj.toolCalls ?? obj.calls;
-  if (!Array.isArray(rawCalls) || rawCalls.length === 0) return { kind: "final" };
-  const calls: ToolCallRequest[] = [];
-  for (let i = 0; i < rawCalls.length; i++) {
-    const e = rawCalls[i];
-    if (e == null || typeof e !== "object") continue;
-    const rec = e as Record<string, unknown>;
-    const name = typeof rec.name === "string" ? rec.name.trim() : typeof rec.tool === "string" ? rec.tool.trim() : "";
-    if (!name) continue;
-    calls.push({
-      id: typeof rec.id === "string" ? rec.id : `c${i + 1}`,
-      name,
-      args: (rec.args && typeof rec.args === "object" && !Array.isArray(rec.args) ? rec.args : rec.arguments && typeof rec.arguments === "object" ? rec.arguments : {}) as Record<string, unknown>,
-    });
-  }
-  if (calls.length === 0) return { kind: "final" };
-  return { kind: "tool_calls", calls };
+  return { kind: "final" };
 }
 
 /** A reply is usable as a final answer (drives the parallel race). */
@@ -183,6 +337,15 @@ export async function runAgentTurn(input: AgentTurnInput, args: RunTurnArgs): Pr
         ),
     });
 
+  // Lenient tool-name matching: "countcustomers" resolves to count_customers.
+  const knownTools = new Set(registry.tools.map((t) => normalizeToolName(t.name)));
+  // Anti-fabrication guard: a reply that NARRATES fake "TOOL RESULTS" while no
+  // tool has actually run this turn gets one corrective retry (never shown raw).
+  const NARRATION_RE = /TOOL\s*RESULTS|نتیجه[هٔ]?\s*ابزار/i;
+  const FAKE_CORRECTION =
+    "⚠️ تذکر سیستم: در این نوبت هنوز هیچ ابزاری واقعاً اجرا نشده است؛ «TOOL RESULTS» و آمارهایی که نوشتی را خودت از خودت ساخته‌ای — این جعل است و مطلقاً ممنوع. قانون: هر عدد/آمار/نتیجه فقط از TOOL RESULTS واقعی همین گفتگو مجاز است. الان فقط یکی از این دو کار را بکن: (۱) اگر داده لازم داری، فقط و فقط JSON خالص پروتکل را بفرست تا ابزار واقعاً اجرا شود؛ (۲) اگر دادهٔ واقعی از TOOL RESULTSهای قبلی همین گفتگو داری، فقط از همان‌ها جواب نهایی بده.";
+  let fakeGuardUsed = false;
+
   for (let round = 0; round < maxRounds; round++) {
     if (signal?.aborted) return { kind: "aborted" };
     events?.onStatus?.(round === 0 ? "در حال فکر کردن…" : `دور ${toPersianDigits(round + 1)} — در حال فکر کردن…`);
@@ -204,11 +367,20 @@ export async function runAgentTurn(input: AgentTurnInput, args: RunTurnArgs): Pr
     }
     if (signal?.aborted) return { kind: "aborted" };
 
-    const proto = parseProtocol(reply.text);
+    const proto = parseProtocol(reply.text, knownTools);
     if (proto.kind === "final") {
+      // Fabricated tool results with zero real tools executed → one retry.
+      if (steps.length === 0 && !fakeGuardUsed && round < maxRounds - 1 && NARRATION_RE.test(reply.text)) {
+        fakeGuardUsed = true;
+        messages.push({ role: "assistant", content: reply.text });
+        messages.push({ role: "user", content: FAKE_CORRECTION });
+        events?.onStatus?.("مدل داشت نتیجهٔ ابزار را از خود می‌ساخت — تذکر داده شد، تلاش مجدد…");
+        continue;
+      }
+      const finalText = proto.text ?? reply.text;
       const worker = reply.parallel ? `${reply.worker} (موازی)` : reply.worker;
-      events?.onFinal?.(reply.text, worker);
-      return { kind: "answer", text: reply.text, worker, steps };
+      events?.onFinal?.(finalText, worker);
+      return { kind: "answer", text: finalText, worker, steps };
     }
 
     // A tool round — execute every call, then feed compact results back.
