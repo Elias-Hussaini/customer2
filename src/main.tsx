@@ -12,7 +12,11 @@ import {
   scopeDocTypesToOwners,
 } from "./db/docTypes";
 import { runStartupImageOptimizer } from "./services/imageMaintenance";
+import { installRipple } from "./utils/ripple";
 import "./styles/global.css";
+
+/** Soft ripple on every button press — one delegated listener, no wiring. */
+installRipple();
 
 /** GitHub Pages serves under /customer2/ — the router base follows Vite's base. */
 const routerBasename = import.meta.env.BASE_URL.replace(/\/$/, "");

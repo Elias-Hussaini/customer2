@@ -32,6 +32,8 @@ import {
   type OutstandingSettlement,
 } from "../types";
 import { useAccAccounts, useAccParties, useAccTransactions } from "../hooks";
+import type { Currency } from "../../types";
+import { CURRENCY_LABELS, currencyLabel } from "../../types";
 
 /* ------------------------------- Create item ------------------------------- */
 
@@ -49,7 +51,7 @@ export function OutstandingFormModal({
   const [kind, setKind] = useState<OutstandingKind>("receivable");
   const [partyId, setPartyId] = useState<string | null>(null);
   const [amount, setAmount] = useState<number | null>(null);
-  const [currency, setCurrency] = useState<"USD" | "IRT">("IRT");
+  const [currency, setCurrency] = useState<Currency>("IRT");
   const [dueDate, setDueDate] = useState<string | null>(null);
   const [description, setDescription] = useState("");
   const [busy, setBusy] = useState(false);
@@ -159,7 +161,7 @@ export function OutstandingFormModal({
                 disabled={Boolean(editItem)}
               />
               <div className="flex shrink-0 overflow-hidden rounded-[0.85rem] border border-ink-900/10 dark:border-white/10">
-                {(["IRT", "USD"] as const).map((c) => (
+                {(["IRT", "USD", "AFN"] as const).map((c) => (
                   <button
                     key={c}
                     type="button"
@@ -171,7 +173,7 @@ export function OutstandingFormModal({
                         : "bg-white/60 text-ink-500 dark:bg-white/5 dark:text-ink-300"
                     }`}
                   >
-                    {c === "IRT" ? "تومان" : "دلار"}
+                    {CURRENCY_LABELS[c]}
                   </button>
                 ))}
               </div>
@@ -330,7 +332,7 @@ export function SettleModal({
               hint="اگر پول واقعاً جابه‌جا شده، حساب را انتخاب کنید؛ خالی بگذارید تا فقط اطلاعاتی ثبت شود"
             >
               <SearchSelect
-                items={eligibleAccounts.map((a) => ({ id: a.id, title: a.name, subtitle: a.currency === "USD" ? "دلار" : "تومان" }))}
+                items={eligibleAccounts.map((a) => ({ id: a.id, title: a.name, subtitle: currencyLabel(a.currency) }))}
                 value={accountId}
                 onSelect={setAccountId}
                 placeholder="بدون تغییر مانده…"
@@ -458,7 +460,7 @@ export function SettlementHistory({
   onRemove,
 }: {
   settlements: OutstandingSettlement[];
-  currency: "USD" | "IRT";
+  currency: Currency;
   onRemove?: (settlementId: string) => void;
 }) {
   if (settlements.length === 0) {

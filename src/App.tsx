@@ -14,8 +14,10 @@ import { ReportsPage } from "./pages/ReportsPage";
 import { MonthlyStatsPage } from "./pages/MonthlyStatsPage";
 import { SearchPage } from "./pages/SearchPage";
 import { ArchivePage } from "./pages/ArchivePage";
+import { SmartArchivePage } from "./pages/SmartArchivePage";
 import { BackupPage } from "./pages/BackupPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { AgentChatPage } from "./pages/AgentChatPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { AccountingShell } from "./pages/accounting/AccountingShell";
 import { AccDashboardPage } from "./pages/accounting/AccDashboardPage";
@@ -48,8 +50,10 @@ export default function App() {
         <Route path="stats" element={<MonthlyStatsPage />} />
         <Route path="search" element={<SearchPage />} />
         <Route path="archive" element={<ArchivePage />} />
+        <Route path="smart-archive" element={<SmartArchivePage />} />
         <Route path="backup" element={<BackupPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="ai" element={<AgentChatPage />} />
         {/* Accounting section — a separate financial world */}
         <Route path="accounting" element={<AccountingShell />}>
           <Route index element={<AccDashboardPage />} />

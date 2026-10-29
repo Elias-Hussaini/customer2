@@ -231,6 +231,102 @@ export async function aiChat(messages: ChatMessage[], opts: ChatOptions = {}): P
   throw new AiAllWorkersFailedError(attempts);
 }
 
+/* ------------------------- parallel multi-account -------------------------- */
+
+export interface RaceOptions extends ChatOptions {
+  /**
+   * Reply validation. A HTTP-successful reply that fails `validate` counts as
+   * a failure — the race moves on to other accounts and the first reply that
+   * passes validation wins (answers from multiple accounts are synthesized
+   * by whichever account produces a usable reply).
+   */
+  validate?: (text: string) => boolean;
+}
+
+export interface RaceResult extends ChatResult {
+  /** True when the win came from the parallel stage (≥1 account had failed). */
+  parallel: boolean;
+}
+
+/**
+ * Like aiChat, but under pressure it goes PARALLEL: the first attempt is
+ * sequential; as soon as one worker fails (rate limit, auth, garbage reply),
+ * every remaining enabled worker is fired at once and the first usable reply
+ * wins. This spreads quota across accounts instead of burning them one by
+ * one — and keeps working while some accounts are cooling down.
+ */
+export async function aiChatRace(messages: ChatMessage[], opts: RaceOptions = {}): Promise<RaceResult> {
+  const enabled = await getEnabledWorkers();
+  if (enabled.length === 0) throw new AiAllWorkersFailedError([]);
+  const workers = orderWithCooldown(enabled);
+  const validate = opts.validate ?? (() => true);
+  const attempts: WorkerAttempt[] = [];
+  let usedParallel = false;
+
+  const attemptOne = async (worker: AiWorker, index: number, total: number): Promise<RaceResult> => {
+    opts.onAttempt?.({ worker, index, total });
+    const text = await requestWorker(worker, messages, {
+      maxTokens: opts.maxTokens ?? 4096,
+      temperature: opts.temperature ?? 0.1,
+      timeoutMs: opts.timeoutMs ?? 120_000,
+      signal: opts.signal,
+    });
+    if (!validate(text)) throw new Error("پاسخ قابل استفاده نبود");
+    return { text, worker, parallel: usedParallel };
+  };
+
+  const record = (worker: AiWorker, e: unknown) => {
+    if (opts.signal?.aborted) throw new AiAllWorkersFailedError(attempts);
+    cooldown.set(worker.id, Date.now() + COOLDOWN_MS);
+    attempts.push({
+      label: worker.label || worker.url,
+      url: worker.url,
+      status: 0,
+      message: e instanceof Error ? e.message : String(e),
+    });
+  };
+
+  // Stage 1 — the head of the chain, alone (the common fast path).
+  const head = workers[0];
+  try {
+    return await attemptOne(head, 0, workers.length);
+  } catch (e) {
+    record(head, e);
+  }
+  if (workers.length === 1) throw new AiAllWorkersFailedError(attempts);
+
+  // Stage 2 — everything else IN PARALLEL; first usable reply wins.
+  usedParallel = true;
+  const rest = workers.slice(1);
+  return new Promise<RaceResult>((resolve, reject) => {
+    let settled = false;
+    let failures = 0;
+    for (const worker of rest) {
+      attemptOne(worker, 1, rest.length + 1)
+        .then((res) => {
+          if (settled) return;
+          settled = true;
+          resolve(res);
+        })
+        .catch((e) => {
+          if (settled) return;
+          try {
+            record(worker, e);
+          } catch (err) {
+            settled = true;
+            reject(err);
+            return;
+          }
+          failures++;
+          if (failures === rest.length) {
+            settled = true;
+            reject(new AiAllWorkersFailedError(attempts));
+          }
+        });
+    }
+  });
+}
+
 export type WorkerTestResult =
   | { ok: true; ms: number; reply: string }
   | { ok: false; ms: number; error: string };

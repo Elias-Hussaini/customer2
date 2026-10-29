@@ -1,6 +1,7 @@
 import type {
   CustomFieldDef,
   Customer,
+  Employer,
   ListFolder,
   Representative,
   Tag,
@@ -31,11 +32,14 @@ export interface SearchHit {
 export interface SearchDataset {
   customers: Customer[];
   representatives: Representative[];
+  /** کارفرما — customers are findable by their employer's name too. */
+  employers: Employer[];
   requests: VisaRequest[];
   lists: ListFolder[];
   tagsById: Map<string, Tag>;
   customersById: Map<string, Customer>;
   repsById: Map<string, Representative>;
+  employersById: Map<string, Employer>;
   listsById: Map<string, ListFolder>;
   searchableFields: CustomFieldDef[];
 }
@@ -47,15 +51,18 @@ export function buildSearchDataset(
   lists: ListFolder[],
   tags: Tag[],
   customFields: CustomFieldDef[],
+  employers: Employer[] = [],
 ): SearchDataset {
   return {
     customers,
     representatives,
+    employers,
     requests,
     lists,
     tagsById: new Map(tags.map((t) => [t.id, t])),
     customersById: new Map(customers.map((c) => [c.id, c])),
     repsById: new Map(representatives.map((r) => [r.id, r])),
+    employersById: new Map(employers.map((e) => [e.id, e])),
     listsById: new Map(lists.map((l) => [l.id, l])),
     searchableFields: customFields.filter((f) => f.searchable && !f.disabled),
   };
@@ -138,9 +145,10 @@ export function searchDataset(query: string, ds: SearchDataset, filters: SearchF
         { text: c.passportNo ?? "", weight: 4 },
         { text: c.referrer ?? "", weight: 2 },
         { text: c.notes ?? "", weight: 1 },
-        // find customers by their representative / list name too
+        // find customers by their representative / list / employer name too
         { text: ds.repsById.get(c.representativeId ?? "")?.name ?? "", weight: 2 },
         { text: ds.listsById.get(c.listId ?? "")?.name ?? "", weight: 2 },
+        { text: ds.employersById.get(c.employerId ?? "")?.name ?? "", weight: 2 },
         ...customValuesText(c, ds.searchableFields.filter((f) => f.entity === "customer")),
       ];
       let score = scoreFields(rawTokens, fields);

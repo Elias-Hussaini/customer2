@@ -1,7 +1,7 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import { Banknote, FilePlus2, FolderPlus, Moon, Plus, Search, Sun, UserPlus, UserRoundPlus } from "lucide-react";
 import { useTheme } from "../../hooks/useTheme";
-import { useCustomers, useCustomFields, useLists, useRepresentatives, useRequests, useTags } from "../../hooks/useData";
+import { useCustomers, useCustomFields, useEmployers, useLists, useRepresentatives, useRequests, useTags } from "../../hooks/useData";
 import { GlobalSearch } from "./GlobalSearch";
 import { Menu, type MenuItem } from "../ui/Menu";
 import { uiActions } from "./uiStore";
@@ -16,6 +16,7 @@ const SECTION_TITLES: { match: (p: string) => boolean; title: string }[] = [
   { match: (p) => p.startsWith("/reports"), title: "گزارش‌ها" },
   { match: (p) => p.startsWith("/search"), title: "جستجو" },
   { match: (p) => p.startsWith("/archive"), title: "آرشیو" },
+  { match: (p) => p.startsWith("/smart-archive"), title: "بایگانی هوشمند" },
   { match: (p) => p.startsWith("/backup"), title: "پشتیبان‌گیری" },
   { match: (p) => p.startsWith("/settings"), title: "تنظیمات" },
 ];
@@ -26,6 +27,7 @@ export function TopBar() {
   const location = useLocation();
 
   const customers = useCustomers() ?? [];
+  const employers = useEmployers() ?? [];
   const representatives = useRepresentatives() ?? [];
   const requests = useRequests() ?? [];
   const lists = useLists() ?? [];
@@ -52,7 +54,7 @@ export function TopBar() {
           aria-label="خانه"
         >
           <img
-            src="icons/icon-192.png"
+            src={`${import.meta.env.BASE_URL}icons/lo-192.png?v=4`}
             alt=""
             className="h-9 w-9 rounded-[11px] shadow-[0_4px_14px_-4px_rgba(99,91,255,0.5)]"
           />
@@ -66,6 +68,7 @@ export function TopBar() {
         <GlobalSearch
           className="mx-auto hidden w-full max-w-md md:block"
           customers={customers}
+          employers={employers}
           representatives={representatives}
           requests={requests}
           lists={lists}
@@ -82,7 +85,9 @@ export function TopBar() {
             <Search size={18} />
           </button>
           <button className="icon-btn" onClick={toggle} aria-label="تغییر تم">
-            {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+            <span key={theme} className="theme-icon-anim">
+              {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+            </span>
           </button>
           <Menu
             align="end"

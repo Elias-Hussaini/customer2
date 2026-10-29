@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Currency } from "../../types";
-import { CURRENCY_LABELS } from "../../types";
+import { CURRENCY_LABELS, CURRENCIES } from "../../types";
 import { formatAmountPlain, parseAmountInput } from "../../utils/num";
 
 interface MoneyInputProps {
@@ -10,6 +10,10 @@ interface MoneyInputProps {
   onCurrencyChange: (currency: Currency) => void;
   placeholder?: string;
   disabled?: boolean;
+  /** Which currencies the switch offers — defaults to all of them.
+   *  The accounting section passes all three (تومان/دلار/افغانی); the visa
+   *  forms pass ["IRT", "USD"]. */
+  currencies?: readonly Currency[];
 }
 
 /** Amount input with live Persian digit normalization + currency switch. */
@@ -20,6 +24,7 @@ export function MoneyInput({
   onCurrencyChange,
   placeholder = "مبلغ",
   disabled,
+  currencies = CURRENCIES,
 }: MoneyInputProps) {
   const [focused, setFocused] = useState(false);
   const [draft, setDraft] = useState("");
@@ -55,7 +60,7 @@ export function MoneyInput({
         }}
       />
       <div className="flex shrink-0 overflow-hidden rounded-[0.85rem] border border-ink-900/10 dark:border-white/10">
-        {(Object.keys(CURRENCY_LABELS) as Currency[]).map((c) => (
+        {currencies.map((c) => (
           <button
             key={c}
             type="button"

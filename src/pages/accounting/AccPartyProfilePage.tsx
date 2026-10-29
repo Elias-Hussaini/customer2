@@ -22,6 +22,7 @@ import { ListSkeleton } from "../../components/ui/EmptyState";
 import { ActivityFeed } from "../../components/ui/ActivityFeed";
 import { ExportDialog } from "../../components/exports/ExportDialog";
 import { formatJalali } from "../../utils/jalali";
+import { CURRENCIES } from "../../types";
 import { formatMoney } from "../../utils/num";
 import {
   buildStatementRows,
@@ -101,7 +102,9 @@ export function AccPartyProfilePage() {
       (row.tx.description ?? "") + (row.tx.status !== "final" ? ` (${row.tx.status === "reversed" ? "برگشت خورده" : "ابطال شده"})` : ""),
     deposit: row.signedMinor > 0 ? formatMoney(row.tx.amount, row.tx.currency) : "",
     withdraw: row.signedMinor < 0 ? formatMoney(row.tx.amount, row.tx.currency) : "",
-    running: `${formatMoney(row.running.IRT, "IRT")} | ${formatMoney(row.running.USD, "USD")}`,
+    running: CURRENCIES.filter((c) => row.running[c] !== 0)
+      .map((c) => formatMoney(row.running[c], c))
+      .join(" | ") || "۰",
   }));
 
   return (
@@ -173,6 +176,7 @@ export function AccPartyProfilePage() {
               <span className="flex flex-col leading-6">
                 <span>{formatMoney(totals.receipts.IRT, "IRT")}</span>
                 <span className="text-[13px] text-ink-500 dark:text-ink-400">{formatMoney(totals.receipts.USD, "USD")}</span>
+                <span className="text-[13px] text-ink-500 dark:text-ink-400">{formatMoney(totals.receipts.AFN, "AFN")}</span>
               </span>
             ) : "…"
           }
@@ -186,6 +190,7 @@ export function AccPartyProfilePage() {
               <span className="flex flex-col leading-6">
                 <span>{formatMoney(totals.payments.IRT, "IRT")}</span>
                 <span className="text-[13px] text-ink-500 dark:text-ink-400">{formatMoney(totals.payments.USD, "USD")}</span>
+                <span className="text-[13px] text-ink-500 dark:text-ink-400">{formatMoney(totals.payments.AFN, "AFN")}</span>
               </span>
             ) : "…"
           }
@@ -199,6 +204,7 @@ export function AccPartyProfilePage() {
               <span className="flex flex-col leading-6">
                 <span>{formatMoney(totals.withdrawals.IRT, "IRT")}</span>
                 <span className="text-[13px] text-ink-500 dark:text-ink-400">{formatMoney(totals.withdrawals.USD, "USD")}</span>
+                <span className="text-[13px] text-ink-500 dark:text-ink-400">{formatMoney(totals.withdrawals.AFN, "AFN")}</span>
               </span>
             ) : "…"
           }
@@ -215,6 +221,9 @@ export function AccPartyProfilePage() {
                 </span>
                 <span className={`text-[13px] ${totals.net.USD >= 0 ? "text-[#0b9e6e] dark:text-[#3ddc9a]" : "text-[#dc3535] dark:text-[#f87b7b]"}`}>
                   {formatMoney(totals.net.USD, "USD")}
+                </span>
+                <span className={`text-[13px] ${totals.net.AFN >= 0 ? "text-[#0b9e6e] dark:text-[#3ddc9a]" : "text-[#dc3535] dark:text-[#f87b7b]"}`}>
+                  {formatMoney(totals.net.AFN, "AFN")}
                 </span>
               </span>
             ) : "…"
@@ -265,6 +274,7 @@ export function AccPartyProfilePage() {
                     <span className="num flex gap-4">
                       <span>{formatMoney(statement.closing.IRT, "IRT")}</span>
                       <span>{formatMoney(statement.closing.USD, "USD")}</span>
+                      {statement.closing.AFN !== 0 && <span>{formatMoney(statement.closing.AFN, "AFN")}</span>}
                     </span>
                   </div>
                 )}
@@ -381,11 +391,15 @@ export function AccPartyProfilePage() {
                 { label: "جمع پرداخت (تومان)", value: formatMoney(totals?.payments.IRT ?? 0, "IRT") },
                 { label: "جمع دریافت (دلار)", value: formatMoney(totals?.receipts.USD ?? 0, "USD") },
                 { label: "جمع پرداخت (دلار)", value: formatMoney(totals?.payments.USD ?? 0, "USD") },
+                { label: "جمع دریافت (افغانی)", value: formatMoney(totals?.receipts.AFN ?? 0, "AFN") },
+                { label: "جمع پرداخت (افغانی)", value: formatMoney(totals?.payments.AFN ?? 0, "AFN") },
                 { label: "مانده پایانی (تومان)", value: formatMoney(statement.closing.IRT, "IRT") },
                 { label: "مانده پایانی (دلار)", value: formatMoney(statement.closing.USD, "USD") },
+                { label: "مانده پایانی (افغانی)", value: formatMoney(statement.closing.AFN, "AFN") },
               ]
             : undefined
         }
+        theme="acc"
       />
     </div>
   );

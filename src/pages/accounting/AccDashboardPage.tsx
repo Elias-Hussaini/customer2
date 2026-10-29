@@ -21,8 +21,10 @@ import { RadioSelect } from "../../components/ui/inputs";
 import { JalaliDatePicker } from "../../components/ui/JalaliDatePicker";
 import { ListSkeleton } from "../../components/ui/EmptyState";
 import type { Currency } from "../../types";
+import { CURRENCY_LABELS, currencyLabel } from "../../types";
 import { formatJalali, todayIso } from "../../utils/jalali";
 import { formatMoney } from "../../utils/num";
+import { fromMinor, toMinor } from "../../utils/num";
 import {
   computeAllAccountBalances,
   groupByPeriod,
@@ -146,9 +148,9 @@ export function AccDashboardPage() {
         byKey.get(key) ?? {
           key,
           label: formatJalali(key, "medium"),
-          receipts: { USD: 0, IRT: 0 },
-          payments: { USD: 0, IRT: 0 },
-          withdrawals: { USD: 0, IRT: 0 },
+          receipts: { USD: 0, IRT: 0, AFN: 0 },
+          payments: { USD: 0, IRT: 0, AFN: 0 },
+          withdrawals: { USD: 0, IRT: 0, AFN: 0 },
           count: 0,
         },
       );
@@ -165,10 +167,12 @@ export function AccDashboardPage() {
   const receivables = outstandingOpen.filter((o) => o.kind === "receivable");
   const payables = outstandingOpen.filter((o) => o.kind === "payable");
   const sumOutstanding = (items: typeof receivables, cur: Currency) =>
-    items
-      .filter((o) => o.currency === cur)
-      .reduce((s, o) => s + Math.round(outstandingRemaining(o) * (cur === "USD" ? 100 : 1)), 0) /
-    (cur === "USD" ? 100 : 1);
+    fromMinor(
+      items
+        .filter((o) => o.currency === cur)
+        .reduce((s, o) => s + toMinor(outstandingRemaining(o), cur), 0),
+      cur,
+    );
 
   const recent = useMemo(() => (transactions ?? []).slice(0, 8), [transactions]);
   const partyName = (id?: string | null) =>
@@ -199,9 +203,10 @@ export function AccDashboardPage() {
         <div className="min-w-[150px]">
           <RadioSelect
             options={[
-              { value: "all", label: "هر دو ارز" },
+              { value: "all", label: "همه ارزها" },
               { value: "IRT", label: "تومان" },
               { value: "USD", label: "دلار" },
+              { value: "AFN", label: "افغانی" },
             ]}
             value={currencyFilter}
             onChange={(v) => setCurrencyFilter(v as "all" | Currency)}
@@ -227,6 +232,11 @@ export function AccDashboardPage() {
                 <span className="text-[13px] text-ink-500 dark:text-ink-400">
                   {formatMoney(cashTotals.USD, "USD")}
                 </span>
+                {cashTotals.AFN !== 0 && (
+                  <span className="text-[13px] text-ink-500 dark:text-ink-400">
+                    {formatMoney(cashTotals.AFN, "AFN")}
+                  </span>
+                )}
               </span>
             ) : "…"
           }
@@ -240,6 +250,7 @@ export function AccDashboardPage() {
             <span className="flex flex-col leading-6">
               <span className="text-[#0b9e6e] dark:text-[#3ddc9a]">{formatMoney(sumOf("receipt", "IRT"), "IRT")}</span>
               <span className="text-[13px] text-[#0b9e6e] dark:text-[#3ddc9a]">{formatMoney(sumOf("receipt", "USD"), "USD")}</span>
+              {sumOf("receipt", "AFN") !== 0 && <span className="text-[13px] text-[#0b9e6e] dark:text-[#3ddc9a]">{formatMoney(sumOf("receipt", "AFN"), "AFN")}</span>}
             </span>
           }
           tone="success"
@@ -251,6 +262,7 @@ export function AccDashboardPage() {
             <span className="flex flex-col leading-6">
               <span className="text-[#dc3535] dark:text-[#f87b7b]">{formatMoney(sumOf("payment", "IRT"), "IRT")}</span>
               <span className="text-[13px] text-[#dc3535] dark:text-[#f87b7b]">{formatMoney(sumOf("payment", "USD"), "USD")}</span>
+              {sumOf("payment", "AFN") !== 0 && <span className="text-[13px] text-[#dc3535] dark:text-[#f87b7b]">{formatMoney(sumOf("payment", "AFN"), "AFN")}</span>}
             </span>
           }
           tone="danger"
@@ -262,6 +274,7 @@ export function AccDashboardPage() {
             <span className="flex flex-col leading-6">
               <span>{formatMoney(sumOf("withdrawal", "IRT"), "IRT")}</span>
               <span className="text-[13px] text-ink-500 dark:text-ink-400">{formatMoney(sumOf("withdrawal", "USD"), "USD")}</span>
+              {sumOf("withdrawal", "AFN") !== 0 && <span className="text-[13px] text-ink-500 dark:text-ink-400">{formatMoney(sumOf("withdrawal", "AFN"), "AFN")}</span>}
             </span>
           }
           tone="warning"
@@ -273,6 +286,7 @@ export function AccDashboardPage() {
             <span className="flex flex-col leading-6">
               <span>{formatMoney(sumOutstanding(receivables, "IRT"), "IRT")}</span>
               <span className="text-[13px] text-ink-500 dark:text-ink-400">{formatMoney(sumOutstanding(receivables, "USD"), "USD")}</span>
+              {sumOutstanding(receivables, "AFN") !== 0 && <span className="text-[13px] text-ink-500 dark:text-ink-400">{formatMoney(sumOutstanding(receivables, "AFN"), "AFN")}</span>}
             </span>
           }
           hint={`${receivables.length} قلم باز`}
@@ -285,6 +299,7 @@ export function AccDashboardPage() {
             <span className="flex flex-col leading-6">
               <span>{formatMoney(sumOutstanding(payables, "IRT"), "IRT")}</span>
               <span className="text-[13px] text-ink-500 dark:text-ink-400">{formatMoney(sumOutstanding(payables, "USD"), "USD")}</span>
+              {sumOutstanding(payables, "AFN") !== 0 && <span className="text-[13px] text-ink-500 dark:text-ink-400">{formatMoney(sumOutstanding(payables, "AFN"), "AFN")}</span>}
             </span>
           }
           hint={`${payables.length} قلم باز`}
@@ -308,14 +323,18 @@ export function AccDashboardPage() {
 
       {/* Charts */}
       <div className="grid gap-4 lg:grid-cols-2">
-        <SectionCard title={`دریافت در برابر پرداخت — ${currencyFilter === "all" ? "تومان" : currencyFilter === "IRT" ? "تومان" : "دلار"}`} icon={<TrendingUp size={16} className="text-brand-500" />}>
+        <SectionCard title={`دریافت در برابر پرداخت — ${currencyFilter === "all" ? "تومان" : CURRENCY_LABELS[currencyFilter as Currency]}`} icon={<TrendingUp size={16} className="text-brand-500" />}>
           <GroupedBarsChart
-            groups={monthlyBuckets.map((b) => ({
-              label: b.label,
-              in: currencyFilter === "USD" ? b.receipts.USD / 100 : b.receipts.IRT,
-              out: currencyFilter === "USD" ? b.payments.USD / 100 : b.payments.IRT,
-            }))}
-            currency={currencyFilter === "USD" ? "USD" : "IRT"}
+            groups={monthlyBuckets.map((b) => {
+              const cur = currencyFilter === "all" ? "IRT" : (currencyFilter as Currency);
+              const scale = cur === "USD" ? 100 : 1;
+              return {
+                label: b.label,
+                in: (cur === "USD" ? b.receipts.USD : cur === "IRT" ? b.receipts.IRT : b.receipts.AFN) / scale,
+                out: (cur === "USD" ? b.payments.USD : cur === "IRT" ? b.payments.IRT : b.payments.AFN) / scale,
+              };
+            })}
+            currency={currencyFilter === "all" ? "IRT" : (currencyFilter as Currency)}
           />
         </SectionCard>
         <SectionCard title="توزیع انواع تراکنش (دوره)" icon={<Receipt size={16} className="text-brand-500" />}>
@@ -417,7 +436,7 @@ export function AccDashboardPage() {
                 className="glass-soft flex flex-col gap-1 rounded-2xl p-3 text-right transition-transform active:scale-95"
               >
                 <span className="flex items-center gap-1.5 text-[11px] font-bold text-ink-500 dark:text-ink-400">
-                  {a.currency === "USD" ? "دلار" : "تومان"} · {a.active ? "" : "غیرفعال"}
+                  {currencyLabel(a.currency)} · {a.active ? "" : "غیرفعال"}
                 </span>
                 <span className="truncate text-xs font-bold">{a.name}</span>
                 <span className="num text-[15px] font-extrabold">

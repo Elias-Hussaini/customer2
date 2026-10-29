@@ -6,6 +6,7 @@ import type {
   CustomFieldDef,
   Customer,
   DocType,
+  Employer,
   ListFolder,
   Payment,
   Representative,
@@ -22,6 +23,7 @@ import type {
   OutstandingItem,
 } from "../accounting/types";
 import type { AiSettings, AiWorker } from "../lib/ai/types";
+import type { AgentChatRecord } from "../lib/agent/types";
 
 /**
  * Local IndexedDB database. All application data lives here — in the user's
@@ -32,6 +34,7 @@ import type { AiSettings, AiWorker } from "../lib/ai/types";
  */
 export class VisaDB extends Dexie {
   representatives!: Table<Representative, string>;
+  employers!: Table<Employer, string>;
   customers!: Table<Customer, string>;
   requests!: Table<VisaRequest, string>;
   lists!: Table<ListFolder, string>;
@@ -54,6 +57,8 @@ export class VisaDB extends Dexie {
   // API keys are NOT exported with the customer JSON backup.
   aiWorkers!: Table<AiWorker, string>;
   aiMeta!: Table<AiSettings, string>;
+  // AI assistant chat history (دستیار هوشمند) — conversations with the agent.
+  aiChats!: Table<AgentChatRecord, string>;
 
   constructor() {
     super("customer2-visa");
@@ -111,6 +116,17 @@ export class VisaDB extends Dexie {
       aiWorkers: "id, priority, createdAt",
       aiMeta: "id",
     });
+    // v8: employers (کارفرما) — an OPTIONAL customer attribute managed in
+    // Settings; customers gain an employerId index for filtering/detach.
+    this.version(8).stores({
+      employers: "id, name, createdAt, archivedAt",
+      customers:
+        "id, firstName, lastName, passportNo, registrationDate, createdAt, archivedAt, listId, representativeId, employerId",
+    });
+    // v9: AI assistant chat history (دستیار هوشمند).
+    this.version(9).stores({
+      aiChats: "id, updatedAt",
+    });
   }
 }
 
@@ -118,6 +134,7 @@ export const db = new VisaDB();
 
 export const DB_TABLES = [
   "representatives",
+  "employers",
   "customers",
   "requests",
   "lists",

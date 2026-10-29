@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   Bot,
+  Briefcase,
   CheckCircle2,
   Coins,
   DatabaseBackup,
@@ -16,6 +17,7 @@ import {
   Palette,
   Pencil,
   Plus,
+  RefreshCw,
   Settings2,
   Signal,
   Smartphone,
@@ -34,7 +36,7 @@ import { Button, IconButton } from "../components/ui/Button";
 import { FormField, Input, Checkbox, Toggle, Select } from "../components/ui/fields";
 import { EmptyState } from "../components/ui/EmptyState";
 import { useTheme, type Theme } from "../hooks/useTheme";
-import { useCustomFields, usePrefs, useTags, useVisaTypes, useCustomers, useDocTypes } from "../hooks/useData";
+import { useCustomFields, usePrefs, useTags, useVisaTypes, useCustomers, useDocTypes, useEmployers } from "../hooks/useData";
 import { updatePrefs } from "../db/prefs";
 import {
   TAG_PALETTE,
@@ -53,6 +55,12 @@ import {
   renameVisaType,
 } from "../db/taxonomy";
 import {
+  createEmployer,
+  updateEmployer,
+  deleteEmployer,
+  restoreEmployer,
+} from "../db/employers";
+import {
   createDocType,
   updateDocType,
   reorderDocType,
@@ -60,6 +68,8 @@ import {
 } from "../db/docTypes";
 import { seedDemoData } from "../db/seed";
 import { useToast } from "../hooks/useToast";
+import { checkForPwaUpdate } from "../pwa/usePwaUpdate";
+import { buildLabel, buildStamp } from "../pwa/version";
 import { useConfirm } from "../hooks/useConfirm";
 import { FIELD_TYPE_LABELS, type CustomFieldDef, type FieldEntity, type FieldType, type Tag } from "../types";
 import { toPersianDigits } from "../utils/jalali";
@@ -87,6 +97,7 @@ type SettingsSection =
   | "fields"
   | "tags"
   | "visaTypes"
+  | "employers"
   | "docTypes"
   | "currency"
   | "defaults"
@@ -101,6 +112,7 @@ const SECTIONS: { key: SettingsSection; label: string; icon: typeof Palette }[] 
   { key: "fields", label: "فیلدهای سفارشی", icon: Layers },
   { key: "tags", label: "تگ‌ها", icon: TagIcon },
   { key: "visaTypes", label: "انواع ویزا", icon: VisaIcon },
+  { key: "employers", label: "کارفرماها", icon: Briefcase },
   { key: "docTypes", label: "مدارک و تصاویر", icon: FileImage },
   { key: "currency", label: "واحد پول", icon: Coins },
   { key: "defaults", label: "پیش‌فرض‌های فرم", icon: Wand2 },
@@ -159,6 +171,7 @@ export function SettingsPage() {
           {section === "fields" && <CustomFieldsSection />}
           {section === "tags" && <TagsSection />}
           {section === "visaTypes" && <VisaTypesSection />}
+          {section === "employers" && <EmployersSection />}
           {section === "docTypes" && <DocTypesSection />}
           {section === "currency" && <CurrencySection />}
           {section === "defaults" && <DefaultsSection />}
@@ -874,6 +887,179 @@ function VisaTypesSection() {
   );
 }
 
+/* ------------------------------- Employers -------------------------------- */
+
+interface EmployerEditState {
+  name: string;
+  phone: string;
+}
+
+function EmployersSection() {
+  const employers = useEmployers();
+  const allEmployers = useEmployers(false);
+  const archived = (allEmployers ?? []).filter((e) => e.archivedAt);
+  const customers = useCustomers(false);
+  const prefs = usePrefs();
+  const toast = useToast();
+  const { confirm } = useConfirm();
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [edit, setEdit] = useState<EmployerEditState>({ name: "", phone: "" });
+
+  const customerCount = (id: string) =>
+    (customers ?? []).filter((c) => c.employerId === id).length;
+
+  const add = async () => {
+    if (!name.trim()) return;
+    await createEmployer({ name, phone: phone.trim() || undefined });
+    setName("");
+    setPhone("");
+    toast.success("کارفرما اضافه شد");
+  };
+
+  return (
+    <SectionCard title="کارفرماها" icon={<Briefcase size={15} className="text-brand-500" />}>
+      <div className="mb-3 flex items-center justify-between gap-3 rounded-2xl bg-brand-500/6 px-4 py-3">
+        <div>
+          <p className="text-[13px] font-bold">نمایش فیلد کارفرما در فرم مشتری</p>
+          <p className="text-[11px] leading-5 text-ink-500 dark:text-ink-400">
+            کارفرما همیشه اختیاری است — با خاموش کردن، این فیلد از فرم مشتری و پرونده‌ها پنهان می‌شود (داده‌ها حذف نمی‌شوند)
+          </p>
+        </div>
+        <Toggle
+          checked={prefs.employerFieldEnabled !== false}
+          onChange={(v) => void updatePrefs({ employerFieldEnabled: v })}
+        />
+      </div>
+
+      <div className="mb-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+        <Input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="نام کارفرما (مثلاً شرکت پیمانکاری…)"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void add();
+          }}
+        />
+        <Input
+          dir="ltr"
+          className="text-left"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          placeholder="شماره تماس (اختیاری)"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void add();
+          }}
+        />
+        <Button variant="primary" icon={Plus} disabled={!name.trim()} onClick={() => void add()}>
+          افزودن
+        </Button>
+      </div>
+      {(employers ?? []).length === 0 ? (
+        <p className="py-4 text-center text-xs text-ink-400">
+          هنوز کارفرمایی ثبت نشده — هنگام ثبت مشتری هم می‌توانید «بدون کارفرما» را انتخاب کنید
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {(employers ?? []).map((emp) => (
+            <li key={emp.id} className="glass-soft flex items-center gap-2 rounded-2xl px-3.5 py-2.5">
+              {editingId === emp.id ? (
+                <>
+                  <Input
+                    value={edit.name}
+                    onChange={(e) => setEdit({ ...edit, name: e.target.value })}
+                    className="flex-1"
+                  />
+                  <Input
+                    dir="ltr"
+                    className="w-32 text-left"
+                    value={edit.phone}
+                    onChange={(e) => setEdit({ ...edit, phone: e.target.value })}
+                    placeholder="تلفن"
+                  />
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={async () => {
+                      if (edit.name.trim()) {
+                        await updateEmployer(emp.id, {
+                          name: edit.name,
+                          phone: edit.phone.trim() || undefined,
+                        });
+                        toast.success("ذخیره شد");
+                      }
+                      setEditingId(null);
+                    }}
+                  >
+                    ذخیره
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate text-[13px] font-semibold">{emp.name}</span>
+                    <span className="text-[10.5px] text-ink-400">
+                      {customerCount(emp.id).toLocaleString("fa-IR")} مشتری
+                      {emp.phone ? ` · ${emp.phone}` : ""}
+                    </span>
+                  </span>
+                  <button
+                    className="icon-btn !h-8 !w-8"
+                    aria-label="ویرایش"
+                    onClick={() => {
+                      setEditingId(emp.id);
+                      setEdit({ name: emp.name, phone: emp.phone ?? "" });
+                    }}
+                  >
+                    <Pencil size={13} />
+                  </button>
+                  <button
+                    className="icon-btn !h-8 !w-8 hover:!text-[#ef4444]"
+                    aria-label="حذف"
+                    onClick={async () => {
+                      const linked = customerCount(emp.id);
+                      const ok = await confirm({
+                        title: `حذف کارفرمای «${emp.name}»؟`,
+                        message:
+                          linked > 0
+                            ? `${linked.toLocaleString("fa-IR")} مشتری به این کارفرما وصل است — با حذف، آن‌ها «بدون کارفرما» می‌شوند و هیچ داده‌ای از دست نمی‌رود.`
+                            : "این کارفرما به هیچ مشتری‌ای وصل نیست.",
+                        confirmLabel: "حذف شود",
+                        danger: true,
+                      });
+                      if (!ok) return;
+                      await deleteEmployer(emp.id, emp.name);
+                      toast.success("کارفرما حذف شد");
+                    }}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {archived.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-2 border-t border-ink-900/5 pt-3 dark:border-white/5">
+          {archived.map((emp) => (
+            <button
+              key={emp.id}
+              className="chip-soft inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-[11px]"
+              onClick={async () => {
+                await restoreEmployer(emp.id, emp.name);
+                toast.success("بازگردانی شد");
+              }}
+            >
+              {emp.name} — بازگردانی
+            </button>
+          ))}
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
 /* ---------------------------- Document types ----------------------------- */
 
 interface DocTypeFormState {
@@ -1534,9 +1720,17 @@ function DataSection() {
 /* ---------------------------------- PWA ---------------------------------- */
 
 function PwaSection() {
+  const toast = useToast();
   const [installable, setInstallable] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
-  const [storage, setStorage] = useState<string>("");
+  const [storage, setStorage] = useState("");
+  const [storagePct, setStoragePct] = useState<number | null>(null);
+  const [persisted, setPersisted] = useState<boolean | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  const refreshPersisted = () => {
+    void navigator.storage?.persisted?.().then(setPersisted).catch(() => setPersisted(null));
+  };
 
   useEffect(() => {
     const onPrompt = (e: Event) => {
@@ -1550,10 +1744,14 @@ function PwaSection() {
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
     void navigator.storage?.estimate?.().then((est) => {
-      if (est.usage != null && est.quota != null) {
-        setStorage(`${(est.usage / 1024 / 1024).toFixed(1)} از ${(est.quota / 1024 / 1024 / 1024).toFixed(1)} گیگابایت`);
+      if (est.usage != null && est.quota != null && est.quota > 0) {
+        const mb = (est.usage / 1024 / 1024).toFixed(1);
+        const gb = (est.quota / 1024 / 1024 / 1024).toFixed(1);
+        setStorage(`${toPersianDigits(mb)} از ${toPersianDigits(gb)} گیگابایت`);
+        setStoragePct(Math.min(100, (est.usage / est.quota) * 100));
       }
     });
+    refreshPersisted();
     return () => {
       window.removeEventListener("beforeinstallprompt", onPrompt);
       window.removeEventListener("online", onOnline);
@@ -1578,10 +1776,115 @@ function PwaSection() {
           <span>حالت نصب‌شده</span>
           <b>{standalone ? "نصب شده به‌عنوان برنامه" : "در حال اجرا در مرورگر"}</b>
         </div>
+        {/* ---- build identity + manual update check ---- */}
+        <div className="flex flex-col gap-2.5 rounded-2xl bg-brand-500/6 px-4 py-3.5 text-[12px]">
+          <div className="flex items-center justify-between">
+            <span className="font-bold">نسخهٔ در حال اجرا</span>
+            <b className="num" dir="ltr">{buildStamp()}</b>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-ink-500 dark:text-ink-400">زمان ساخت این نسخه</span>
+            <b>{buildLabel()}</b>
+          </div>
+          <button
+            type="button"
+            className="btn btn-glass btn-sm w-fit"
+            disabled={checking}
+            onClick={async () => {
+              if (checking) return;
+              setChecking(true);
+              try {
+                const result = await checkForPwaUpdate();
+                if (result === "updated") {
+                  toast.info("نسخهٔ جدید پیدا شد — روی دکمه «به‌روزرسانی» که الان ظاهر شده بزنید");
+                } else if (result === "latest") {
+                  toast.success("بروزرسانی بررسی شد — همین نسخه آخرین نسخهٔ منتشرشده است");
+                } else {
+                  toast.info("در حالت توسعه، بروزرسانی فعال نیست");
+                }
+              } finally {
+                setChecking(false);
+              }
+            }}
+          >
+            <RefreshCw size={14} className={checking ? "animate-spin" : ""} />
+            {checking ? "در حال بررسی…" : "بررسی بروزرسانی"}
+          </button>
+          <p className="leading-5 text-ink-400">
+            با هر تغییر و اصلاحی که منتشر می‌شود، نسخهٔ جدیدی روی سایت قرار می‌گیرد. شماره و
+            زمان بالا نشان می‌دهد کدام نسخه همین حالا روی دستگاه شما اجرا است — اگر بعد از
+            اعلام اصلاحات، این زمان قدیمی ماند، دکمهٔ بررسی بروزرسانی را بزنید.
+          </p>
+        </div>
         {storage && (
-          <div className="flex items-center justify-between rounded-2xl bg-brand-500/6 px-4 py-3 text-[12px]">
-            <span>فضای ذخیره‌سازی مرورگر</span>
-            <b className="num">{storage}</b>
+          <div className="flex flex-col gap-2.5 rounded-2xl bg-brand-500/6 px-4 py-3.5 text-[12px]">
+            <div className="flex items-center justify-between">
+              <span className="font-bold">فضای ذخیره‌سازی مرورگر برای این برنامه</span>
+              <b className="num">{storage}</b>
+            </div>
+            {/* usage bar */}
+            <div className="h-2 w-full overflow-hidden rounded-full bg-ink-900/8 dark:bg-white/10">
+              <div
+                className="h-full rounded-full transition-all"
+                style={{
+                  width: `${Math.max(storagePct != null ? storagePct : 0, 1.5)}%`,
+                  background:
+                    (storagePct ?? 0) > 85
+                      ? "linear-gradient(90deg, #f0a35e, #dc3535)"
+                      : "linear-gradient(90deg, #837aff, #5344d6)",
+                }}
+              />
+            </div>
+            <div className="flex items-center justify-between text-[10.5px] text-ink-400">
+              <span>
+                {storagePct != null
+                  ? `${toPersianDigits(storagePct.toFixed(1))}٪ استفاده شده`
+                  : ""}
+              </span>
+              <span>سهمیه‌ای که مرورگر به این سایت داده — نه حافظه کل دستگاه</span>
+            </div>
+            <div className="mt-1 flex flex-col gap-1.5 border-t border-ink-900/5 pt-2.5 leading-5 text-ink-500 dark:border-white/5 dark:text-ink-400">
+              <p className="text-[11px]">
+                حافظه برنامه <b>بی‌نهایت نیست</b> — مرورگر به هر سایت بخشی از فضای خالی دیسک را
+                اختصاص می‌دهد (معمولاً حدود نیمی از فضای آزاد). عدد بالا سهمیه فعلی همین
+                دستگاه است و روی هر دستگاه فرق می‌کند. با پر شدن سهمیه، هنگام ذخیره پیام خطا
+                می‌گیرید — با پشتیبان ZIP می‌توانید فضا را آزاد و هر وقت خواستید بازیابی کنید.
+              </p>
+              <p className="text-[11px]">
+                رکوردهای متنی فوق‌العاده کم‌حجم‌اند و عکس‌ها هنگام ذخیره خودکار فشرده می‌شوند،
+                پس در عمل پر شدن این فضا بعید است و برنامه هم با زیاد شدن داده کند نمی‌شود
+                — داده‌ها ایندکس‌شده ذخیره می‌شوند و فقط همان چیزی که باز می‌کنید بارگذاری می‌شود.
+              </p>
+            </div>
+            <div className="mt-1 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-ink-900/8 px-3 py-2.5 dark:border-white/10">
+              <div className="flex flex-col">
+                <span className="text-[11.5px] font-bold">ذخیره‌سازی پایدار</span>
+                <span className="text-[10.5px] text-ink-400">
+                  جلوگیری از پاک شدن خودکار داده‌های برنامه توسط مرورگر
+                </span>
+              </div>
+              {persisted ? (
+                <span className="rounded-full bg-[#0b9e6e]/10 px-3 py-1 text-[11px] font-bold text-[#0b9e6e]">
+                  فعال ✓
+                </span>
+              ) : (
+                <button
+                  className="btn btn-primary btn-sm !py-1.5"
+                  onClick={async () => {
+                    try {
+                      const ok = (await navigator.storage?.persist?.()) ?? false;
+                      setPersisted(ok);
+                      if (ok) toast.success("ذخیره‌سازی پایدار فعال شد — داده‌ها دیگر به‌صورت خودکار پاک نمی‌شوند");
+                      else toast.error("مرورگر فعلاً اجازه نداد — برنامه را نصب کنید و دوباره امتحان کنید");
+                    } catch {
+                      toast.error("مرورگر شما از ذخیره‌سازی پایدار پشتیبانی نمی‌کند");
+                    }
+                  }}
+                >
+                  فعال‌سازی
+                </button>
+              )}
+            </div>
           </div>
         )}
         {installable && !standalone && (

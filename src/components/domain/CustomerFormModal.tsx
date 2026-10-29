@@ -38,7 +38,7 @@ import { createRequest } from "../../db/requests";
 import { createVisaType } from "../../db/taxonomy";
 import { updatePrefs } from "../../db/prefs";
 import { saveAttachment } from "../../db/attachments";
-import { useCustomFields, useLists, usePrefs, useRepresentatives, useVisaTypes } from "../../hooks/useData";
+import { useCustomFields, useLists, usePrefs, useRepresentatives, useVisaTypes, useEmployers } from "../../hooks/useData";
 import { useToast } from "../../hooks/useToast";
 import { todayIso, toPersianDigits } from "../../utils/jalali";
 import type { Currency, CustomFieldDef, Customer } from "../../types";
@@ -62,6 +62,8 @@ interface FormState {
   notes: string;
   representativeId: string | null;
   listId: string | null;
+  /** Optional employer (کارفرما) — "" or null = بدون کارفرما. */
+  employerId: string | null;
   registrationDate: string | null;
   customValues: Record<string, unknown>;
 }
@@ -77,6 +79,7 @@ const EMPTY: FormState = {
   notes: "",
   representativeId: null,
   listId: null,
+  employerId: null,
   registrationDate: null,
   customValues: {},
 };
@@ -140,6 +143,7 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
   const customFields = useCustomFields();
   const prefs = usePrefs();
   const representatives = useRepresentatives();
+  const employers = useEmployers();
   const lists = useLists();
   const visaTypes = useVisaTypes();
   const workers = useAiWorkers();
@@ -181,8 +185,13 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
   repsRef.current = representatives;
   const listsRef = useRef(lists);
   listsRef.current = lists;
+  const employersRef = useRef(employers);
+  employersRef.current = employers;
 
   const calMode = prefs.passportDateCalendar ?? "gregorian";
+
+  /** کارفرما field is optional — the settings toggle hides it entirely. */
+  const employerFieldOn = prefs.employerFieldEnabled !== false;
 
   const fields = useMemo(
     () =>
@@ -226,6 +235,7 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
           notes: customer.notes ?? "",
           representativeId: customer.representativeId ?? null,
           listId: customer.listId ?? null,
+          employerId: customer.employerId ?? null,
           registrationDate: customer.registrationDate,
           customValues: { ...(customer.customValues ?? {}) },
         });
@@ -244,7 +254,19 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
           (listsRef.current ?? []).some((l) => l.id === p.lastListId)
             ? p.lastListId
             : null;
-        setForm({ ...EMPTY, representativeId: lastRep, listId: lastList, registrationDate: todayIso() });
+        const lastEmployer =
+          p.rememberLastSelections &&
+          p.lastEmployerId &&
+          (employersRef.current ?? []).some((e) => e.id === p.lastEmployerId)
+            ? p.lastEmployerId
+            : null;
+        setForm({
+          ...EMPTY,
+          representativeId: lastRep,
+          listId: lastList,
+          employerId: lastEmployer,
+          registrationDate: todayIso(),
+        });
         // Reset the visa-request section.
         setWithRequest(true);
         setReqVisaType(p.defaultVisaType ?? null);
@@ -623,6 +645,7 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
         notes: form.notes,
         representativeId: form.representativeId,
         listId: form.listId,
+        employerId: form.employerId || null,
         registrationDate: form.registrationDate || todayIso(),
         customValues: form.customValues,
       };
@@ -667,11 +690,12 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
         }
         onSaved?.(created);
       }
-      // Remember list, representative and visa type for the next entry.
+      // Remember list, representative, employer and visa type for the next entry.
       if (prefsRef.current.rememberLastSelections) {
         await updatePrefs({
           lastRepresentativeId: form.representativeId,
           lastListId: form.listId,
+          lastEmployerId: form.employerId || null,
           defaultVisaType: !customer && withRequest && reqVisaType ? reqVisaType : prefsRef.current.defaultVisaType,
         });
       }
@@ -859,6 +883,34 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
           </FormField>
         </div>
 
+        {/* کارفرما — always OPTIONAL; «بدون کارفرما» is a first-class choice.
+            Hidden entirely when the feature is switched off in Settings. */}
+        {employerFieldOn && (
+          <FormField
+            label="کارفرما"
+            hint={
+              (employers ?? []).length === 0
+                ? "اختیاری — کارفرماها را از تنظیمات ← کارفرماها اضافه کنید"
+                : "اختیاری — می‌توانید «بدون کارفرما» را انتخاب کنید"
+            }
+          >
+            <SearchSelect
+              items={[
+                { id: "", title: "بدون کارفرما" },
+                ...(employers ?? []).map((e) => ({
+                  id: e.id,
+                  title: e.name,
+                  subtitle: e.phone,
+                })),
+              ]}
+              value={form.employerId ?? ""}
+              onSelect={(v) => setForm({ ...form, employerId: v || null })}
+              placeholder="انتخاب کارفرما…"
+              clearable={false}
+            />
+          </FormField>
+        )}
+
         {/* Identity — AI fills these directly; the violet sweep marks them. */}
         <div key={aiRun} className={aiRun > 0 ? "ai-flash grid grid-cols-1 gap-4 sm:grid-cols-2" : "grid grid-cols-1 gap-4 sm:grid-cols-2"}>
           <FormField
@@ -1001,6 +1053,7 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
                     currency={reqCurrency}
                     onAmountChange={setReqAmount}
                     onCurrencyChange={setReqCurrency}
+                    currencies={["IRT", "USD"]}
                   />
                 </FormField>
               </div>

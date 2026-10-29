@@ -4,10 +4,11 @@
  * transactions so they can never drift away from the audit trail.
  *
  * Integer-safety: all internal arithmetic uses minor units
- * (USD → cents, IRT → whole tomans) via utils/num.
+ * (USD → cents, IRT/AFN → whole units) via utils/num.
  */
 
 import type { Currency } from "../types";
+import { CURRENCIES, currencyLabel, zeroByCurrency } from "../types";
 import { fromMinor, sumAmounts, toMinor } from "../utils/num";
 import type {
   FinAccount,
@@ -191,7 +192,7 @@ export function validateTx(input: TxInputLike, ctx: TxValidationContext): TxVali
       } else if (dst.currency !== input.currency) {
         errors.push({
           field: "destAccountId",
-          message: `ارز حساب «${dst.name}» (${dst.currency === "USD" ? "دلار" : "تومان"}) با ارز تراکنش یکی نیست.`,
+          message: `ارز حساب «${dst.name}» (${currencyLabel(dst.currency)}) با ارز تراکنش یکی نیست.`,
         });
       }
       break;
@@ -422,21 +423,21 @@ export interface PartyTotals {
  * out) — only cancelled records are excluded.
  */
 export function computePartyTotals(partyId: string, transactions: FinTransaction[]): PartyTotals {
-  const acc = (c: Currency) => ({ USD: 0, IRT: 0 }) as Record<Currency, number>;
+  const empty = () => ({ USD: 0, IRT: 0, AFN: 0 }) as Record<Currency, number>;
   const totals: PartyTotals = {
-    receipts: acc("USD"),
-    payments: acc("USD"),
-    withdrawals: acc("USD"),
-    net: acc("USD"),
+    receipts: empty(),
+    payments: empty(),
+    withdrawals: empty(),
+    net: empty(),
     count: 0,
   };
   const add = (map: Record<Currency, number>, currency: Currency, amounts: number[]) => {
     map[currency] = sumAmounts([...(map[currency] ? [map[currency]] : []), ...amounts], currency);
   };
   const byCurrency: Record<string, Record<Currency, number[]>> = {
-    receipt: { USD: [], IRT: [] },
-    payment: { USD: [], IRT: [] },
-    withdrawal: { USD: [], IRT: [] },
+    receipt: { USD: [], IRT: [], AFN: [] },
+    payment: { USD: [], IRT: [], AFN: [] },
+    withdrawal: { USD: [], IRT: [], AFN: [] },
   };
   for (const tx of transactions) {
     if (tx.partyId !== partyId) continue;
@@ -445,13 +446,10 @@ export function computePartyTotals(partyId: string, transactions: FinTransaction
     const bucket = byCurrency[tx.type];
     if (bucket) bucket[tx.currency].push(tx.amount);
   }
-  add(totals.receipts, "USD", byCurrency.receipt.USD);
-  add(totals.receipts, "IRT", byCurrency.receipt.IRT);
-  add(totals.payments, "USD", byCurrency.payment.USD);
-  add(totals.payments, "IRT", byCurrency.payment.IRT);
-  add(totals.withdrawals, "USD", byCurrency.withdrawal.USD);
-  add(totals.withdrawals, "IRT", byCurrency.withdrawal.IRT);
-  for (const c of ["USD", "IRT"] as Currency[]) {
+  for (const c of CURRENCIES) {
+    add(totals.receipts, c, byCurrency.receipt[c]);
+    add(totals.payments, c, byCurrency.payment[c]);
+    add(totals.withdrawals, c, byCurrency.withdrawal[c]);
     const received = toMinor(totals.receipts[c], c);
     const paid = toMinor(totals.payments[c], c);
     totals.net[c] = fromMinor(received - paid, c);
@@ -479,7 +477,7 @@ export function buildStatementRows(partyId: string, transactions: FinTransaction
   const relevant = transactions
     .filter((t) => t.partyId === partyId && t.status !== "cancelled")
     .sort((a, b) => (a.date === b.date ? a.createdAt - b.createdAt : a.date < b.date ? -1 : 1));
-  const running: Record<Currency, number> = { USD: 0, IRT: 0 };
+  const running: Record<Currency, number> = { USD: 0, IRT: 0, AFN: 0 };
   const rows: StatementRow[] = [];
   for (const tx of relevant) {
     const amt = toMinor(tx.amount, tx.currency);
@@ -492,10 +490,17 @@ export function buildStatementRows(partyId: string, transactions: FinTransaction
     rows.push({
       tx,
       signedMinor: signed,
-      running: { USD: fromMinor(running.USD, "USD"), IRT: running.IRT },
+      running: {
+        USD: fromMinor(running.USD, "USD"),
+        IRT: running.IRT,
+        AFN: running.AFN,
+      },
     });
   }
-  return { rows, closing: { USD: fromMinor(running.USD, "USD"), IRT: running.IRT } };
+  return {
+    rows,
+    closing: { USD: fromMinor(running.USD, "USD"), IRT: running.IRT, AFN: running.AFN },
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -565,7 +570,7 @@ export function totalsByType(transactions: FinTransaction[]): TypeTotals {
   for (const tx of transactions) {
     if (!countsTowardTotals(tx)) continue;
     out.count[tx.type] = (out.count[tx.type] ?? 0) + 1;
-    const bucket = (out.totals[tx.type] ?? { USD: 0, IRT: 0 }) as Record<Currency, number>;
+    const bucket = (out.totals[tx.type] ?? { USD: 0, IRT: 0, AFN: 0 }) as Record<Currency, number>;
     bucket[tx.currency] = sumAmounts([bucket[tx.currency], tx.amount], tx.currency);
     out.totals[tx.type] = bucket;
   }
@@ -602,9 +607,9 @@ export function groupByPeriod(
       bucket = {
         key,
         label: jalaliLabel(key, granularity),
-        receipts: { USD: 0, IRT: 0 },
-        payments: { USD: 0, IRT: 0 },
-        withdrawals: { USD: 0, IRT: 0 },
+        receipts: { USD: 0, IRT: 0, AFN: 0 },
+        payments: { USD: 0, IRT: 0, AFN: 0 },
+        withdrawals: { USD: 0, IRT: 0, AFN: 0 },
         count: 0,
       };
       map.set(key, bucket);
@@ -650,10 +655,10 @@ export function totalCashBalances(
   transactions: FinTransaction[],
 ): Record<Currency, number> {
   const balances = computeAllAccountBalances(accounts, transactions);
-  const usd = accounts.filter((a) => a.currency === "USD" && a.active);
-  const irt = accounts.filter((a) => a.currency === "IRT" && a.active);
-  return {
-    USD: sumAmounts(usd.map((a) => balances.get(a.id)?.balance ?? 0), "USD"),
-    IRT: sumAmounts(irt.map((a) => balances.get(a.id)?.balance ?? 0), "IRT"),
-  };
+  const out = zeroByCurrency();
+  for (const c of CURRENCIES) {
+    const curAccounts = accounts.filter((a) => a.currency === c && a.active);
+    out[c] = sumAmounts(curAccounts.map((a) => balances.get(a.id)?.balance ?? 0), c);
+  }
+  return out;
 }

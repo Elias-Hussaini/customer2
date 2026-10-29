@@ -5,6 +5,7 @@ import { VitePWA } from "vite-plugin-pwa";
 import { copyFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
+import { execSync } from "node:child_process";
 
 /// <reference types="vitest/config" />
 
@@ -12,6 +13,21 @@ const rootDir = fileURLToPath(new URL(".", import.meta.url));
 
 /** GitHub Pages repository name — the app is served under /customer2/. */
 const REPO_NAME = "customer2";
+
+/**
+ * Build identity — injected at compile time so the UI can always answer
+ * «which version am I running?». The user was repeatedly left guessing whether
+ * a fix had reached their device; a visible build stamp removes all doubt.
+ */
+function buildSha(): string {
+  try {
+    return execSync("git rev-parse --short HEAD", { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .trim();
+  } catch {
+    return "dev";
+  }
+}
 
 /**
  * GitHub Pages is a static host with no SPA fallback.
@@ -34,11 +50,19 @@ function githubPagesPlugin(): Plugin {
 
 export default defineConfig(({ mode }) => ({
   base: mode === "production" ? `/${REPO_NAME}/` : "/",
+  define: {
+    __BUILD_SHA__: JSON.stringify(buildSha()),
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+  },
   plugins: [
     react(),
     tailwindcss(),
     githubPagesPlugin(),
     VitePWA({
+      // "prompt" keeps the user in control: a new deploy shows the sticky
+      // «نسخه جدید آماده است — به‌روزرسانی» toast and ONLY reloads when they
+      // click it. (autoUpdate applied updates silently and the user lost the
+      // visible signal they relied on — restored here on purpose.)
       registerType: "prompt",
       includeAssets: ["favicon.svg", "favicon-64.png", "apple-touch-icon.png"],
       manifest: {

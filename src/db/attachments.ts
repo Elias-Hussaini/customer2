@@ -1,7 +1,16 @@
 import { db } from "./schema";
-import type { Attachment } from "../types";
+import type { Attachment, Customer } from "../types";
 import { uid } from "../utils/id";
 import { compressImage, type CompressImageResult } from "../utils/imageCompress";
+import { customerFullName } from "./customers";
+
+/** Special attachment kind: the PDF of an ISSUED visa (بایگانی هوشمند feed). */
+export const ISSUED_VISA_KIND = "issuedVisa";
+
+/** toPersianDigits without importing jalali (avoids a cycle in tests). */
+function faDigits(n: number): string {
+  return String(n).replace(/\d/g, (d) => "۰۱۲۳۴۵۶۷۸۹"[Number(d)]);
+}
 
 /** Decode a data-URL into its bytes (used by the AI document flow). */
 export function dataUrlToBlob(dataUrl: string): Blob {
@@ -64,6 +73,37 @@ export async function saveReceipt(paymentId: string, file: File): Promise<Attach
   const att = rowFrom(null, paymentId, "receipt", res, file.name || "رسید.jpg");
   await db.attachments.add(att);
   return att;
+}
+
+/**
+ * Save the PDF (or image) of an ISSUED visa for a customer. The file is
+ * RENAMED to the customer's profile name — «علی رضایی.pdf» — so the smart
+ * archive exports self-describing files. A second file for the same customer
+ * gets a Persian numeric suffix («علی رضایی ۲.pdf»). Original bytes are
+ * preserved (PDFs are never re-encoded).
+ */
+export async function saveIssuedVisaAttachment(
+  customer: Customer,
+  file: File,
+  existingCount = 0,
+): Promise<Attachment> {
+  const ext = (/\.[a-z0-9]{1,6}$/i.exec(file.name)?.[0] ?? ".pdf").toLowerCase();
+  const base = customerFullName(customer).trim() || "ویزا";
+  const name = existingCount > 0 ? `${base} ${faDigits(existingCount + 1)}${ext}` : `${base}${ext}`;
+  const res = await compressImage({ blob: file, name });
+  const att = rowFrom(customer.id, null, ISSUED_VISA_KIND, res, name);
+  await db.attachments.add(att);
+  return att;
+}
+
+/** All issued-visa files of a customer (oldest first — stable numbering order). */
+export async function getIssuedVisaFiles(customerId: string): Promise<Attachment[]> {
+  const rows = await db.attachments
+    .where("customerId")
+    .equals(customerId)
+    .and((a) => a.kind === ISSUED_VISA_KIND)
+    .toArray();
+  return rows.sort((a, b) => a.createdAt - b.createdAt);
 }
 
 /** The receipt of a payment, if any. */

@@ -15,7 +15,7 @@
 import { db } from "../db/schema";
 import { logActivity } from "../db/activities";
 import { uid } from "../utils/id";
-import { formatMoney } from "../utils/num";
+import { formatMoney, fromMinor, toMinor } from "../utils/num";
 import { todayIso, formatJalali } from "../utils/jalali";
 import { toJalaali } from "jalaali-js";
 import { compressImage } from "../utils/imageCompress";
@@ -269,8 +269,8 @@ function deriveOutstandingStatus(
   settlements: OutstandingSettlement[],
   currency: Currency,
 ): OutstandingItem["status"] {
-  const settledMinor = settlements.reduce((s, x) => s + Math.round(x.amount * (currency === "USD" ? 100 : 1)), 0);
-  const totalMinor = Math.round(amount * (currency === "USD" ? 100 : 1));
+  const settledMinor = settlements.reduce((s, x) => s + toMinor(x.amount, currency), 0);
+  const totalMinor = toMinor(amount, currency);
   if (settledMinor <= 0) return "open";
   if (settledMinor >= totalMinor) return "settled";
   return "partial";
@@ -983,9 +983,8 @@ export async function reconcileAccount(
   const allTx = await db.accTransactions.toArray();
   const balances = computeAllAccountBalances([account], allTx);
   const derived = balances.get(accountId)?.balance ?? 0;
-  const diffMinor = Math.round((countedBalance - derived) * (account.currency === "USD" ? 100 : 1));
-  const difference =
-    account.currency === "USD" ? Math.round(diffMinor) / 100 : diffMinor;
+  const diffMinor = Math.round((countedBalance - derived) * (toMinor(1, account.currency)));
+  const difference = fromMinor(diffMinor, account.currency);
   if (difference === 0) {
     await logActivity({
       type: "acc-adjust",

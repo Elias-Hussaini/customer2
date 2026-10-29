@@ -140,11 +140,12 @@ export function FinAccountFormModal({ open, onClose, editAccount }: FinAccountFo
           />
         </FormField>
 
-        <FormField label="ارز حساب" required hint="هر حساب فقط یک ارز دارد — دلار و تومان هرگز ترکیب نمی‌شوند">
+        <FormField label="ارز حساب" required hint="هر حساب فقط یک ارز دارد — ارزها هرگز با هم ترکیب نمی‌شوند">
           <RadioSelect
             options={[
               { value: "IRT", label: "تومان" },
               { value: "USD", label: "دلار" },
+              { value: "AFN", label: "افغانی" },
             ]}
             value={currency}
             onChange={(v) => setCurrency(v as Currency)}

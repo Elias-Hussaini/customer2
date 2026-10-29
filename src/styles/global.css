@@ -181,11 +181,13 @@
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
-    border-radius: 0.85rem;
-    font-weight: 600;
+    /* Fully-rounded pill + generous height — tall & rounded reads friendlier
+       than the old wide/flat stretched look. */
+    border-radius: 999px;
+    font-weight: 700;
     font-size: 0.875rem;
     line-height: 1;
-    padding: 0.68rem 1.05rem;
+    padding: 0.78rem 1.35rem;
     cursor: pointer;
     border: 1px solid transparent;
     user-select: none;
@@ -269,23 +271,23 @@
   }
 
   .btn-sm {
-    padding: 0.45rem 0.75rem;
+    padding: 0.58rem 1.05rem;
     font-size: 0.8rem;
-    border-radius: 0.7rem;
+    border-radius: 999px;
   }
   .btn-lg {
-    padding: 0.85rem 1.5rem;
+    padding: 0.95rem 1.7rem;
     font-size: 0.95rem;
-    border-radius: 1rem;
+    border-radius: 999px;
   }
 
   .icon-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 2.5rem;
-    height: 2.5rem;
-    border-radius: 0.85rem;
+    width: 2.6rem;
+    height: 2.6rem;
+    border-radius: 999px;
     cursor: pointer;
     border: 1px solid transparent;
     background: transparent;
@@ -387,7 +389,7 @@
     pointer-events: none;
   }
   .dock {
-    --dock-item-w: 3.35rem;
+    --dock-item-w: 2.85rem;
     pointer-events: auto;
     position: relative;
     display: flex;
@@ -409,7 +411,7 @@
   }
   @media (min-width: 640px) {
     .dock {
-      --dock-item-w: 5.5rem;
+      --dock-item-w: 4.85rem;
     }
   }
 
@@ -434,6 +436,7 @@
   .dock-item .dock-label {
     font-size: 0.66rem;
     font-weight: 600;
+    white-space: nowrap;
     display: none;
   }
   @media (min-width: 640px) {
@@ -477,6 +480,77 @@
     background: linear-gradient(160deg, rgba(139, 131, 255, 0.24), rgba(139, 92, 246, 0.14));
     border-color: rgba(139, 131, 255, 0.35);
     box-shadow: 0 4px 18px -4px rgba(139, 131, 255, 0.45);
+  }
+
+  /* Round accounting button — far-left edge of the page (حسابداری). */
+  .acc-orbit {
+    position: fixed;
+    left: max(env(safe-area-inset-left, 0px), 14px);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 7.5rem);
+    z-index: 39;
+  }
+  .acc-orbit-btn {
+    position: relative;
+    width: 3.4rem;
+    height: 3.4rem;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.85);
+    background: rgba(255, 255, 255, 0.72);
+    box-shadow: var(--shadow-dock), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    display: grid;
+    place-items: center;
+    color: var(--color-ink-600);
+    cursor: pointer;
+    transition: transform 0.25s cubic-bezier(0.3, 1.5, 0.5, 1), color 0.18s ease, box-shadow 0.25s ease;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .dark .acc-orbit-btn {
+    background: rgba(24, 26, 44, 0.82);
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 18px 50px -12px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    color: var(--color-ink-300);
+  }
+  .acc-orbit-btn:hover {
+    color: var(--color-brand-600);
+    transform: scale(1.06);
+  }
+  .dark .acc-orbit-btn:hover {
+    color: var(--color-brand-300);
+  }
+  .acc-orbit-btn.active {
+    color: var(--color-brand-600);
+    box-shadow: var(--shadow-dock), inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 0 0 4px rgba(99, 91, 255, 0.16);
+  }
+  .dark .acc-orbit-btn.active {
+    color: var(--color-brand-300);
+    box-shadow: 0 18px 50px -12px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 0 0 4px rgba(139, 131, 255, 0.2);
+  }
+  .acc-orbit-ring {
+    display: none;
+  }
+  .acc-orbit-tip {
+    position: absolute;
+    left: calc(100% + 10px);
+    top: 50%;
+    translate: 0 -50%;
+    white-space: nowrap;
+    border-radius: 999px;
+    background: rgba(17, 19, 26, 0.92);
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 0.28rem 0.66rem;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-4px);
+    transition: opacity 0.18s ease, transform 0.18s ease;
+  }
+  .acc-orbit-btn:hover .acc-orbit-tip,
+  .acc-orbit-btn:focus-visible .acc-orbit-tip {
+    opacity: 1;
+    transform: translateX(0);
   }
 }
 
@@ -598,6 +672,46 @@
   animation: fade-in 0.22s ease both;
 }
 
+/* ---------------------------------------------------------------------------
+ * Theme crossfade (dark ↔ light)
+ * - Chromium: the native View Transitions API crossfades the whole page
+ *   (see useTheme.tsx). These rules give it a calm duration + a gentle
+ *   upward drift on the incoming snapshot.
+ * - Fallback (.theme-anim on <html>): one short global color transition.
+ * ------------------------------------------------------------------------- */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 0.42s;
+  animation-timing-function: cubic-bezier(0.3, 0.7, 0.3, 1);
+}
+::view-transition-new(root) {
+  animation-name: theme-in;
+}
+@keyframes theme-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.theme-anim,
+.theme-anim *,
+.theme-anim *::before,
+.theme-anim *::after {
+  transition:
+    background-color 0.45s ease,
+    background 0.45s ease,
+    color 0.45s ease,
+    border-color 0.45s ease,
+    fill 0.45s ease,
+    stroke 0.45s ease,
+    box-shadow 0.45s ease !important;
+}
+
 /* Drag & drop overlay: gently floating upload icon. */
 @keyframes drop-float {
   0%,
@@ -623,8 +737,98 @@
 .anim-toast {
   animation: toast-in 0.28s cubic-bezier(0.3, 1.3, 0.5, 1) both;
 }
+
+/* ---------------------------------------------------------------------------
+ * Page / section transitions
+ * .page-enter animates the routed page as a whole; its grandchildren (the
+ * section cards of a page) rise in with a soft stagger so moving between
+ * sections feels alive but stays light (~0.5s total).
+ * ------------------------------------------------------------------------- */
+@keyframes page-enter-kf {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.995);
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
 .page-enter {
-  animation: slide-up 0.24s cubic-bezier(0.25, 1, 0.4, 1) both;
+  animation: page-enter-kf 0.36s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.page-enter > * > * {
+  animation: rise-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.page-enter > * > *:nth-child(1) { animation-delay: 0.03s; }
+.page-enter > * > *:nth-child(2) { animation-delay: 0.07s; }
+.page-enter > * > *:nth-child(3) { animation-delay: 0.11s; }
+.page-enter > * > *:nth-child(4) { animation-delay: 0.15s; }
+.page-enter > * > *:nth-child(5) { animation-delay: 0.19s; }
+.page-enter > * > *:nth-child(6) { animation-delay: 0.23s; }
+.page-enter > * > *:nth-child(7) { animation-delay: 0.27s; }
+.page-enter > * > *:nth-child(8) { animation-delay: 0.31s; }
+.page-enter > * > *:nth-child(n + 9) { animation-delay: 0.34s; }
+
+/* ---------------------------------------------------------------------------
+ * Button ripple — the .ripple-clip overlay (radius inherited from the
+ * button) keeps the ink inside the pill WITHOUT overflow:hidden on the
+ * button itself, so popovers/menus inside buttons stay unclipped.
+ * ------------------------------------------------------------------------- */
+.btn,
+.icon-btn {
+  position: relative;
+}
+.ripple-clip {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+.ripple-ink {
+  position: absolute;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.16;
+  transform: scale(0);
+  animation: ripple-expand 0.62s cubic-bezier(0.22, 0.8, 0.4, 1) forwards;
+  pointer-events: none;
+}
+@keyframes ripple-expand {
+  to {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+
+/* Sun/moon swap on the theme toggle — the icon spins in on every change. */
+@keyframes theme-icon-swap {
+  from {
+    transform: rotate(-140deg) scale(0.4);
+    opacity: 0;
+  }
+  to {
+    transform: rotate(0deg) scale(1);
+    opacity: 1;
+  }
+}
+.theme-icon-anim {
+  display: inline-flex;
+  animation: theme-icon-swap 0.45s cubic-bezier(0.3, 1.4, 0.5, 1) both;
 }
 
 /* AI quick-fill: one soft violet sweep over the identity grid when the

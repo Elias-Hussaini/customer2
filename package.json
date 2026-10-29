@@ -13,6 +13,7 @@
   "dependencies": {
     "dexie": "latest",
     "dexie-react-hooks": "^4.4.0",
+    "exceljs": "^4.4.0",
     "file-saver": "latest",
     "html2canvas": "latest",
     "jalaali-js": "latest",
@@ -20,6 +21,7 @@
     "jspdf-autotable": "latest",
     "jszip": "^3.10.2",
     "lucide-react": "latest",
+    "modern-screenshot": "^4.7.0",
     "pdfjs-dist": "^5.7.284",
     "react": "latest",
     "react-dom": "latest",

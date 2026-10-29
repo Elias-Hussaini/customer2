@@ -8,6 +8,7 @@ import type {
   CustomFieldDef,
   Customer,
   DocType,
+  Employer,
   ListFolder,
   Payment,
   Representative,
@@ -32,6 +33,21 @@ export function useRepresentativeOrDefault(id: string | undefined): Representati
 export function useArchivedRepresentatives(): Representative[] | undefined {
   return useLiveQuery(
     async () => (await db.representatives.toArray()).filter((r) => r.archivedAt),
+    [],
+  );
+}
+
+/** Active employers (کارفرما) — the optional customer attribute. */
+export function useEmployers(activeOnly = true): Employer[] | undefined {
+  return useLiveQuery(async () => {
+    const all = await db.employers.toArray();
+    return activeOnly ? all.filter((e) => !e.archivedAt) : all;
+  }, [activeOnly]);
+}
+
+export function useArchivedEmployers(): Employer[] | undefined {
+  return useLiveQuery(
+    async () => (await db.employers.toArray()).filter((e) => e.archivedAt),
     [],
   );
 }

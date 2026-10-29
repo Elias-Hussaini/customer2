@@ -170,7 +170,7 @@ export function PaymentFormModal({ open, onClose, payment, defaultRepresentative
       open={open}
       onClose={onClose}
       title={payment ? "ویرایش پرداخت" : "ثبت پرداخت"}
-      subtitle="مبالغ دلار و تومان جداگانه نگه داشته می‌شوند"
+      subtitle="مبالغ هر ارز جداگانه نگه داشته می‌شوند"
       footer={
         <div className="flex items-center justify-end gap-2">
           <button className="btn btn-ghost" onClick={onClose} disabled={saving}>
@@ -193,7 +193,7 @@ export function PaymentFormModal({ open, onClose, payment, defaultRepresentative
           />
         </FormField>
         <FormField label="مبلغ" required error={errors.amount}>
-          <MoneyInput amount={amount} currency={currency} onAmountChange={setAmount} onCurrencyChange={setCurrency} />
+          <MoneyInput amount={amount} currency={currency} onAmountChange={setAmount} onCurrencyChange={setCurrency} currencies={["IRT", "USD"]} />
         </FormField>
         <FormField label="تاریخ پرداخت" required error={errors.date}>
           <JalaliDatePicker value={date} onChange={setDate} clearable={false} />

@@ -17,6 +17,8 @@ export interface CustomerInput {
   /** Required in forms: every customer sits inside a list, under a representative. */
   representativeId?: string | null;
   listId?: string | null;
+  /** Optional employer (کارفرما) — null = بدون کارفرما. */
+  employerId?: string | null;
   registrationDate: string;
   customValues?: Record<string, unknown>;
 }
@@ -54,6 +56,7 @@ export async function createCustomer(input: CustomerInput): Promise<Customer> {
     notes: input.notes?.trim() || undefined,
     representativeId: input.representativeId ?? null,
     listId: input.listId ?? null,
+    employerId: input.employerId ?? null,
     registrationDate: input.registrationDate || todayIso(),
     customValues: input.customValues ?? {},
     createdAt: now,
@@ -82,6 +85,7 @@ export async function updateCustomer(id: string, input: CustomerInput): Promise<
     notes: input.notes?.trim() || undefined,
     representativeId: input.representativeId ?? null,
     listId: input.listId ?? null,
+    employerId: input.employerId ?? null,
     registrationDate: input.registrationDate,
     customValues: input.customValues ?? {},
     updatedAt: Date.now(),

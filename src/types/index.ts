@@ -1,6 +1,14 @@
 /** Core domain types for the E-managment visa system. */
 
-export type Currency = "USD" | "IRT";
+export type Currency = "USD" | "IRT" | "AFN";
+
+/** All currencies in display order (تومان، دلار، افغانی). */
+export const CURRENCIES: readonly Currency[] = ["IRT", "USD", "AFN"];
+
+/** Fresh zero-bucket per currency — Record<Currency, number> initializer. */
+export function zeroByCurrency(): Record<Currency, number> {
+  return { USD: 0, IRT: 0, AFN: 0 };
+}
 
 /** Which calendar is used for birth-date / passport-date entry & display. */
 export type CalendarMode = "jalali" | "gregorian";
@@ -30,6 +38,17 @@ export interface Representative {
   archivedAt?: number | null;
 }
 
+/** کارفرما — optional employer/sponsor attached to a customer. */
+export interface Employer {
+  id: string;
+  name: string;
+  phone?: string;
+  notes?: string;
+  createdAt: number;
+  updatedAt: number;
+  archivedAt?: number | null;
+}
+
 export interface Customer {
   id: string;
   firstName?: string;
@@ -46,6 +65,8 @@ export interface Customer {
   /** Every customer is registered under a representative and inside a list. */
   representativeId?: string | null;
   listId?: string | null;
+  /** Optional employer (کارفرما) — null = بدون کارفرما. */
+  employerId?: string | null;
   /** Registration date — defaults to today, editable at creation. */
   registrationDate: string;
   /** Values keyed by custom-field key. Survives field-definition edits. */
@@ -176,6 +197,7 @@ export type ActivityEntity =
   | "customer"
   | "request"
   | "representative"
+  | "employer"
   | "list"
   | "payment"
   | "tag"
@@ -249,6 +271,10 @@ export interface AppPreferences {
   rememberLastSelections: boolean;
   lastRepresentativeId?: string | null;
   lastListId?: string | null;
+  /** Last employer picked in the customer form (remembered like rep/list). */
+  lastEmployerId?: string | null;
+  /** کارفرما feature master switch — off hides the field everywhere. */
+  employerFieldEnabled?: boolean;
   /** Last mode used in the customer form: smart extraction vs manual. */
   /** Internal: default document slots have been seeded once. */
   docTypesSeeded?: boolean;
@@ -289,6 +315,8 @@ export interface BackupFile {
   counts: Record<string, number>;
   data: {
     representatives: Representative[];
+    /** Present in newer backups — employers (کارفرما) are optional everywhere. */
+    employers?: Employer[];
     customers: Customer[];
     requests: VisaRequest[];
     lists: ListFolder[];
@@ -330,7 +358,14 @@ export interface EncryptedBackup {
 export const CURRENCY_LABELS: Record<Currency, string> = {
   USD: "دلار",
   IRT: "تومان",
+  AFN: "افغانی",
 };
+
+/** Persian label of any currency value — single source of truth (no more
+ *  `x === "USD" ? "دلار" : "تومان"" ternaries that silently drop AFN). */
+export function currencyLabel(c: Currency | undefined | null): string {
+  return c ? (CURRENCY_LABELS[c] ?? "") : "";
+}
 
 export const FIELD_TYPE_LABELS: Record<FieldType, string> = {
   text: "متن کوتاه",

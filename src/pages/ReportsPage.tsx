@@ -8,7 +8,7 @@ import { FilterSelect, RadioSelect, SectionCard } from "../components/ui/inputs"
 import { JalaliDatePicker } from "../components/ui/JalaliDatePicker";
 import { StatusPill } from "../components/ui/Badges";
 import { ExportDialog } from "../components/exports/ExportDialog";
-import { useCustomers, useLists, usePayments, useRepresentatives, useRequests, useTags } from "../hooks/useData";
+import { useCustomers, useEmployers, useLists, usePayments, usePrefs, useReceipts, useRepresentatives, useRequests, useTags } from "../hooks/useData";
 import { computeBalances } from "../services/stats";
 import { formatJalali, toPersianDigits } from "../utils/jalali";
 import {
@@ -22,15 +22,17 @@ import {
 } from "../utils/requestDateFilter";
 import { formatMoney } from "../utils/num";
 import { customerFullName } from "../db/customers";
-import { requestStatusFa } from "../types";
-import type { Representative } from "../types";
+import { buildReceiptImages } from "../utils/receiptImages";
+import { requestStatusFa, currencyLabel } from "../types";
+import type { Currency, Representative } from "../types";
+import { zeroByCurrency } from "../types";
 
 type ReportKind = "requests" | "payments" | "balances";
 
 interface BalanceRow {
   repId: string;
   repName: string;
-  currency: "USD" | "IRT";
+  currency: Currency;
   quoted: number;
   paid: number;
   balance: number;
@@ -42,6 +44,11 @@ export function ReportsPage() {
   const navigate = useNavigate();
   const requests = useRequests();
   const payments = usePayments();
+  const receiptAttachments = useReceipts();
+  const employers = useEmployers();
+  const prefs = usePrefs();
+  /** کارفرما joins customer exports when the feature is on. */
+  const employerFieldOn = prefs.employerFieldEnabled !== false;
   const customers = useCustomers();
   const representatives = useRepresentatives();
   const lists = useLists();
@@ -109,6 +116,7 @@ export function ReportsPage() {
     { key: "visaType", header: "نوع ویزا" },
     { key: "representative", header: "نماینده" },
     { key: "list", header: "لیست" },
+    ...(employerFieldOn ? [{ key: "employer", header: "کارفرما" }] : []),
     { key: "amount", header: "مبلغ" },
     { key: "currency", header: "ارز" },
     { key: "registrationDate", header: "تاریخ ثبت" },
@@ -121,13 +129,21 @@ export function ReportsPage() {
   const requestExportRows = filteredRequests.map((r) => {
     const c = (customers ?? []).find((x) => x.id === r.customerId);
     return {
+      customerId: r.customerId,
       customer: c ? customerFullName(c) : "",
       passportNo: c?.passportNo ?? "",
       visaType: r.visaType ?? "",
       representative: (representatives ?? []).find((x) => x.id === r.representativeId)?.name ?? "",
       list: (lists ?? []).find((l) => l.id === r.listId)?.name ?? "",
+      ...(employerFieldOn
+        ? {
+            employer: c?.employerId
+              ? ((employers ?? []).find((e) => e.id === c.employerId)?.name ?? "بدون کارفرما")
+              : "بدون کارفرما",
+          }
+        : {}),
       amount: r.quotedAmount ?? "",
-      currency: r.currency === "USD" ? "دلار" : r.currency === "IRT" ? "تومان" : "",
+      currency: r.currency ? currencyLabel(r.currency) : "",
       registrationDate: formatJalali(r.registrationDate),
       status: requestStatusFa(r),
       issuedAt: r.issuedAt ? formatJalali(r.issuedAt) : "",
@@ -137,10 +153,15 @@ export function ReportsPage() {
   });
 
   const paymentExportRows = filteredPayments.map((p) => ({
+    paymentId: p.id,
+    customerId: (() => {
+      const r = (requests ?? []).find((x) => x.id === p.requestId);
+      return r?.customerId ?? "";
+    })(),
     date: formatJalali(p.date),
     representative: (representatives ?? []).find((x) => x.id === p.representativeId)?.name ?? "",
     amount: p.amount,
-    currency: p.currency === "USD" ? "دلار" : "تومان",
+    currency: currencyLabel(p.currency),
     request: (() => {
       const r = (requests ?? []).find((x) => x.id === p.requestId);
       const c = r && (customers ?? []).find((x) => x.id === r.customerId);
@@ -148,6 +169,19 @@ export function ReportsPage() {
     })(),
     description: p.description ?? "",
   }));
+
+  /** Receipt images (سند) of the filtered payments — loaded on export click. */
+  const [paymentReceiptPhotos, setPaymentReceiptPhotos] = useState<Record<string, string[]> | null>(null);
+  const loadPaymentReceipts = async () => {
+    const visible = new Set(filteredPayments.map((p) => p.id));
+    const byId = new Map((receiptAttachments ?? []).map((r) => [r.id, r] as const));
+    const photos = await buildReceiptImages(
+      (receiptAttachments ?? []).filter((r) => r.paymentId && visible.has(r.paymentId)),
+      (attId) => byId.get(attId)?.paymentId ?? null,
+      async (attId) => byId.get(attId)?.blob,
+    );
+    setPaymentReceiptPhotos(photos);
+  };
 
   const balanceColumns = [
     { key: "repName", header: "نماینده" },
@@ -161,7 +195,7 @@ export function ReportsPage() {
 
   const balanceExportRows = balanceRows.map((b) => ({
     repName: b.repName,
-    currency: b.currency === "USD" ? "دلار" : "تومان",
+    currency: currencyLabel(b.currency),
     quoted: b.quoted,
     paid: b.paid,
     balance: b.balance,
@@ -185,7 +219,7 @@ export function ReportsPage() {
             </span>
           )
         : c.key === "currency"
-          ? (row: BalanceRow) => (row.currency === "USD" ? "دلار" : "تومان")
+          ? (row: BalanceRow) => currencyLabel(row.currency)
           : c.key === "repName"
             ? (row: BalanceRow) => <span className="font-semibold">{row.repName}</span>
             : (row: BalanceRow) => <span className="num">{toPersianDigits(row[c.key as "total" | "issued"])}</span>,
@@ -193,6 +227,30 @@ export function ReportsPage() {
 
   const rangePlaceholders = basisRangePlaceholders(dateBasis);
   const quickRanges = useMemo(() => quickDateRanges(), []);
+
+  /** rep name → profile photo — small, next to each name in grouped exports. */
+  const repPhotos = useMemo(
+    () =>
+      Object.fromEntries(
+        (representatives ?? []).map((r) => [r.name, r.photo ?? undefined]),
+      ),
+    [representatives],
+  );
+  /** Section grouping for the export — by representative, with photos. */
+  const exportGrouping = useMemo(
+    () => ({
+      columnKey: kind === "balances" ? "repName" : "representative",
+      label: "نماینده",
+      photos: repPhotos,
+    }),
+    [kind, repPhotos],
+  );
+
+  /** customer id → profile photo — small round photo beside each name. */
+  const customerPhotos = useMemo(
+    () => Object.fromEntries((customers ?? []).map((c) => [c.id, c.photo ?? undefined])),
+    [customers],
+  );
 
   const clearAllFilters = () => {
     setRepId("");
@@ -289,7 +347,7 @@ export function ReportsPage() {
             <button
               key={q.key}
               type="button"
-              className={`rounded-full px-3 py-1 text-[11px] font-bold transition-all ${
+              className={`rounded-full px-3 py-1.5 text-[11px] font-bold transition-all ${
                 active
                   ? "bg-brand-500 text-white shadow-[0_4px_12px_-4px_rgba(99,91,255,0.5)]"
                   : "bg-ink-900/5 text-ink-500 hover:bg-brand-500/12 hover:text-brand-600 dark:bg-white/5 dark:text-ink-400 dark:hover:text-brand-300"
@@ -311,7 +369,7 @@ export function ReportsPage() {
   );
 
   const totalsPerCurrency = useMemo(() => {
-    const acc = { USD: 0, IRT: 0 };
+    const acc = zeroByCurrency();
     for (const p of filteredPayments) acc[p.currency] += p.amount;
     return acc;
   }, [filteredPayments]);
@@ -345,7 +403,7 @@ export function ReportsPage() {
             <button className="btn btn-glass btn-sm" onClick={() => navigate("/stats")}>
               <CalendarRange size={14} /> آمار ماهانه
             </button>
-            <button className="btn btn-primary btn-sm" onClick={() => setExportOpen(true)}>
+            <button className="btn btn-primary btn-sm" onClick={() => { setPaymentReceiptPhotos(null); void loadPaymentReceipts(); setExportOpen(true); }}>
               <FileDown size={14} /> خروجی گزارش
             </button>
           </div>
@@ -464,8 +522,9 @@ export function ReportsPage() {
       {kind === "payments" && (
         <>
           <div className="flex flex-wrap gap-2">
-            <span className="chip num">جمع دلار: {formatMoney(totalsPerCurrency.USD, "USD")}</span>
-            <span className="chip num">جمع تومان: {formatMoney(totalsPerCurrency.IRT, "IRT")}</span>
+            {totalsPerCurrency.USD > 0 && <span className="chip num">جمع دلار: {formatMoney(totalsPerCurrency.USD, "USD")}</span>}
+            {totalsPerCurrency.IRT > 0 && <span className="chip num">جمع تومان: {formatMoney(totalsPerCurrency.IRT, "IRT")}</span>}
+            {totalsPerCurrency.AFN > 0 && <span className="chip num">جمع افغانی: {formatMoney(totalsPerCurrency.AFN, "AFN")}</span>}
           </div>
           <DataTable
             columns={[
@@ -540,12 +599,26 @@ export function ReportsPage() {
               : balanceColumns
         }
         defaultFilename={`${kind}-report`}
+        grouping={exportGrouping}
+        rowPhotos={
+          kind === "requests" || kind === "payments"
+            ? kind === "requests"
+              ? { columnKey: "customer", idKey: "customerId", photos: customerPhotos }
+              : { columnKey: "request", idKey: "customerId", photos: customerPhotos }
+            : undefined
+        }
+        rowReceipts={
+          kind === "payments" ? { idKey: "paymentId", photos: paymentReceiptPhotos ?? {} } : undefined
+        }
         summary={
           kind === "payments"
             ? [
                 { label: "تعداد", value: toPersianDigits(filteredPayments.length) },
                 { label: "جمع دلار", value: formatMoney(totalsPerCurrency.USD, "USD") },
                 { label: "جمع تومان", value: formatMoney(totalsPerCurrency.IRT, "IRT") },
+                ...(totalsPerCurrency.AFN > 0
+                  ? [{ label: "جمع افغانی", value: formatMoney(totalsPerCurrency.AFN, "AFN") }]
+                  : []),
               ]
             : undefined
         }

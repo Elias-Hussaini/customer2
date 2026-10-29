@@ -18,7 +18,7 @@ import { normalizeFa } from "../utils/normalize";
 import { formatJalali } from "../utils/jalali";
 import { formatMoney } from "../utils/num";
 import { customerFullName } from "../db/customers";
-import { requestStatusFa } from "../types";
+import { requestStatusFa, currencyLabel } from "../types";
 import { loadPageFilter, savePageFilter } from "../utils/pageFilters";
 import {
   REQUEST_DATE_BASIS_OPTIONS,
@@ -139,6 +139,7 @@ export function RequestsPage() {
       filtered.map((r) => {
         const c = customersById.get(r.customerId);
         return {
+          customerId: r.customerId,
           customer: c ? customerFullName(c) : "",
           passportNo: c?.passportNo ?? "",
           visaType: r.visaType ?? "",
@@ -151,7 +152,7 @@ export function RequestsPage() {
               .filter(Boolean)
               .join("، ") ?? "",
           amount: r.quotedAmount ?? "",
-          currency: r.currency === "USD" ? "دلار" : r.currency === "IRT" ? "تومان" : "",
+          currency: r.currency ? currencyLabel(r.currency) : "",
           registrationDate: formatJalali(r.registrationDate),
           issued: requestStatusFa(r),
           issuedAt: r.issuedAt ? formatJalali(r.issuedAt) : "",
@@ -322,6 +323,20 @@ export function RequestsPage() {
           { key: "rejectedAt", header: "تاریخ رد" },
           { key: "notes", header: "توضیحات" },
         ]}
+        grouping={{
+          columnKey: "representative",
+          label: "نماینده",
+          photos: Object.fromEntries(
+            (representatives ?? []).map((r) => [r.name, r.photo ?? undefined]),
+          ),
+        }}
+        rowPhotos={{
+          columnKey: "customer",
+          idKey: "customerId",
+          photos: Object.fromEntries(
+            (customers ?? []).map((c) => [c.id, c.photo ?? undefined]),
+          ),
+        }}
       />
     </div>
   );

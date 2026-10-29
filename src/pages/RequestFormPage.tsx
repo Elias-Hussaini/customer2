@@ -411,6 +411,7 @@ export function RequestFormPage() {
                   currency={form.currency}
                   onAmountChange={(a) => patch({ quotedAmount: a })}
                   onCurrencyChange={(c) => patch({ currency: c })}
+                  currencies={["IRT", "USD"]}
                 />
               </FormField>
               <FormField label="تاریخ ثبت" hint="به‌صورت پیش‌فرض امروز">

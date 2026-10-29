@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
   Eye,
@@ -12,11 +12,13 @@ import {
   Trash2,
   Download,
   FileImage,
+  BadgeCheck,
+  FileUp,
 } from "lucide-react";
 import { saveAs } from "file-saver";
 import { db } from "../../db/schema";
 import type { Attachment, DocType } from "../../types";
-import { saveAttachment, deleteAttachment, rotateAttachmentImage } from "../../db/attachments";
+import { saveAttachment, deleteAttachment, rotateAttachmentImage, saveIssuedVisaAttachment, ISSUED_VISA_KIND } from "../../db/attachments";
 import { deleteDocType, getDocTypesForCustomer } from "../../db/docTypes";
 import { AiDocSortButton } from "../domain/AiDocSortButton";
 import { Modal } from "./Modal";
@@ -195,7 +197,12 @@ function SlotRow({
   );
 }
 
-export function DocumentSlots({ customerId }: { customerId: string }) {
+/** PDF vs image icon for an attachment. */
+function FileTextIcon({ a }: { a: Attachment }) {
+  return a.mime.startsWith("image/") ? <FileImage size={16} /> : <Inbox size={16} />;
+}
+
+export function DocumentSlots({ customerId, customer }: { customerId: string; customer?: import("../../types").Customer }) {
   const toast = useToast();
   const { confirm } = useConfirm();
   const [preview, setPreview] = useState<Attachment | null>(null);
@@ -204,9 +211,17 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
   const [rot, setRot] = useState(0);
   const [rotBusy, setRotBusy] = useState(false);
   const otherInputRef = useRef<HTMLInputElement | null>(null);
+  const visaInputRef = useRef<HTMLInputElement | null>(null);
 
   const attachments = useLiveQuery(
     () => db.attachments.where("customerId").equals(customerId).toArray(),
+    [customerId],
+  );
+
+  // Does this customer have at least one ISSUED visa? Only then the special
+  // «ویزای صادر شده» slot activates — it is unrelated to the other slots.
+  const hasIssuedVisa = useLiveQuery(
+    () => db.requests.where("customerId").equals(customerId).and((r) => r.issued === true).count(),
     [customerId],
   );
 
@@ -218,6 +233,10 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
     (attachments ?? []).filter((a) => a.kind === kind).sort((a, b) => b.createdAt - a.createdAt);
 
   const others = byKind("other");
+  const visaFiles = useMemo(
+    () => (attachments ?? []).filter((a) => a.kind === ISSUED_VISA_KIND).sort((a, b) => a.createdAt - b.createdAt),
+    [attachments],
+  );
 
   const handleFiles = async (kind: string, files: File[]) => {
     if (files.length === 0) return;
@@ -234,6 +253,43 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
       setBusy(null);
     }
   };
+
+  /** Issued-visa PDFs: renamed to the customer's profile name on save. */
+  const handleVisaFiles = async (files: File[]) => {
+    if (files.length === 0 || !customer) return;
+    setBusy(ISSUED_VISA_KIND);
+    try {
+      let count = visaFiles.length;
+      for (const f of files) {
+        await saveIssuedVisaAttachment(customer, f, count);
+        count++;
+      }
+      toast.success(
+        files.length > 1
+          ? `${toPersianDigits(files.length)} فایل ویزا با نام مشتری ذخیره شد`
+          : "فایل ویزا با نام مشتری ذخیره شد",
+      );
+    } catch (e) {
+      console.error(e);
+      toast.error("ذخیره فایل ویزا با خطا مواجه شد");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** The issued-visa slot is a drop zone too — dragging a PDF onto it adds
+   *  it directly (same as the file picker). Only PDFs and images are filed. */
+  const isVisaFile = (f: File) =>
+    f.type === "application/pdf" || /\.pdf$/i.test(f.name) || f.type.startsWith("image/");
+  const visaDrop = useDropTarget((files) => {
+    const ok = files.filter(isVisaFile);
+    if (ok.length === 0) {
+      toast.error("برای ویزا فقط فایل PDF یا تصویر مجاز است");
+      return;
+    }
+    if (ok.length < files.length) toast.info("فایل‌های غیر PDF/تصویر نادیده گرفته شدند");
+    void handleVisaFiles(ok);
+  });
 
   // The «سایر مدارک» block is itself a drop zone (multi-file).
   const otherDrop = useDropTarget((files) => void handleFiles("other", files));
@@ -278,6 +334,108 @@ export function DocumentSlots({ customerId }: { customerId: string }) {
       <div className="flex justify-end">
         <AiDocSortButton customerId={customerId} />
       </div>
+
+      {/* ISSUED-VISA slot — activates only after a visa is issued; PDF files
+          are renamed to the customer's profile name (feeds بایگانی هوشمند).
+          Drag & drop works: dropping a PDF here adds it directly. */}
+      {(hasIssuedVisa ?? 0) > 0 && customer && (
+        <div
+          className={`rounded-2xl border p-3 transition-all duration-150 ${
+            visaDrop.hovering
+              ? "border-[#0b9e6e] bg-[#0b9e6e]/12 ring-2 ring-[#0b9e6e]/35"
+              : "border-[#0b9e6e]/30 bg-[#0b9e6e]/6"
+          }`}
+          data-slot="issuedVisa"
+          {...visaDrop.dropHandlers}
+        >
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="flex min-w-0 items-center gap-1.5 text-[13px] font-bold text-[#0b7a55] dark:text-[#3ddc9a]">
+              <BadgeCheck size={15} className="shrink-0" />
+              ویزای صادر شده
+              {visaFiles.length > 0 && (
+                <span className="chip-soft num shrink-0 rounded-full px-2 py-0.5 text-[10px]">
+                  {toPersianDigits(visaFiles.length)}
+                </span>
+              )}
+            </p>
+            <button
+              type="button"
+              className="btn btn-glass btn-sm shrink-0"
+              disabled={busy === ISSUED_VISA_KIND}
+              onClick={() => visaInputRef.current?.click()}
+            >
+              <FileUp size={14} />
+              افزودن PDF ویزا
+            </button>
+            <input
+              ref={visaInputRef}
+              type="file"
+              accept="application/pdf,.pdf,image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? []);
+                if (files.length > 0) void handleVisaFiles(files);
+                e.target.value = "";
+              }}
+            />
+          </div>
+          {visaFiles.length === 0 ? (
+            <p
+              className={`rounded-xl border border-dashed px-3 py-2.5 text-center text-[11px] leading-5 transition-colors ${
+                visaDrop.hovering
+                  ? "border-[#0b9e6e] bg-white/70 text-[#0b7a55] dark:bg-white/10 dark:text-[#3ddc9a]"
+                  : "border-[#0b9e6e]/35 text-[#0b7a55]/80 dark:text-[#3ddc9a]/80"
+              }`}
+            >
+              PDF ویزای صادرشده را همین‌جا بارگذاری کنید یا فایل را مستقیم روی همین کادر رها کنید — فایل با نام مشتری ذخیره می‌شود
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-1.5">
+              {visaFiles.map((a) => (
+                <li
+                  key={a.id}
+                  className="flex items-center gap-2.5 rounded-xl bg-white/70 px-2.5 py-1.5 dark:bg-white/5"
+                >
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#0b9e6e]/12 text-[#0b7a55] dark:text-[#3ddc9a]">
+                    <FileTextIcon a={a} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[12.5px] font-bold">{a.name}</span>
+                    <span className="text-[10.5px] text-ink-400">
+                      {formatNumber(Math.round(a.size / 1024))} کیلوبایت • {formatTimestamp(a.createdAt)}
+                    </span>
+                  </span>
+                  <button
+                    className="icon-btn !h-8 !w-8"
+                    aria-label="مشاهده"
+                    onClick={() => setPreview(a)}
+                  >
+                    <Eye size={15} />
+                  </button>
+                  <button
+                    className="icon-btn !h-8 !w-8"
+                    aria-label="دانلود"
+                    onClick={() => saveAs(a.blob, a.name)}
+                  >
+                    <Download size={15} />
+                  </button>
+                  <button
+                    className="icon-btn !h-8 !w-8 hover:!text-[#ef4444]"
+                    aria-label="حذف"
+                    onClick={async () => {
+                      await deleteAttachment(a.id);
+                      toast.info("فایل ویزا حذف شد");
+                    }}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
       {docList.length === 0 ? (
         <p className="rounded-2xl border border-dashed border-ink-300/60 px-4 py-5 text-center text-xs leading-6 text-ink-400 dark:border-ink-700">
           هنوز نوع مدرکی تعریف نشده — از تنظیمات ← «مدارک و تصاویر» اضافه کنید

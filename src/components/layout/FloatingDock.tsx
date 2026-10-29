@@ -1,9 +1,10 @@
 import { NavLink, useLocation } from "react-router-dom";
 import {
-  Calculator,
+  FolderArchive,
   FolderOpen,
   LayoutDashboard,
   MoreHorizontal,
+  Sparkles,
   UserRound,
   Users,
 } from "lucide-react";
@@ -14,7 +15,8 @@ const ITEMS = [
   { to: "/lists", icon: FolderOpen, label: "لیست‌ها", end: false },
   { to: "/customers", icon: Users, label: "مشتریان", end: false },
   { to: "/representatives", icon: UserRound, label: "نمایندگان", end: false },
-  { to: "/accounting", icon: Calculator, label: "حسابداری", end: false },
+  { to: "/ai", icon: Sparkles, label: "هوش مصنوعی", end: false },
+  { to: "/smart-archive", icon: FolderArchive, label: "بایگانی هوشمند", end: false },
 ];
 
 /**
