@@ -29,7 +29,6 @@ export const MAIN_BACKUP_TABLES = [
   db.visaTypes,
   db.customFields,
   db.docTypes,
-  db.employers,
   db.activities,
   db.preferences,
 ];
@@ -55,7 +54,6 @@ export async function readMainBackupData(
       visaTypes,
       customFields,
       docTypes,
-      employers,
       activities,
       preferences,
     ] = await Promise.all([
@@ -69,7 +67,6 @@ export async function readMainBackupData(
       db.visaTypes.toArray(),
       db.customFields.toArray(),
       db.docTypes.toArray(),
-      db.employers.toArray(),
       opts.allActivities
         ? db.activities.toArray()
         : db.activities.orderBy("ts").reverse().limit(800).toArray(),
@@ -87,7 +84,6 @@ export async function readMainBackupData(
       visaTypes,
       customFields,
       docTypes,
-      employers,
       activities,
       preferences: preferences ?? null,
     } satisfies BackupFile["data"];
@@ -118,7 +114,6 @@ export async function buildBackup(): Promise<BackupFile> {
       visaTypes: data.visaTypes.length,
       customFields: data.customFields.length,
       docTypes: data.docTypes?.length ?? 0,
-      employers: data.employers?.length ?? 0,
       activities: data.activities.length,
     },
     data,
@@ -250,7 +245,6 @@ export async function buildRestorePreview(backup: BackupFile): Promise<RestorePr
     tags: await db.tags.count(),
     visaTypes: await db.visaTypes.count(),
     customFields: await db.customFields.count(),
-    employers: await db.employers.count(),
   };
   const d = backup.data;
   const existingIds = async (
@@ -332,7 +326,6 @@ export async function applyRestore(backup: BackupFile, mode: RestoreMode): Promi
       db.visaTypes,
       db.customFields,
       db.docTypes,
-      db.employers,
       db.activities,
       db.preferences,
     ],
@@ -349,7 +342,6 @@ export async function applyRestore(backup: BackupFile, mode: RestoreMode): Promi
           db.visaTypes.clear(),
           db.customFields.clear(),
           db.docTypes.clear(),
-          db.employers.clear(),
           db.activities.clear(),
           db.preferences.clear(),
         ]);
@@ -389,13 +381,6 @@ export async function applyRestore(backup: BackupFile, mode: RestoreMode): Promi
           const exists = (await db.docTypes.get(dt.id)) != null;
           exists ? updated++ : inserted++;
           await db.docTypes.put(dt);
-        }
-      }
-      if (d.employers?.length) {
-        for (const emp of d.employers) {
-          const exists = (await db.employers.get(emp.id)) != null;
-          exists ? updated++ : inserted++;
-          await db.employers.put(emp);
         }
       }
 

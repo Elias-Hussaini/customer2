@@ -227,7 +227,6 @@ async function blobForVision(blob: Blob): Promise<string> {
  * THE REGISTRY
  * ========================================================================= */
 
-import { findDuplicateEmployerName } from "../../db/employers";
 import { computePartyTotals } from "../../accounting/engine";
 import type { ToolParam } from "./types";
 
@@ -634,9 +633,10 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
     run: async (a) => {
       const name = str(a.name);
       if (!name) return fail("نام لازم است");
-      const dup = await findDuplicateEmployerName(name);
-      if (dup) return fail(`«${dup.name}» از قبل ثبت است`, `id موجود: ${dup.id}`);
-      const emp = await createEmployer({ name, phone: str(a.phone), contactInfo: undefined, notes: str(a.notes) });
+      // Duplicate check against the live table (name, case/space-insensitive).
+      const existing = (await allEmployers()).find((e) => norm(e.name) === norm(name));
+      if (existing) return fail(`«${existing.name}» از قبل ثبت است`, `id موجود: ${existing.id}`);
+      const emp = await createEmployer({ name, phone: str(a.phone), notes: str(a.notes) });
       return ok({ id: emp.id, name: emp.name }, `کارفرما «${emp.name}» ثبت شد`);
     },
   });
