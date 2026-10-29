@@ -11,7 +11,7 @@ import { JalaliDatePicker } from "../../components/ui/JalaliDatePicker";
 import { useToast } from "../../hooks/useToast";
 import { todayIso } from "../../utils/jalali";
 import { parseAmountInput } from "../../utils/num";
-import type { Currency } from "../../types";
+import { ACC_CURRENCIES, CURRENCY_LABELS, type Currency } from "../../types";
 import { createAccount, updateAccount } from "../repo";
 import {
   ACCOUNT_TYPE_LABELS,

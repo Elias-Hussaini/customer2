@@ -8,6 +8,7 @@
  * dynamically, so fields added later are understood automatically.
  */
 
+import { extractJsonObjectLoose, salvageKeyValuePairs } from "./jsonrepair";
 import type { ChatMessage, ContentPart } from "./client";
 import { CORE_FIELD_KEYS, type ExtractionPayload } from "./types";
 import { isLatinName, latinToPersianName } from "./translit";
@@ -131,16 +132,22 @@ function normalizeSex(v: unknown): string | null {
 }
 
 /**
- * Parse the model reply into a fixed-schema payload. Throws with a Persian
- * message when the reply is unusable.
+ * Parse the model reply into a fixed-schema payload. Tolerant by design:
+ * fenced/prose/truncated replies are repaired (jsonrepair), and a broken
+ * reply is regex-salvaged per key-value pair before giving up. Throws with a
+ * Persian message when nothing usable exists.
  */
 export function parseExtractionReply(text: string): ExtractionPayload {
-  const body = extractJsonBlock(text);
   let raw: Record<string, unknown>;
   try {
-    raw = JSON.parse(body) as Record<string, unknown>;
+    raw = extractJsonObjectLoose(text);
   } catch {
-    throw new Error("پاسخ هوش مصنوعی قابل خواندن نبود (JSON نامعتبر).");
+    // Last resort: pull «"key": "value"» pairs out of any broken reply.
+    const salvaged = salvageKeyValuePairs(text);
+    if (Object.keys(salvaged).length === 0) {
+      throw new Error("پاسخ هوش مصنوعی قابل خواندن نبود (JSON نامعتبر).");
+    }
+    raw = salvaged;
   }
   if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error("پاسخ هوش مصنوعی قابل خواندن نبود.");

@@ -79,6 +79,7 @@ const RESTORE_TABLES = [
   db.visaTypes,
   db.customFields,
   db.docTypes,
+  db.employers,
   db.activities,
   db.preferences,
   db.attachments,
@@ -280,6 +281,7 @@ export async function buildFullZipBackup(
     visaTypes: recordData.visaTypes.length,
     customFields: recordData.customFields.length,
     docTypes: recordData.docTypes?.length ?? 0,
+    employers: recordData.employers?.length ?? 0,
     activities: recordData.activities.length,
     attachments: attMetas.length,
   };
@@ -573,6 +575,7 @@ export async function parseZipBackup(
     "visaTypes",
     "customFields",
     "docTypes",
+    "employers",
     "activities",
   ] as const;
   for (const key of recordTableKeys) {
@@ -872,6 +875,7 @@ export async function applyZipRestore(
       await upsert(db.visaTypes, d.visaTypes);
       await upsert(db.customFields, d.customFields);
       if (d.docTypes?.length) await upsert(db.docTypes, d.docTypes);
+      if (d.employers?.length) await upsert(db.employers, d.employers);
       if (d.activities?.length) await db.activities.bulkPut(d.activities as never[]);
       if (d.preferences) await db.preferences.put(d.preferences);
 

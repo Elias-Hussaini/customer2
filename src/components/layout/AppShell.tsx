@@ -3,6 +3,7 @@ import { Outlet, useLocation } from "react-router-dom";
 import { AmbientBackground } from "./AmbientBackground";
 import { TopBar } from "./TopBar";
 import { FloatingDock } from "./FloatingDock";
+import { AccountingOrbit } from "./AccountingOrbit";
 import { MoreSheet } from "./MoreSheet";
 import { QuickModals } from "../domain/QuickModals";
 import { GlobalHotkeys } from "./GlobalHotkeys";
@@ -32,6 +33,7 @@ export function AppShell() {
         </div>
       </main>
       <FloatingDock />
+      <AccountingOrbit />
       <MoreSheet />
       <QuickModals />
       <GlobalHotkeys />

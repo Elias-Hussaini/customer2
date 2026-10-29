@@ -3,6 +3,17 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 export type Theme = "light" | "dark";
 const STORAGE_KEY = "customer2-theme";
 
+/* ---------------------------------------------------------------------------
+ * Global theme bridge — lets code OUTSIDE the React tree (the AI agent's
+ * tools, hotkeys, workers…) switch the theme. Dispatches a window event the
+ * ThemeProvider applies. Exported for src/lib/agent tools.
+ * ------------------------------------------------------------------------- */
+export const SET_THEME_EVENT = "customer2:set-theme";
+
+export function setThemeGlobal(theme: Theme): void {
+  window.dispatchEvent(new CustomEvent(SET_THEME_EVENT, { detail: { theme } }));
+}
+
 function readInitialTheme(): Theme {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
@@ -71,6 +82,16 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
     applyThemeSideEffects(theme);
   }, [theme]);
+
+  // Outside callers (AI agent tools) may switch the theme at any time.
+  useEffect(() => {
+    const onSet = (e: Event) => {
+      const t = (e as CustomEvent<{ theme?: unknown }>).detail?.theme;
+      if (t === "light" || t === "dark") setThemeState(t);
+    };
+    window.addEventListener(SET_THEME_EVENT, onSet);
+    return () => window.removeEventListener(SET_THEME_EVENT, onSet);
+  }, []);
 
   const setTheme = (t: Theme) => setThemeState(t);
   const toggle = () => setThemeState((t) => (t === "dark" ? "light" : "dark"));

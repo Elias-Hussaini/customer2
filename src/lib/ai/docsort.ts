@@ -13,6 +13,7 @@
  */
 
 import type { ChatMessage, ContentPart } from "./client";
+import { parseJsonLoose, salvageSortEntries } from "./jsonrepair";
 
 /** A document slot the AI may choose (id + the user's Persian label). */
 export interface DocSlotOption {
@@ -139,9 +140,11 @@ export function sanitizeNewSlotLabel(raw: unknown): string | null {
 }
 
 /**
- * Parse the model reply into one result per image (1..count). Unknown slot
- * ids, broken entries and missing indexes fall back to «سایر» so an image is
- * never silently dropped. Throws a Persian error when the reply is unusable.
+ * Parse the model reply into one result per image (1..count). Tolerant:
+ * repaired JSON first (fences/truncation/smart quotes), then per-image regex
+ * salvage. Unknown slot ids, broken entries and missing indexes fall back to
+ * «سایر» so an image is never silently dropped. Throws a Persian error when
+ * the reply is unusable.
  */
 export function parseDocSortReply(
   text: string,
@@ -151,31 +154,49 @@ export function parseDocSortReply(
   if (count <= 0) return [];
   let parsed: unknown;
   try {
-    parsed = JSON.parse(extractJsonArray(text));
+    parsed = parseJsonLoose(text);
   } catch {
-    throw new Error("پاسخ هوش مصنوعی قابل خواندن نبود (JSON نامعتبر).");
+    parsed = undefined;
   }
   // Tolerate an object wrapper like {"sorts": [...]} or {"results": [...]}.
   if (parsed != null && typeof parsed === "object" && !Array.isArray(parsed)) {
     const obj = parsed as Record<string, unknown>;
-    const arr = (Object.values(obj).find((v) => Array.isArray(v)) ?? []) as unknown[];
-    parsed = arr;
+    const inner = Object.values(obj).find((v) => Array.isArray(v)) ?? null;
+    parsed = inner; // null when the wrapper holds no array → salvage below
   }
-  if (!Array.isArray(parsed)) {
-    throw new Error("پاسخ هوش مصنوعی یک لیست JSON نبود.");
+  let list: unknown[];
+  if (Array.isArray(parsed)) {
+    list = parsed;
+  } else {
+    // Regex salvage: {"index":1,"slot":"passport"} entries out of any reply.
+    const salvaged = salvageSortEntries(text);
+    if (salvaged.length === 0) {
+      throw new Error("پاسخ هوش مصنوعی قابل خواندن نبود (JSON نامعتبر).");
+    }
+    list = salvaged;
   }
 
   const slotById = new Map(slots.map((s) => [s.id, s]));
   const slotByNormLabel = new Map(slots.map((s) => [normalizeLabel(s.label), s]));
   const out = new Map<number, DocSortResult>();
 
-  for (const entry of parsed) {
+  for (const entry of list) {
     if (entry == null || typeof entry !== "object") continue;
     const e = entry as Record<string, unknown>;
     const idx = Number(e.index);
     if (!Number.isInteger(idx) || idx < 1 || idx > count) continue;
     if (out.has(idx)) continue; // first answer per index wins
-    const slotRaw = typeof e.slot === "string" ? e.slot.trim() : "";
+    let slotRaw = typeof e.slot === "string" ? e.slot.trim() : "";
+    // The model sometimes answers with the Persian LABEL instead of the id
+    // («پشت تذکره» instead of "doc-back-tazkira") — map it onto the real slot
+    // instead of dropping the image into «سایر».
+    if (slotRaw && !slotById.has(slotRaw)) {
+      const byLabel = slotByNormLabel.get(normalizeLabel(slotRaw));
+      if (byLabel) slotRaw = byLabel.id;
+    }
+    // Persian equivalents the model may use for the special targets.
+    if (slotRaw === "سایر" || slotRaw === "نامشخص" || slotRaw === "دیگر") slotRaw = "other";
+    if (slotRaw === "عکس" || slotRaw === "عکس پروفایل" || slotRaw === "عکس شخصی") slotRaw = "photo";
     if (slotById.has(slotRaw)) {
       const slot = slotById.get(slotRaw)!;
       out.set(idx, { index: idx, target: { kind: "slot", slotId: slot.id, label: slot.label } });

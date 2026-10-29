@@ -481,6 +481,77 @@
     border-color: rgba(139, 131, 255, 0.35);
     box-shadow: 0 4px 18px -4px rgba(139, 131, 255, 0.45);
   }
+
+  /* Round accounting button — far-left edge of the page (حسابداری). */
+  .acc-orbit {
+    position: fixed;
+    left: max(env(safe-area-inset-left, 0px), 14px);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 7.5rem);
+    z-index: 39;
+  }
+  .acc-orbit-btn {
+    position: relative;
+    width: 3.4rem;
+    height: 3.4rem;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.85);
+    background: rgba(255, 255, 255, 0.72);
+    box-shadow: var(--shadow-dock), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    display: grid;
+    place-items: center;
+    color: var(--color-ink-600);
+    cursor: pointer;
+    transition: transform 0.25s cubic-bezier(0.3, 1.5, 0.5, 1), color 0.18s ease, box-shadow 0.25s ease;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .dark .acc-orbit-btn {
+    background: rgba(24, 26, 44, 0.82);
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 18px 50px -12px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    color: var(--color-ink-300);
+  }
+  .acc-orbit-btn:hover {
+    color: var(--color-brand-600);
+    transform: scale(1.06);
+  }
+  .dark .acc-orbit-btn:hover {
+    color: var(--color-brand-300);
+  }
+  .acc-orbit-btn.active {
+    color: var(--color-brand-600);
+    box-shadow: var(--shadow-dock), inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 0 0 4px rgba(99, 91, 255, 0.16);
+  }
+  .dark .acc-orbit-btn.active {
+    color: var(--color-brand-300);
+    box-shadow: 0 18px 50px -12px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 0 0 4px rgba(139, 131, 255, 0.2);
+  }
+  .acc-orbit-ring {
+    display: none;
+  }
+  .acc-orbit-tip {
+    position: absolute;
+    left: calc(100% + 10px);
+    top: 50%;
+    translate: 0 -50%;
+    white-space: nowrap;
+    border-radius: 999px;
+    background: rgba(17, 19, 26, 0.92);
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 0.28rem 0.66rem;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-4px);
+    transition: opacity 0.18s ease, transform 0.18s ease;
+  }
+  .acc-orbit-btn:hover .acc-orbit-tip,
+  .acc-orbit-btn:focus-visible .acc-orbit-tip {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 /* ---------------------------------------------------------------------------
