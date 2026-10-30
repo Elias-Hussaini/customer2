@@ -29,6 +29,7 @@
     "react-dom": "latest",
     "react-router-dom": "latest",
     "three": "^0.186.1",
+    "tesseract.js": "^6.0.1",
     "xlsx": "latest"
   },
   "devDependencies": {

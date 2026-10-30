@@ -77,16 +77,19 @@ export default defineConfig(({ mode }) => ({
         start_url: "./",
         scope: "./",
         icons: [
-          { src: "icons/icon-192.png", sizes: "192x192", type: "image/png" },
-          { src: "icons/icon-512.png", sizes: "512x512", type: "image/png" },
+          // ?v= cache-buster: browsers snapshot the manifest icon URL at
+          // install time. A NEW url forces Chrome to re-fetch and refresh the
+          // install/home-screen icon instead of showing the stale one.
+          { src: "icons/icon-192.png?v=20261030", sizes: "192x192", type: "image/png" },
+          { src: "icons/icon-512.png?v=20261030", sizes: "512x512", type: "image/png" },
           {
-            src: "icons/icon-maskable-192.png",
+            src: "icons/icon-maskable-192.png?v=20261030",
             sizes: "192x192",
             type: "image/png",
             purpose: "maskable",
           },
           {
-            src: "icons/icon-maskable-512.png",
+            src: "icons/icon-maskable-512.png?v=20261030",
             sizes: "512x512",
             type: "image/png",
             purpose: "maskable",
@@ -94,8 +97,11 @@ export default defineConfig(({ mode }) => ({
         ],
       },
       workbox: {
-        globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2,webmanifest}"],
+        // traineddata = the local OCR models; mjs = the patched pdf worker
+        // + module chunks (offline doc classification & PDF conversion)
+        globPatterns: ["**/*.{js,mjs,css,html,ico,png,svg,woff2,webmanifest,traineddata}"],
         navigateFallback: "index.html",
+        maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
       },
     }),
   ],

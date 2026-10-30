@@ -38,8 +38,10 @@ export {
   parseDocSortReply,
   extractJsonArray,
   sanitizeNewSlotLabel,
+  fuzzyMatchSlot,
   resolveActions,
   buildChunks,
+  buildFilteredChunks,
   chunkLocalGroups,
   DOC_SORT_CHUNK,
   type DocSlotOption,
@@ -48,7 +50,28 @@ export {
   type SortPiece,
   type SortOriginal,
   type SortAction,
+  type ResultLookup,
 } from "./docsort";
+export {
+  checkDigit,
+  cleanMrzLine,
+  findMrzCandidates,
+  detectMrz,
+  classifyByFilename,
+  classifyByText,
+  scoreTazkiraSide,
+  slotKind,
+  findSlotForKind,
+  mergeVerdicts,
+  type MrzDetection,
+  type MrzDocKind,
+  type SlotKind,
+  type LocalVerdict,
+  type LocalBasis,
+  type TazkiraSideScore,
+} from "./localsort";
+export { pdfTextLayer, type PdfTextResult } from "./pdftext";
+export { ocrMrzZone, ocrFullImage, ocrFullImageFas, resetOcrWorkers, preprocessCanvas } from "./ocrlocal";
 export {
   splitCombinedImage,
   isBlankImage,

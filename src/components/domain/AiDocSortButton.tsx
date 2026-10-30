@@ -4,21 +4,27 @@
  *   1. PDFs are rendered to page images locally (pdf.js); blank pages are
  *      dropped; photos are normalized.
  *   2. Combined scans (e.g. front+back of a tazkira on one page) are cut
- *      apart locally by gutter detection — but NEVER through content: a
- *      "blank" band whose edges touch ink sits inside ONE document and is
- *      rejected (fixes the halved پشت-تذکره bug).
- *   3. Every image is sent to the user's Cloudflare AI worker with the
- *      customer's CURRENT document slots — the model answers where each
- *      image belongs.
- *   4. Pieces of one page that all land in the same destination are re-joined
- *      (the original whole page is filed once) — resolveActions.
- *   5. Images are saved to their destinations and a short summary is shown.
+ *      apart locally by gutter detection — but NEVER through content.
+ *   3. LOCAL DETERMINISTIC PASS (the pattern algorithm — runs before any
+ *      cloud call): filename rules, the PDF text layer (MRZ + keywords),
+ *      and a local OCR MRZ hunt (tesseract, eng). A check-digit-valid MRZ
+ *      is mathematical proof of a passport/e-ID page — no model opinion
+ *      can override it. The user's slots are matched by their own labels.
+ *   4. Only pieces WITHOUT a certain local verdict are sent to the user's
+ *      Cloudflare AI worker (chunks) — quota is never spent on documents
+ *      the local algorithm already identified.
+ *   5. MERGE: certain local verdicts beat any cloud answer; likely local
+ *      verdicts beat only «سایر». Pieces still headed for «سایر» get one
+ *      local fas-OCR rescue (tazkira side labels) before giving up.
+ *   6. Pieces of one page that all land in the same destination are
+ *      re-joined (the original whole page is filed once) — resolveActions.
+ *   7. Images are saved and a per-file summary shows HOW each destination
+ *      was decided («الگوی MRZ»، «نام فایل»، «هوش مصنوعی»…).
  *
  * The pipeline is RESUMABLE: when any step fails (CORS, network, invalid
- * JSON, quota…), the error shows a «تلاش دوباره» button that continues
- * EXACTLY where it stopped — converted pages and already-classified chunks
- * are never redone, so no quota is wasted. A «لغو» button stops a running
- * job at any time.
+ * JSON, quota…), «تلاش دوباره» continues EXACTLY where it stopped —
+ * converted pages, local verdicts and already-classified chunks are never
+ * redone. «لغو» stops a running job at any time.
  */
 
 import { useRef, useState } from "react";
@@ -37,19 +43,30 @@ import {
   AiAllWorkersFailedError,
   ACCEPTED_MIME,
   aiChat,
-  buildChunks,
+  buildFilteredChunks,
   buildDocSortMessages,
   chunkLocalGroups,
+  classifyByFilename,
+  classifyByText,
+  detectMrz,
+  findSlotForKind,
   imageFileToJpeg,
   isBlankImage,
+  mergeVerdicts,
+  ocrFullImage,
+  ocrFullImageFas,
+  ocrMrzZone,
   parseDocSortReply,
+  pdfTextLayer,
   pdfToJpegs,
   resolveActions,
+  scoreTazkiraSide,
   splitCombinedImage,
   useAiWorkers,
   validateAiFile,
   type DocSlotOption,
   type DocSortResult,
+  type LocalVerdict,
   type SortAction,
   type SortOriginal,
   type SortPiece,
@@ -66,16 +83,35 @@ import { toPersianDigits } from "../../utils/jalali";
 
 /** Hard cap on images per run (after splitting). */
 const MAX_IMAGES = 18;
+/** Hard cap on pieces the local OCR pass touches (bounding the wait). */
+const MAX_OCR_PIECES = 10;
+
+/** How a destination was decided — shown next to every filed image. */
+const BASIS_LABEL: Record<string, string> = {
+  filename: "نام فایل",
+  pdftext: "متن PDF",
+  mrz: "الگوی MRZ",
+  ocr: "الگوی OCR",
+  ai: "هوش مصنوعی",
+  unknown: "نامشخص",
+};
 
 /** A run that can be paused by an error and continued with «تلاش دوباره». */
 interface SortJob {
   files: File[];
   expanded: SortPiece[];
   originals: SortOriginal[];
+  /** PDF text layer per groupId ("" when the page was a scan). */
+  textByGroup: Map<number, string>;
   docTypes: DocType[];
   slots: DocSlotOption[];
+  /** Local deterministic verdicts per piece index (null = unresolved). */
+  local: (LocalVerdict | null)[];
+  /** True once the local pass (filename + pdftext + OCR) has run. */
+  localDone: boolean;
   chunks: number[][];
-  results: DocSortResult[];
+  /** Per-piece cloud answers keyed by piece index. */
+  results: Map<number, DocSortResult>;
   /** Next chunk index to classify (== chunks.length when all are done). */
   nextChunk: number;
   /** Computed once all chunks are classified. */
@@ -87,6 +123,8 @@ interface SortJob {
   truncated: boolean;
   blankSkipped: number;
   skippedPhoto: boolean;
+  /** Piece indexes the fas-rescue already tried (never retried). */
+  rescueTried: Set<number>;
 }
 
 /** Errors that retrying the same files will never fix (bad/empty input). */
@@ -129,6 +167,7 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
   const prepareJob = async (files: File[]): Promise<SortJob> => {
     const pieces: SortPiece[] = [];
     const originals: SortOriginal[] = [];
+    const textByGroup = new Map<number, string>();
     let truncated = false;
     let blankSkipped = 0;
     for (let i = 0; i < files.length; i++) {
@@ -138,9 +177,18 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
         const pages = await pdfToJpegs(file, (p) =>
           stage(
             `تبدیل PDF — صفحهٔ ${p.page.toLocaleString("fa-IR")} از ${p.totalPages.toLocaleString("fa-IR")}`,
-            4 + Math.round(((i + p.page / p.totalPages) / files.length) * 30),
+            4 + Math.round(((i + p.page / p.totalPages) / files.length) * 24),
           ),
         );
+        // The text layer is the free deterministic signal — read it in the
+        // same pass (scanned PDFs simply return "").
+        let pageTexts: string[] = [];
+        try {
+          const res = await pdfTextLayer(file);
+          pageTexts = res.pages;
+        } catch {
+          pageTexts = []; // unreadable layer → OCR path still available
+        }
         const base = file.name.replace(/\.pdf$/i, "");
         for (let n = 0; n < pages.length; n++) {
           if (await isBlankImage(pages[n])) {
@@ -154,13 +202,15 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
           const origin = `${base || "صفحه"}-ص${n + 1}.jpg`;
           originals.push({ dataUrl: pages[n], origin });
           pieces.push({ dataUrl: pages[n], origin, groupId: originals.length - 1 });
+          const text = pageTexts[n] ?? "";
+          if (text.trim()) textByGroup.set(originals.length - 1, text);
         }
       } else {
         if (pieces.length >= MAX_IMAGES) {
           truncated = true;
           continue;
         }
-        stage("آماده‌سازی فایل‌ها…", 4 + Math.round(((i + 1) / files.length) * 30));
+        stage("آماده‌سازی فایل‌ها…", 4 + Math.round(((i + 1) / files.length) * 24));
         const img = await imageFileToJpeg(file);
         const origin = file.name || "تصویر.jpg";
         originals.push({ dataUrl: img, origin });
@@ -176,7 +226,7 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
     }
 
     // Cut combined scans apart (front+back on one page) — never through ink.
-    stage("بررسی صفحات ترکیبی…", 36);
+    stage("بررسی صفحات ترکیبی…", 30);
     const expanded: SortPiece[] = [];
     for (const piece of pieces) {
       const report = await splitCombinedImage(piece.dataUrl);
@@ -205,14 +255,18 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
     const docTypes = (await getDocTypesForCustomer(customerId))
       .filter((d) => !d.archivedAt)
       .sort((a, b) => a.order - b.order);
+    const slots = docTypes.map((d) => ({ id: d.id, label: d.label }));
     return {
       files,
       expanded,
       originals,
+      textByGroup,
       docTypes,
-      slots: docTypes.map((d) => ({ id: d.id, label: d.label })),
-      chunks: buildChunks(expanded),
-      results: [],
+      slots,
+      local: new Array(expanded.length).fill(null),
+      localDone: false,
+      chunks: [],
+      results: new Map(),
       nextChunk: 0,
       actions: null,
       newIdByLabel: new Map(),
@@ -221,12 +275,143 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
       truncated,
       blankSkipped,
       skippedPhoto: false,
+      rescueTried: new Set(),
     };
   };
 
-  /* --------------------------- 3+4) classify & save ------------------------- */
+  /* --------------------------- 3) local pattern pass ------------------------ */
+
+  /**
+   * The deterministic algorithm: filenames, PDF text layers and a local
+   * OCR MRZ hunt. Never throws — an OCR/CDN failure just leaves pieces
+   * unresolved so the cloud AI handles them.
+   */
+  const runLocalPass = async (job: SortJob) => {
+    if (job.localDone) return;
+    // (a) filename + (b) PDF text layer — instant, zero network.
+    for (let i = 0; i < job.expanded.length; i++) {
+      const piece = job.expanded[i];
+      let verdict = classifyByFilename(piece.origin, job.slots);
+      if (!verdict) {
+        const text = job.textByGroup.get(piece.groupId);
+        if (text) verdict = classifyByText(text, job.slots, "pdftext");
+      }
+      job.local[i] = verdict;
+    }
+    // (c) local OCR MRZ hunt — only for still-unresolved pieces that did
+    // NOT come from a PDF with a text layer (their text was already read).
+    const ocrCandidates = job.expanded
+      .map((_, i) => i)
+      .filter(
+        (i) =>
+          job.local[i] == null &&
+          !job.textByGroup.has(job.expanded[i].groupId),
+      )
+      .slice(0, MAX_OCR_PIECES);
+    if (ocrCandidates.length > 0) {
+      stage("خواندن الگوی MRZ به‌صورت محلی…", 34);
+      for (const i of ocrCandidates) {
+        if (cancelledRef.current) return;
+        try {
+          stage(
+            `تشخیص محلی — تصویر ${toPersianDigits(i + 1)} از ${toPersianDigits(job.expanded.length)}…`,
+            34,
+          );
+          const zone = await ocrMrzZone(job.expanded[i].dataUrl);
+          const mrz = detectMrz(zone.text);
+          if (mrz && (mrz.certain || mrz.passed >= 3)) {
+            const kind = mrz.kind === "passport" ? "passport" : "tazkiraFront";
+            const slot = findSlotForKind(job.slots, kind);
+            if (slot) {
+              job.local[i] = {
+                target: { kind: "slot", slotId: slot.id, label: slot.label },
+                basis: "mrz",
+                certain: true,
+              };
+              continue;
+            }
+          }
+          // No MRZ in the bottom band → one full-image English pass for
+          // PASSPORT headers (cheap extra certainty for cover pages etc.).
+          const full = await ocrFullImage(job.expanded[i].dataUrl);
+          const v = classifyByText(full.text, job.slots, "ocr");
+          if (v) job.local[i] = v;
+        } catch {
+          // OCR unavailable (offline / CDN) — the cloud AI still covers it.
+        }
+      }
+    }
+    job.localDone = true;
+  };
+
+  /* --------------------- 5b) local rescue for «سایر» pieces ----------------- */
+
+  /**
+   * Pieces the cloud left as «سایر» get one local fas-OCR attempt: printed
+   * تذکره labels decide the side. Strict (≥2 distinct labels, none on the
+   * other side) — a wrong override is worse than سایر.
+   */
+  const rescueWithOcr = async (job: SortJob, pieceIdx: number): Promise<void> => {
+    if (job.rescueTried.has(pieceIdx)) return;
+    job.rescueTried.add(pieceIdx);
+    try {
+      const full = await ocrFullImage(job.expanded[pieceIdx].dataUrl);
+      const text = full.text;
+      // English MRZ first (cheap repeat — maybe the band was missed).
+      const mrz = detectMrz(text);
+      if (mrz && (mrz.certain || mrz.passed >= 3)) {
+        const kind = mrz.kind === "passport" ? "passport" : "tazkiraFront";
+        const slot = findSlotForKind(job.slots, kind);
+        if (slot) {
+          job.local[pieceIdx] = {
+            target: { kind: "slot", slotId: slot.id, label: slot.label },
+            basis: "mrz",
+            certain: true,
+          };
+          return;
+        }
+      }
+      // تذکره side labels — Persian OCR (fas worker). English OCR cannot
+      // read Dari labels, so this pass is what actually makes the rescue
+      // work for paper تذکره scans the cloud filed as «سایر».
+      const fas = await ocrFullImageFas(job.expanded[pieceIdx].dataUrl);
+      const side = scoreTazkiraSide(fas.text);
+      const kind = side.front >= 2 && side.front > side.back ? "tazkiraFront" : side.back >= 2 && side.back > side.front ? "tazkiraBack" : null;
+      if (kind) {
+        const slot = findSlotForKind(job.slots, kind);
+        if (slot) {
+          job.local[pieceIdx] = {
+            target: { kind: "slot", slotId: slot.id, label: slot.label },
+            basis: "ocr",
+            certain: false,
+          };
+        }
+      }
+    } catch {
+      /* rescue is best-effort */
+    }
+  };
+
+  /* --------------------------- 3-6) classify & save ------------------------- */
 
   const runJob = async (job: SortJob) => {
+    /* ---- local deterministic pass (resume-safe) ---- */
+    if (!job.localDone) {
+      await runLocalPass(job);
+      if (cancelledRef.current) return;
+    }
+
+    /* ---- build AI chunks from UNRESOLVED pieces only ----
+       (no worker configured → the local algorithm handles everything and
+       the cloud pass is skipped entirely — the flow never blocks) */
+    if (job.chunks.length === 0 && job.nextChunk === 0) {
+      const candidates = job.expanded
+        .map((_, i) => i)
+        .filter((i) => !(job.local[i]?.certain ?? false));
+      job.chunks = hasWorker ? buildFilteredChunks(job.expanded, candidates) : [];
+      job.nextChunk = 0;
+    }
+
     /* ---- classify in chunks (resume: skip already-classified chunks) ---- */
     for (let c = job.nextChunk; c < job.chunks.length; c++) {
       if (cancelledRef.current) return;
@@ -243,19 +428,54 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
             total > 1 && index > 0
               ? `حساب قبلی خطا داد — تلاش با «${worker.label}»…`
               : `ارسال به هوش مصنوعی (${worker.label})…`,
-            40 + Math.round(((c + 0.6) / job.chunks.length) * 45),
+            42 + Math.round(((c + 0.6) / job.chunks.length) * 42),
           ),
       });
       if (cancelledRef.current) return;
       const part = parseDocSortReply(text, job.slots, slice.length);
-      job.results.push(...part.map((r) => ({ ...r, index: r.index + chunk[0] - 1 })));
+      for (const r of part) {
+        const pieceIdx = chunk[r.index - 1];
+        if (pieceIdx !== undefined) {
+          job.results.set(pieceIdx, { ...r, index: pieceIdx, basis: "ai" });
+        }
+      }
       job.nextChunk = c + 1;
+    }
+
+    /* ---- merge local + cloud; rescue pieces still headed to «سایر» ---- */
+    const merged = new Map<number, DocSortResult>();
+    const needRescue: number[] = [];
+    for (let i = 0; i < job.expanded.length; i++) {
+      const cloud = job.results.get(i)?.target ?? null;
+      const { target, basis } = mergeVerdicts(job.local[i], cloud);
+      if (target) {
+        merged.set(i, { index: i, target, basis });
+        // ANY piece headed to «سایر» — cloud verdict or none at all — gets
+        // the local fas-OCR rescue (a piece with no verdict must not
+        // silently vanish from the outcome).
+        if (target.kind === "other") needRescue.push(i);
+      } else {
+        merged.set(i, { index: i, target: { kind: "other" }, basis: "unknown" });
+        needRescue.push(i);
+      }
+    }
+    if (needRescue.length > 0) {
+      stage("بازبینی محلی فایل‌های نامشخص…", 86);
+      for (const i of needRescue) {
+        if (cancelledRef.current) return;
+        await rescueWithOcr(job, i);
+      }
+      for (const i of needRescue) {
+        const cloud = job.results.get(i)?.target ?? null;
+        const { target, basis } = mergeVerdicts(job.local[i], cloud);
+        if (target) merged.set(i, { index: i, target, basis });
+      }
     }
 
     /* ---- collapse same-destination cut groups, create new slots ---- */
     if (!job.actions) {
       stage("ذخیره مدارک…", 90);
-      const actions = resolveActions(job.expanded, job.originals, job.results);
+      const actions = resolveActions(job.expanded, job.originals, merged);
       for (const a of actions) {
         if (a.target.kind !== "new") continue;
         const key = a.target.label;
@@ -338,14 +558,6 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
 
   const start = async (files: File[]) => {
     if (files.length === 0) return;
-    if (!hasWorker) {
-      setRun({
-        t: "error",
-        message: "هوش مصنوعی هنوز تنظیم نشده — اول ورکر Cloudflare را در تنظیمات اضافه کنید.",
-        needsSetup: true,
-      });
-      return;
-    }
     for (const f of files) {
       const err = validateAiFile(f);
       if (err) {
@@ -384,7 +596,7 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
       (job.nextChunk < job.chunks.length || !job.actions || job.appliedIdx < job.actions.length);
     if (job && resumable) {
       cancelledRef.current = false;
-      setRun({ t: "busy", label: "ادامه از همان مرحله…", percent: 40 });
+      setRun({ t: "busy", label: "ادامه از همان مرحله…", percent: 42 });
       try {
         await runJob(job);
       } catch (e) {
@@ -425,33 +637,23 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
         }}
       />
 
-      {hasWorker ? (
-        <button
-          type="button"
-          className={`group inline-flex items-center gap-1.5 rounded-full bg-gradient-to-l from-[#6366f1] via-[#8b5cf6] to-[#d946ef] px-3.5 py-1.5 text-[12.5px] font-bold text-white shadow-lg shadow-[#6366f1]/35 transition-all hover:shadow-[#6366f1]/55 hover:brightness-110 active:scale-95 disabled:cursor-wait disabled:opacity-70 ${
-            aiDrop.hovering ? "scale-105 ring-2 ring-white/80 ring-offset-2 ring-offset-transparent brightness-110" : ""
-          }`}
-          onClick={pick}
-          disabled={busy}
-          title="انتخاب فایل — یا فایل‌ها را همین‌جا رها کنید"
-          {...aiDrop.dropHandlers}
-        >
-          {busy ? (
-            <Loader2 size={15} className="animate-spin" />
-          ) : (
-            <Sparkles size={15} className="transition-transform duration-300 group-hover:rotate-12" />
-          )}
-          {busy ? "در حال افزودن…" : "افزودن با هوش مصنوعی"}
-        </button>
-      ) : (
-        <Link
-          to="/settings?tab=ai"
-          className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-l from-[#6366f1] via-[#8b5cf6] to-[#d946ef] px-3.5 py-1.5 text-[12.5px] font-bold text-white shadow-lg shadow-[#6366f1]/35 transition-all hover:shadow-[#6366f1]/55 hover:brightness-110 active:scale-95"
-        >
-          <Settings2 size={15} />
-          فعال‌سازی هوش مصنوعی
-        </Link>
-      )}
+      <button
+        type="button"
+        className={`group inline-flex items-center gap-1.5 rounded-full bg-gradient-to-l from-[#6366f1] via-[#8b5cf6] to-[#d946ef] px-3.5 py-1.5 text-[12.5px] font-bold text-white shadow-lg shadow-[#6366f1]/35 transition-all hover:shadow-[#6366f1]/55 hover:brightness-110 active:scale-95 disabled:cursor-wait disabled:opacity-70 ${
+          aiDrop.hovering ? "scale-105 ring-2 ring-white/80 ring-offset-2 ring-offset-transparent brightness-110" : ""
+        }`}
+        onClick={pick}
+        disabled={busy}
+        title={hasWorker ? "انتخاب فایل — یا فایل‌ها را همین‌جا رها کنید" : "الگوریتم محلی (بدون اکانت هوش مصنوعی) — فایل‌های شناسایی‌نشده به «سایر مدارک» می‌روند"}
+        {...aiDrop.dropHandlers}
+      >
+        {busy ? (
+          <Loader2 size={15} className="animate-spin" />
+        ) : (
+          <Sparkles size={15} className="transition-transform duration-300 group-hover:rotate-12" />
+        )}
+        {busy ? "در حال افزودن…" : hasWorker ? "افزودن با هوش مصنوعی" : "افزودن هوشمند (محلی)"}
+      </button>
 
       {/* ---- progress (with cancel) ---- */}
       <Modal
@@ -478,6 +680,11 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
               style={{ width: `${run.t === "busy" ? run.percent : 0}%` }}
             />
           </div>
+          <p className="text-[11px] leading-5 text-ink-500 dark:text-ink-400">
+            {hasWorker
+              ? "الگوریتم محلی (MRZ و متن) اول خودش تشخیص می‌دهد؛ هوش مصنوعی فقط برای بقیه صدا می‌شود."
+              : "بدون اکانت هوش مصنوعی: الگوریتم محلی (MRZ و متن) خودش تشخیص می‌دهد؛ فایل‌های شناسایی‌نشده به «سایر مدارک» می‌روند."}
+          </p>
         </div>
       </Modal>
 
@@ -527,6 +734,16 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
                   />
                   <span className="min-w-0 flex-1 text-[12px] leading-5">
                     <b>{targetLabel(a, run.outcome.newSlots)}</b>
+                  </span>
+                  <span
+                    className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                      a.basis && a.basis !== "ai" && a.basis !== "unknown"
+                        ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                        : "bg-ink-900/6 text-ink-500 dark:bg-white/8 dark:text-ink-400"
+                    }`}
+                    title="این مقصد چطور تشخیص داده شد"
+                  >
+                    {BASIS_LABEL[a.basis ?? "unknown"] ?? BASIS_LABEL.unknown}
                   </span>
                   <CheckCircle2 size={15} className="shrink-0 text-emerald-500" />
                 </li>

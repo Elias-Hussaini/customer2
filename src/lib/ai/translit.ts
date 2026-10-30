@@ -5,8 +5,9 @@
  * Persian script. When a reply still comes back in Latin letters (weak
  * models reading the MRZ), the name is converted here: a dictionary of
  * frequent Afghan/Persian names first, then a phonetic longest-match
- * transliterator for everything else. Best-effort by design — the operator
- * can always fix the field afterwards.
+ * transliterator for everything else. MIXED-script replies («احمد AHMADI»)
+ * are converted token by token — only the Latin tokens change. Best-effort
+ * by design — the operator can always fix the field afterwards.
  */
 
 const PERSIAN_RE = /[\u0600-\u06FF]/;
@@ -129,6 +130,61 @@ const NAMES: Record<string, string> = {
   MOHABBAT: "محبت", NAJIBZADA: "نجیب‌زاده", PAIMAN: "پیمان",
   RAMAZANI: "رمضانی", SANA: "ثنا", TAWHIDI: "توحیدی",
   WISA: "ویسا", ZALMAY: "زلمی",
+  // ---- additional frequent Afghan names (dictionary expansion) ----------
+  ATIQULLAH: "عتیق‌الله", BARYALAI: "بریالی", WEESAL: "وصال",
+  MUSAFAR: "مسافر", SHAFIQULLAH: "شفیق‌الله", ZARGHUN: "زرغون",
+  HEDAYATULLAH: "هدایت‌الله", SULTANAHMAD: "سلطان‌احمد",
+  GHULAMHAIDAR: "غلام‌حیدر", GHULAMRABANI: "غلام‌ربانی",
+  GHULAMHAIDER: "غلام‌حیدر", NAIMULLAH: "نعیم‌الله",
+  HAFIZULLAH: "حفیظ‌الله", AZIZULLAH: "عزیز‌الله", FAZLRAHMAN: "فضل‌رحمان",
+  FAZLURRAHMAN: "فضل‌رحمان", ABDULBAQI: "عبدالباقی",
+  ABDULQADIR: "عبدالقادر", ABDOLQADER: "عبدالقادر", ABDULJALIL: "عبدالجلیل",
+  ABDULLATIF: "عبداللطیف", ABDULMAJID: "عبدالمجید", ABDULNAFI: "عبدالنافی",
+  ABDULRAUF: "عبدالرؤوف", ABDULRASHID: "عبدالرشید", ABDULSATAR: "عبدالستار",
+  ABDULWALI: "عبدالولی", ABDULZAHIR: "عبدالظاهر", ABDULHAKIM: "عبدالحکیم",
+  MOHAMMADALI: "محمدعلی", MOHAMMADASIF: "محمدآصف", MOHAMMADYOUSUF: "محمدیوسف",
+  MOHAMMADZAHIR: "محمدظاهر", MOHAMMADNASIR: "محمدناصر",
+  SAYEDALI: "سیدعلی", SAYEDULLAH: "سیدالله", MIRZAALI: "میرزاعلی",
+  NOORALI: "نورعلی", NOORAHMAD: "نوراحمد", NOORMOHAMMAD: "نورمحمد",
+  RAHIMDAAD: "رحیم‌داد", GULMOHAMMAD: "گل‌محمد", GULHASSAN: "گل‌حسن",
+  DADMOHAMMAD: "دادمحمد", PIRMOHAMMAD: "پیرمحمد", SHAHMOHAMMAD: "شاه‌محمد",
+  HAJI: "حاجی", MAWLAWI: "ملاوی", PADSHAH: "پادشاه", SHAHZADA: "شاه‌زاده",
+  KHODAIDAD: "خداداد", KHODAINAZAR: "خدانظر", YARMOHAMMAD: "یارمحمد",
+  JANGIR: "جنگیر", SANGLAR: "سنگلر", JANMOHAMMAD: "جان‌محمد",
+  ABDULJAN: "عبدالجان", TOORIALAI: "توریالی", SHAPOOR: "شاپور",
+  FARIDOON: "فریدون", SIYAR: "سیار", HAMEED: "حمید", HAMED: "حامد",
+  OBAID: "عبید", SANAULLAH: "ثناالله", WASIL: "واصیل", MAJID: "مجید",
+  WALIULLAH: "ولی‌الله", NASIRAHMAD: "ناصراحمد", AZIZAHMAD: "عزیزاحمد",
+  ALIHAIDER: "علی‌حیدر", QUDRAT: "قدرت", MATHULLAH: "متیع‌الله",
+  MATI: "متیع", RAFIULLAH: "رفیع‌الله", SARAJULLAH: "سراج‌الله",
+  ZARWALI: "زارولی", GULBADDIN: "گل‌بدین", SADRUDDIN: "صدرالدین",
+  MOHIB: "محب", WAHIDGUL: "وحیدگل", AMANULLAH: "امان‌الله", AMAN: "امان",
+  AMANUDIN: "امان‌الدین", ZIAULLAH: "ضیاالله", NASRUDDIN: "نصرالدین",
+  NASIRUDDIN: "ناصرالدین", KAMALUDDIN: "کمال‌الدین", ABDULAHAD: "عبدالاحد",
+  ABDULAMIR: "عبدالامیر", MAHFUZ: "محفوظ", RAFIQULLAH: "رفیق‌الله",
+  AZIZRAHMAN: "عزیزرحمان", ALMADAD: "المداد", MIRDAD: "میرداد",
+  DADNOR: "دادنور", NORDAD: "نورداد", SHAHI: "شاهی", SHUJA: "شجاع",
+  SHUJAH: "شجاع", SHAHNAWAZ: "شاه‌نواز", MUJEEB: "مجیب", MUJIB: "مجیب",
+  HABIBULLAH: "حبیب‌الله", HABIBRAHMAN: "حبیب‌رحمان", TAWAB: "توب",
+  MAKSUD: "مقصود", MAQSOOD: "مقصود", MAQSUD: "مقصود",
+  SULTANMURAD: "سلطان‌مراد", MURADALI: "مرادعلی", DILMUHAMMAD: "دل‌محمد",
+  SULTANFAIZ: "سلطان‌فیض", FAIZMOHAMMAD: "فیض‌محمد",
+  ENAYATULLAH: "عنایت‌الله", INAYATULLAH: "عنایت‌الله",
+  IHSANULLAH: "احسان‌الله", ZABIT: "ثابت", ROZI: "روزی",
+  ROZMOHAMMAD: "روزمحمد", BIBIHAIRAT: "بی‌بی‌حیرت", SARWAR: "سرو",
+  MAQSOODZAI: "مقصودزایی", HUSNA: "حسنا",
+  HUSNARA: "حسن‌آرا", RESHAD: "رشاد",
+  SHAHKARIM: "شاه‌کریم", DILNAWAZ: "دل‌نواز", DILBAR: "دلبر",
+  MUHIBULLAH: "محب‌الله", SIBGHATULLAH: "صبغة‌الله", ROYEA: "رویا",
+  ROYA: "رویا", MAHBOOBA: "محبوبه", MAHBOOBEH: "محبوبه",
+  FARZANA_S: "فرزانه", ZARGHOONA_S: "زرغونه", LAILUMA: "لېلومه",
+  NASEEMA: "نسیمه", BASIRA: "بصیره", MASOOMA: "معصومه",
+  MASUMA: "معصومه", RAHIMA: "رحیمه", RAHIMEH: "رحیمه",
+  JAMILBEGUM: "جمیل‌بی‌گم", ZARLAKHT: "زرلخت", PALWASHA: "پلوشه",
+  FARIDA: "فریده", FARIDEH: "فریده", SHAHISTA: "شاهسته",
+  SHAHISTAH: "شاهسته", BASHIRA: "بشیره",
+  MUQADASA: "مقدسه", HAFIZA: "حافظه",
+  ALEMZAI: "علمزایی", DILSOZ: "دلسوز", SAFIULLAH: "صفی‌الله",
 };
 
 /** Prefix that glues to the following word: ABDUL RAHMAN → عبدالرحمن. */
@@ -233,7 +289,9 @@ function transliterateToken(token: string): string {
 /**
  * Convert a Latin-script person name to Persian. Multi-word names are
  * transliterated word by word; ABDUL-style prefixes glue to the next word.
- * Strings that already contain Persian letters are returned untouched.
+ * MIXED-script strings («احمد AHMADI») are converted TOKEN BY TOKEN — only
+ * the Latin tokens change, Persian tokens pass through untouched. Strings
+ * with no Latin letters at all are returned as-is.
  */
 export function latinToPersianName(input: string): string {
   const cleaned = input
@@ -242,27 +300,37 @@ export function latinToPersianName(input: string): string {
     .replace(/\s+/g, " ")
     .trim();
   if (!cleaned) return input.trim();
-  if (!isLatinName(cleaned)) return cleaned;
+  if (!LATIN_RE.test(cleaned)) return cleaned; // already fully Persian
 
-  // Whole-phrase dictionary first (joined spellings).
-  const phrase = PHRASES[cleaned.toUpperCase()];
-  if (phrase) return phrase;
+  // Whole-phrase dictionary first (joined spellings, all-Latin input).
+  if (isLatinName(cleaned)) {
+    const phrase = PHRASES[cleaned.toUpperCase()];
+    if (phrase) return phrase;
+  }
 
   const words = cleaned.split(/[\s-]+/).filter(Boolean);
   const parts: string[] = [];
   let i = 0;
   while (i < words.length) {
-    const up = words[i].toUpperCase();
+    const w = words[i];
+    if (!isLatinName(w)) {
+      // Mixed-script token («احمد») — keep exactly as written.
+      parts.push(w);
+      i += 1;
+      continue;
+    }
+    const up = w.toUpperCase();
     const joiner = JOIN_PREFIXES[up];
-    if (joiner && i + 1 < words.length && (up === "ABDUL" || up === "ABDOL" || up === "ABD")) {
+    const nextIsLatin = i + 1 < words.length && isLatinName(words[i + 1]);
+    if (joiner && nextIsLatin && (up === "ABDUL" || up === "ABDOL" || up === "ABD")) {
       parts.push(joiner + transliterateToken(words[i + 1]));
       i += 2;
-    } else if (joiner && i + 1 < words.length) {
+    } else if (joiner && nextIsLatin) {
       // GUL MOHAMMAD → گل‌محمد style, joined with ZWNJ
       parts.push(joiner + "‌" + transliterateToken(words[i + 1]));
       i += 2;
     } else {
-      parts.push(transliterateToken(words[i]));
+      parts.push(transliterateToken(w));
       i += 1;
     }
   }

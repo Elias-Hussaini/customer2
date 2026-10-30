@@ -335,6 +335,21 @@ describe("Latin → Persian name transliteration (local fallback)", () => {
     expect(latinToPersianName("AHMADI<<ZAHRA")).toBe("احمدی زهرا");
   });
 
+  it("MIXED-script replies convert token by token (only Latin tokens change)", () => {
+    // Weak models answer like «احمد AHMADI» — the Persian half must stay
+    // exactly as written, the Latin half must land in Persian script.
+    expect(latinToPersianName("احمد AHMADI")).toBe("احمد احمدی");
+    expect(latinToPersianName("Zahra موسوی")).toBe("زهرا موسوی");
+    expect(latinToPersianName("عبدالرحمان SULTAN")).toBe("عبدالرحمان سلطان");
+  });
+
+  it("expanded dictionary entries resolve (no duplicates regress)", () => {
+    expect(latinToPersianName("GULHASSAN")).toBe("گل‌حسن");
+    expect(latinToPersianName("BARYALAI")).toBe("بریالی");
+    expect(latinToPersianName("ZARGHUNA")).toBe("زرغونه");
+    expect(latinToPersianName("NOORAHMAD")).toBe("نوراحمد");
+  });
+
   it("parseExtractionReply converts Latin names to Persian", () => {
     const payload = parseExtractionReply(
       JSON.stringify({
@@ -355,5 +370,12 @@ describe("Latin → Persian name transliteration (local fallback)", () => {
     expect(payload.first_name).toBe("زهرا");
     expect(payload.last_name).toBe("موسوی");
     expect(payload.passport_number).toBe("PA1234567");
+  });
+
+  it("parseExtractionReply converts MIXED-script names token by token", () => {
+    const payload = parseExtractionReply(
+      JSON.stringify({ first_name: "احمد AHMADI", passport_number: null }),
+    );
+    expect(payload.first_name).toBe("احمد احمدی");
   });
 });

@@ -7,14 +7,17 @@
  */
 
 import { isBlankImage } from "./split";
+import "./mappolyfill";
 
 let pdfjsLib: typeof import("pdfjs-dist") | null = null;
 
 async function loadPdfjs() {
   if (pdfjsLib) return pdfjsLib;
   const lib = await import("pdfjs-dist");
-  const workerUrl = (await import("pdfjs-dist/build/pdf.worker.min.mjs?url")).default;
-  lib.GlobalWorkerOptions.workerSrc = workerUrl;
+  // PATCHED worker (getOrInsertComputed polyfill prepended — pdfjs 5.7.284
+  // calls a Stage-3 API no browser ships yet). Regenerate with
+  // scripts/gen-pdf-worker.mjs when pdfjs-dist is upgraded.
+  lib.GlobalWorkerOptions.workerSrc = `${import.meta.env.BASE_URL}pdf.worker.patched.mjs`;
   pdfjsLib = lib;
   return lib;
 }

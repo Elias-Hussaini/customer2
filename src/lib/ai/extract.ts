@@ -11,7 +11,9 @@
 import { extractJsonObjectLoose, salvageKeyValuePairs } from "./jsonrepair";
 import type { ChatMessage, ContentPart } from "./client";
 import { CORE_FIELD_KEYS, type ExtractionPayload } from "./types";
-import { isLatinName, latinToPersianName } from "./translit";
+import { latinToPersianName } from "./translit";
+
+const HAS_LATIN = /[A-Za-z]/;
 
 const CORE_SCHEMA_JSON = `{
   "first_name": null,
@@ -113,11 +115,15 @@ function asStringOrNull(v: unknown): string | null {
   return s === "" || s.toLowerCase() === "null" ? null : s;
 }
 
-/** Names must land in Persian script — transliterate Latin leftovers locally. */
+/**
+ * Names must land in Persian script. A reply that is Latin-only OR MIXED
+ * («احمد AHMADI» — weak models reading the MRZ) is transliterated locally,
+ * token by token: only the Latin tokens change.
+ */
 function asPersianName(v: unknown): string | null {
   const s = asStringOrNull(v);
   if (s == null) return s;
-  return isLatinName(s) ? latinToPersianName(s) : s;
+  return HAS_LATIN.test(s) ? latinToPersianName(s) : s;
 }
 
 /** Normalize/uppercase a 2-digit sex value. */

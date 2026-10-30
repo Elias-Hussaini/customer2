@@ -28,9 +28,11 @@ export type DocSortTarget =
   | { kind: "new"; label: string };
 
 export interface DocSortResult {
-  /** 1-based position of the image inside the request batch. */
+  /** Position of the image inside the request batch. */
   index: number;
   target: DocSortTarget;
+  /** How this verdict was reached — "ai" or a local basis (mrz/pdftext/filename). */
+  basis?: string;
 }
 
 export function buildDocSortSystemPrompt(slots: DocSlotOption[]): string {
@@ -124,6 +126,87 @@ function normalizeLabel(s: string): string {
   return s.replace(/[\s\u200c]+/g, "").trim();
 }
 
+/** Words that carry no meaning when comparing slot labels. */
+const STOP_WORDS = /^(?:عکس|اسکن|سند|مدارک|برگه|تصویر|کپی|به|از|و)$/;
+
+/** Dari/Iranian spelling bridges — ویزا and ویزه are the same word. */
+const SYNONYMS: [RegExp, string][] = [[/ویزا/g, "ویزه"]];
+
+function applySynonyms(s: string): string {
+  let out = s;
+  for (const [re, to] of SYNONYMS) out = out.replace(re, to);
+  return out;
+}
+
+/** Distinctive tokens of a label («عکس روی تذکره» → [روی، تذکره]). */
+function labelKeywords(s: string): Set<string> {
+  return new Set(
+    applySynonyms(s)
+      .replace(/[\u200c\u200f\u200e]/g, " ")
+      .split(/[\s\-–—:،«»().]+/)
+      .map((w) => normalizeLabel(w))
+      .filter((w) => w.length >= 2 && !STOP_WORDS.test(w)),
+  );
+}
+
+/** Strip the stop-words off a label so «عکس پاسپورت» ≈ «پاسپورت». */
+function stripStopWords(s: string): string {
+  return applySynonyms(normalizeLabel(s)).replace(/(?:عکس|اسکن|سند|مدارک|تصویر|کپی)/g, "");
+}
+
+/**
+ * Fuzzy label→slot matching. Weak models answer with free Persian text
+ * («پاسپورت»، «عکس پاسپورت»، «روی تذکره») or English words instead of the
+ * exact slot id. Every such answer used to fall through to «سایر مدارک» —
+ * the exact failure the users reported. This maps ANY recognizable mention
+ * onto the real slot: containment either way, or ≥2 shared keywords.
+ */
+export function fuzzyMatchSlot(
+  raw: string,
+  slots: DocSlotOption[],
+): DocSlotOption | null {
+  const n = normalizeLabel(raw);
+  if (!n) return null;
+  // Direct containment either way («عکس پاسپورت» ⊂/⊃ «پاسپورت»).
+  for (const s of slots) {
+    const sn = stripStopWords(s.label);
+    const rn = stripStopWords(raw);
+    if (!sn || !rn) continue;
+    if (sn === rn || sn.includes(rn) || rn.includes(sn)) return s;
+  }
+  // Keyword overlap («تذکره از پشت» vs «عکس پشت تذکره» → پشت + تذکره).
+  const rk = labelKeywords(raw);
+  if (rk.size === 0) return null;
+  let best: { slot: DocSlotOption; shared: number } | null = null;
+  for (const s of slots) {
+    const sk = labelKeywords(s.label);
+    let shared = 0;
+    for (const k of rk) if (sk.has(k)) shared++;
+    if (shared >= 2 || (shared === 1 && rk.size === 1 && sk.size <= 2)) {
+      if (!best || shared > best.shared) best = { slot: s, shared };
+    }
+  }
+  return best?.slot ?? null;
+}
+
+/** English words a model may use for the built-in kinds. */
+const EN_KINDS: { re: RegExp; fa: string[] }[] = [
+  { re: /passport|\bppt\b|\bpsp\b/i, fa: ["پاسپورت", "پاسپورط"] },
+  { re: /tazkira|tazkere|e-?id|national\s*id|idcard|id\s*card/i, fa: ["تذکره", "تذکاری"] },
+];
+
+/** Translate an English slot word into Persian keywords and fuzzy-match. */
+function matchEnglishSlotWord(raw: string, slots: DocSlotOption[]): DocSlotOption | null {
+  for (const { re, fa } of EN_KINDS) {
+    if (!re.test(raw)) continue;
+    for (const word of fa) {
+      const hit = fuzzyMatchSlot(word, slots);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
 /** Keep only sane, short Persian-ish labels for AI-created slots. */
 export function sanitizeNewSlotLabel(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
@@ -197,6 +280,13 @@ export function parseDocSortReply(
     // Persian equivalents the model may use for the special targets.
     if (slotRaw === "سایر" || slotRaw === "نامشخص" || slotRaw === "دیگر") slotRaw = "other";
     if (slotRaw === "عکس" || slotRaw === "عکس پروفایل" || slotRaw === "عکس شخصی") slotRaw = "photo";
+    // LAST LINE OF DEFENSE before «سایر»: a free-text Persian answer
+    // («عکس پاسپورت»، «تذکره از پشت»، "passport") or a near-miss label must
+    // land on the real slot it so obviously means — never in سایر مدارک.
+    if (slotRaw && !slotById.has(slotRaw) && slotRaw !== "photo" && slotRaw !== "other" && slotRaw !== "new") {
+      const fuzzy = fuzzyMatchSlot(slotRaw, slots) ?? matchEnglishSlotWord(slotRaw, slots);
+      if (fuzzy) slotRaw = fuzzy.id;
+    }
     if (slotById.has(slotRaw)) {
       const slot = slotById.get(slotRaw)!;
       out.set(idx, { index: idx, target: { kind: "slot", slotId: slot.id, label: slot.label } });
@@ -207,7 +297,11 @@ export function parseDocSortReply(
       // The model sometimes re-invents a slot that already exists (e.g.
       // «عکس روی تذکره») — map it back onto the real slot so the re-join
       // logic recognizes the same destination and no duplicate slot appears.
-      const twin = label ? slotByNormLabel.get(normalizeLabel(label)) : undefined;
+      // Fuzzy: «عکس ویزه» ≈ «ویزه» — near-duplicate slots (the user's
+      // «تکراری» complaint) are collapsed onto the existing one.
+      const twin = label
+        ? (slotByNormLabel.get(normalizeLabel(label)) ?? fuzzyMatchSlot(label, slots) ?? null)
+        : null;
       if (twin) {
         out.set(idx, {
           index: idx,
@@ -276,6 +370,42 @@ export function chunkLocalGroups(expanded: SortPiece[], chunk: number[]): number
   return groups;
 }
 
+/**
+ * Chunks over a SUBSET of piece indexes (the pieces still needing the
+ * cloud AI — locally-resolved pieces never enter a request). Pieces cut
+ * from ONE page stay together; GLOBAL indexes are returned so the caller
+ * can map answers back onto the right pieces.
+ */
+export function buildFilteredChunks(
+  expanded: SortPiece[],
+  candidates: number[],
+  chunkSize = DOC_SORT_CHUNK,
+): number[][] {
+  const chunks: number[][] = [];
+  let cur: number[] = [];
+  for (let k = 0; k < candidates.length; k++) {
+    const pieceIdx = candidates[k];
+    const gid = expanded[pieceIdx]?.groupId;
+    // Extend the run while the next candidate belongs to the same page.
+    const run: number[] = [pieceIdx];
+    while (
+      k + 1 < candidates.length &&
+      expanded[candidates[k + 1]] &&
+      expanded[candidates[k + 1]].groupId === gid
+    ) {
+      k++;
+      run.push(candidates[k]);
+    }
+    if (cur.length > 0 && cur.length + run.length > chunkSize) {
+      chunks.push(cur);
+      cur = [];
+    }
+    cur.push(...run);
+  }
+  if (cur.length > 0) chunks.push(cur);
+  return chunks;
+}
+
 /** One image on its way to a destination (post split/collapse). */
 export interface SortPiece {
   dataUrl: string;
@@ -296,6 +426,8 @@ export interface SortAction {
   image: string;
   origin: string;
   target: DocSortTarget;
+  /** How the destination was decided (mrz / pdftext / filename / ai / unknown). */
+  basis?: string;
 }
 
 function targetKey(t: DocSortTarget): string {
@@ -304,8 +436,16 @@ function targetKey(t: DocSortTarget): string {
   return t.kind; // "photo" | "other"
 }
 
+/** Per-piece results: dense array (0-based) OR a sparse map keyed by piece index. */
+export type ResultLookup = DocSortResult[] | Map<number, DocSortResult>;
+
+function resultAt(results: ResultLookup, i: number): DocSortResult | undefined {
+  return Array.isArray(results) ? results[i] : results.get(i);
+}
+
 /**
- * Turn per-piece AI results into final filing actions.
+ * Turn per-piece results (cloud AI + local algorithm merged by the caller)
+ * into final filing actions.
  *
  * When every piece cut from ONE page received the same destination (or a mix
  * of one destination + "other"), the split was wrong — e.g. a single تذکره
@@ -316,7 +456,7 @@ function targetKey(t: DocSortTarget): string {
 export function resolveActions(
   pieces: SortPiece[],
   originals: SortOriginal[],
-  results: DocSortResult[],
+  results: ResultLookup,
 ): SortAction[] {
   const byGroup = new Map<number, number[]>();
   pieces.forEach((p, i) => {
@@ -329,24 +469,29 @@ export function resolveActions(
   for (const idxs of byGroup.values()) {
     if (idxs.length <= 1) {
       const i = idxs[0];
-      const r = results[i];
-      if (r) actions.push({ image: pieces[i].dataUrl, origin: pieces[i].origin, target: r.target });
+      const r = resultAt(results, i);
+      if (r) actions.push({ image: pieces[i].dataUrl, origin: pieces[i].origin, target: r.target, basis: r.basis });
       continue;
     }
     // A multi-piece group: pieces cut from one page.
     const distinct = new Map<string, DocSortTarget>();
+    let groupBasis: string | undefined;
     for (const i of idxs) {
-      const t = results[i]?.target;
+      const r = resultAt(results, i);
+      const t = r?.target;
       if (!t || t.kind === "other") continue;
       const key = targetKey(t);
-      if (!distinct.has(key)) distinct.set(key, t);
+      if (!distinct.has(key)) {
+        distinct.set(key, t);
+        if (!groupBasis) groupBasis = r?.basis;
+      }
     }
     if (distinct.size >= 2) {
       // Two different real destinations → a true combined scan, keep pieces.
       for (const i of idxs) {
-        const r = results[i];
+        const r = resultAt(results, i);
         if (r) {
-          actions.push({ image: pieces[i].dataUrl, origin: pieces[i].origin, target: r.target });
+          actions.push({ image: pieces[i].dataUrl, origin: pieces[i].origin, target: r.target, basis: r.basis });
         }
       }
     } else {
@@ -354,7 +499,7 @@ export function resolveActions(
       const original = originals[pieces[idxs[0]].groupId] ?? pieces[idxs[0]];
       const target: DocSortTarget =
         distinct.size === 1 ? distinct.values().next().value! : { kind: "other" };
-      actions.push({ image: original.dataUrl, origin: original.origin, target });
+      actions.push({ image: original.dataUrl, origin: original.origin, target, basis: groupBasis });
     }
   }
   return actions;
