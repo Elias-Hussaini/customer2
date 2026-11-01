@@ -2,7 +2,7 @@ import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
-import { copyFileSync, existsSync } from "node:fs";
+import { copyFileSync, existsSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { execSync } from "node:child_process";
@@ -48,6 +48,25 @@ function githubPagesPlugin(): Plugin {
   };
 }
 
+/**
+ * Deployed-build identity file. The app fetches /version.json with
+ * cache:"no-store" and compares `sha` against its compiled-in BUILD_SHA —
+ * an independent update signal that works EVEN WHEN the service-worker
+ * update flow is stuck (waiting worker never reported, toast missed, etc).
+ * Not in workbox globPatterns → never precached → always the live truth.
+ */
+function versionJsonPlugin(): Plugin {
+  return {
+    name: "build-version-json",
+    closeBundle() {
+      const dist = resolve(rootDir, "dist");
+      const payload = { sha: buildSha(), time: new Date().toISOString() };
+      writeFileSync(resolve(dist, "version.json"), JSON.stringify(payload));
+      console.log(`build-version-json: dist/version.json written (sha ${payload.sha})`);
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => ({
   base: mode === "production" ? `/${REPO_NAME}/` : "/",
   define: {
@@ -58,6 +77,7 @@ export default defineConfig(({ mode }) => ({
     react(),
     tailwindcss(),
     githubPagesPlugin(),
+    versionJsonPlugin(),
     VitePWA({
       // "prompt" keeps the user in control: a new deploy shows the sticky
       // «نسخه جدید آماده است — به‌روزرسانی» toast and ONLY reloads when they

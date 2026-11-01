@@ -92,10 +92,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const push = useCallback(
     (kind: ToastItem["kind"], message: string, options?: ToastOptions) => {
       const id = nextId++;
-      setToasts((list) => [
-        ...list.slice(-3),
-        { id, kind, message, duration: options?.duration ?? 3600, action: options?.action },
-      ]);
+      setToasts((list) => {
+        // Sticky toasts (duration 0 — e.g. the PWA update prompt) must NEVER
+        // be evicted by newer toasts; only the last 3 regular ones are kept.
+        const sticky = list.filter((t) => t.duration === 0);
+        const regular = list.filter((t) => t.duration !== 0).slice(-3);
+        return [...sticky, ...regular, { id, kind, message, duration: options?.duration ?? 3600, action: options?.action }];
+      });
       if (options?.duration !== 0) {
         const timer = setTimeout(() => dismiss(id), options?.duration ?? 3600);
         timers.current.set(id, timer);

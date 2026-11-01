@@ -18,6 +18,7 @@ import {
   Palette,
   Pencil,
   Plus,
+  RefreshCw,
   Settings2,
   Signal,
   Smartphone,
@@ -26,6 +27,7 @@ import {
   Trash2,
   Plane as VisaIcon,
   Wand2,
+  Wrench,
   XCircle,
 } from "lucide-react";
 import { useSearchParams, Link } from "react-router-dom";
@@ -70,6 +72,7 @@ import {
 } from "../lib/launcher/layoutStore";
 import { useToast } from "../hooks/useToast";
 import { buildLabel, buildStamp } from "../pwa/version";
+import { checkForUpdatesNow, repairPwaAndReload } from "../pwa/usePwaUpdate";
 import { useConfirm } from "../hooks/useConfirm";
 import { FIELD_TYPE_LABELS, type CustomFieldDef, type FieldEntity, type FieldType, type Tag } from "../types";
 import { toPersianDigits } from "../utils/jalali";
@@ -1671,11 +1674,13 @@ function DataSection() {
 
 function PwaSection() {
   const toast = useToast();
+  const { confirm } = useConfirm();
   const [installable, setInstallable] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
   const [storage, setStorage] = useState("");
   const [storagePct, setStoragePct] = useState<number | null>(null);
   const [persisted, setPersisted] = useState<boolean | null>(null);
+  const [checking, setChecking] = useState(false);
 
   const refreshPersisted = () => {
     void navigator.storage?.persisted?.().then(setPersisted).catch(() => setPersisted(null));
@@ -1736,9 +1741,53 @@ function PwaSection() {
             <b>{buildLabel()}</b>
           </div>
           <p className="leading-5 text-ink-400">
-            با انتشار هر تغییر، خود برنامه آن را تشخیص می‌دهد و همان‌جا یک اعلان «به‌روزرسانی»
-            برایتان می‌آید — نیازی به بررسی دستی نیست.
+            با انتشار هر تغییر، خودِ برنامه آن را تشخیص می‌دهد و اعلان «به‌روزرسانی» می‌آید. اگر
+            اعلان نیامد یا فکر می‌کنید نسخهٔ قدیمی روی دستگاهتان مانده، دکمهٔ زیر را بزنید.
           </p>
+          {/* ---- manual update controls ---- */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              className="btn btn-primary btn-sm"
+              disabled={checking}
+              onClick={async () => {
+                setChecking(true);
+                try {
+                  const r = await checkForUpdatesNow();
+                  if (r === "latest") {
+                    toast.success(`شما همین حالا آخرین نسخهٔ برنامه را دارید (${buildStamp()})`);
+                  } else if (r === "pending") {
+                    toast.info("نسخهٔ جدید در حال دریافت است — به‌محض آماده شدن، دکمهٔ به‌روزرسانی خودش ظاهر می‌شود");
+                  } else if (r === "stuck") {
+                    toast.error("بروزرسانی روی این دستگاه گیر کرده — دکمهٔ «تعمیر برنامه» را بزنید");
+                  } else if (r === "offline") {
+                    toast.error("برای بررسی بروزرسانی، اتصال اینترنت لازم است");
+                  }
+                  // "applied": the page reloads itself onto the new version
+                } catch {
+                  toast.error("بررسی بروزرسانی ممکن نشد — دوباره تلاش کنید");
+                } finally {
+                  setChecking(false);
+                }
+              }}
+            >
+              <RefreshCw size={14} className={checking ? "animate-spin" : ""} />
+              {checking ? "در حال بررسی…" : "بررسی بروزرسانی"}
+            </button>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={async () => {
+                const ok = await confirm({
+                  title: "تعمیر و راه‌اندازی مجدد برنامه؟",
+                  message:
+                    "اگر بروزرسانی روی این دستگاه گیر کرده باشد، این کار فایل‌های کش‌شدهٔ برنامه را پاک و برنامه را از نو بارگذاری می‌کند. اطلاعات شما (مشتریان، مدارک، حساب‌ها و…) کاملاً دست‌نخورده می‌ماند.",
+                  confirmLabel: "تعمیر و شروع مجدد",
+                });
+                if (ok) await repairPwaAndReload();
+              }}
+            >
+              <Wrench size={14} /> تعمیر برنامه
+            </button>
+          </div>
         </div>
         {storage && (
           <div className="flex flex-col gap-2.5 rounded-2xl bg-brand-500/6 px-4 py-3.5 text-[12px]">

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useToast } from "../hooks/useToast";
+import { BUILD_SHA } from "./version";
 
 type ToastApi = ReturnType<typeof useToast>;
 
@@ -17,17 +18,163 @@ let showUpdatePrompt: (() => void) | null = null;
 
 /** Re-check for a new deploy every 5 minutes while the app stays open. */
 const UPDATE_POLL_MS = 5 * 60_000;
+/** First probe shortly after startup — the toast should appear fast. */
+const FIRST_PROBE_MS = 3_000;
+/** How long checkForUpdatesNow waits for an installing worker to settle. */
+const INSTALL_SETTLE_MS = 15_000;
+const INSTALL_POLL_MS = 500;
+
+/** Shape of dist/version.json (written by the versionJsonPlugin at build time). */
+interface DeployedVersion {
+  sha?: string;
+  time?: string;
+}
+
+/** Fetch the DEPLOYED build identity. Never cached (no-store + json not precached). */
+async function fetchDeployedVersion(): Promise<DeployedVersion | null> {
+  try {
+    const url = `${import.meta.env.BASE_URL}version.json`;
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return null;
+    const data = (await res.json()) as DeployedVersion;
+    return typeof data?.sha === "string" ? data : null;
+  } catch {
+    return null; // offline / dev server without version.json
+  }
+}
+
+type ProbeResult = "latest" | "available" | "offline";
+
+/** Compare the deployed sha against the sha this page was compiled from. */
+async function probeDeployedVersion(): Promise<ProbeResult> {
+  if (BUILD_SHA === "dev") return "latest"; // dev builds never nag
+  const deployed = await fetchDeployedVersion();
+  if (!deployed?.sha) return "offline";
+  return deployed.sha === BUILD_SHA ? "latest" : "available";
+}
+
+/**
+ * Apply a waiting update: workbox-window path first (posts SKIP_WAITING and
+ * reloads), manual waiting-worker path second, plain reload as a last resort.
+ */
+async function applyPendingUpdate(): Promise<void> {
+  if (updateFnRef) {
+    await updateFnRef(true);
+    return;
+  }
+  const reg =
+    registrationRef ??
+    ("serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : undefined);
+  const waiting = reg?.waiting;
+  if (waiting) {
+    waiting.addEventListener("statechange", () => {
+      if (waiting.state === "activated") window.location.reload();
+    });
+    waiting.postMessage({ type: "SKIP_WAITING" });
+    // Safety net: if activation happened without the event reaching us, reload anyway.
+    window.setTimeout(() => window.location.reload(), 4_000);
+    return;
+  }
+  window.location.reload();
+}
+
+/** Wait (bounded) for an installing worker to reach the waiting state. */
+async function waitForInstall(): Promise<ServiceWorkerRegistration | null> {
+  const deadline = Date.now() + INSTALL_SETTLE_MS;
+  while (Date.now() < deadline) {
+    const reg = registrationRef;
+    if (reg?.waiting) return reg;
+    if (!reg?.installing) return reg ?? null;
+    await new Promise((r) => setTimeout(r, INSTALL_POLL_MS));
+  }
+  return registrationRef;
+}
+
+/**
+ * Manual check — powers the «بررسی بروزرسانی» button in Settings.
+ * Runs a real SW update check AND the version.json probe, then acts:
+ *  - "latest"  → nothing to do
+ *  - "applied" → a waiting update was applied (page reloads itself)
+ *  - "pending" → new version found, still downloading (toast will arrive)
+ *  - "stuck"   → deployed ≠ running but the SW can't deliver it → repair needed
+ *  - "offline" → no network
+ */
+export type UpdateCheckResult = "latest" | "applied" | "pending" | "stuck" | "offline";
+
+export async function checkForUpdatesNow(): Promise<UpdateCheckResult> {
+  if (!("serviceWorker" in navigator)) {
+    const probe = await probeDeployedVersion();
+    if (probe === "offline") return "offline";
+    return probe === "available" ? "stuck" : "latest";
+  }
+  try {
+    const reg = registrationRef ?? (await navigator.serviceWorker.getRegistration());
+    if (reg) {
+      registrationRef = reg;
+      await reg.update();
+    }
+  } catch {
+    // offline or registration gone — fall through to the probe
+  }
+  const probe = await probeDeployedVersion();
+  if (probe === "offline") return "offline";
+
+  const reg = await waitForInstall();
+  if (reg?.waiting) {
+    void applyPendingUpdate();
+    return "applied";
+  }
+  if (probe === "available") {
+    // Deployed sha differs but no worker is waiting or installing.
+    return reg?.installing ? "pending" : "stuck";
+  }
+  return "latest";
+}
+
+/**
+ * Repair path for a broken/stuck service worker: unregister every SW and wipe
+ * CacheStorage, then reload. 100% safe for this app — user data lives in
+ * IndexedDB, caches only ever hold static build assets.
+ */
+export async function repairPwaAndReload(): Promise<void> {
+  try {
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.allSettled(regs.map((r) => r.unregister()));
+    }
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      await Promise.allSettled(keys.map((k) => caches.delete(k)));
+    }
+  } catch {
+    // best effort — the reload below still escapes the stuck page
+  }
+  window.location.reload();
+}
+
 function armUpdateWatchers(): void {
   if (watchersArmed || !registrationRef) return;
   watchersArmed = true;
+  // Probe once shortly after startup so the toast shows up fast on open.
+  window.setTimeout(() => {
+    void probeDeployedVersion().then((r) => {
+      if (r === "available") showUpdatePrompt?.();
+    });
+  }, FIRST_PROBE_MS);
   window.setInterval(() => {
     void registrationRef?.update().catch(() => undefined);
+    void probeDeployedVersion().then((r) => {
+      if (r === "available") showUpdatePrompt?.();
+    });
   }, UPDATE_POLL_MS);
   document.addEventListener("visibilitychange", () => {
     // Coming back to the app tab/PWA window is the most likely moment a new
     // deploy exists — check immediately instead of waiting for the interval.
     if (document.visibilityState === "visible") {
       void registrationRef?.update().catch(() => undefined);
+      void probeDeployedVersion().then((r) => {
+        if (r === "available") showUpdatePrompt?.();
+      });
     }
   });
 }
@@ -38,9 +185,10 @@ function armUpdateWatchers(): void {
  * a new deploy shows «نسخه جدید آماده است» with a به‌روزرسانی button and the
  * page reloads only when they click it.
  *
- * On top of the browser's own navigation-time check, we also poll every 5
- * minutes and whenever the tab becomes visible — so the toast appears even
- * during a long-running session.
+ * On top of the browser's own navigation-time check we also poll every 5
+ * minutes and whenever the tab becomes visible, AND compare the deployed
+ * version.json sha against the compiled-in BUILD_SHA — so the toast re-arms
+ * even when the classic SW flow fired once and was missed/evicted.
  */
 export function useRegisterPwaUpdate(): void {
   const toastRef = useRef<ToastApi | null>(null);
@@ -62,8 +210,7 @@ export function useRegisterPwaUpdate(): void {
       toastRef.current?.sticky("نسخه جدیدی از برنامه آماده است — برای اعمال تغییرات، به‌روزرسانی کنید.", {
         label: "به‌روزرسانی",
         onClick: () => {
-          if (updateFnRef) void updateFnRef(true);
-          else window.location.reload();
+          void applyPendingUpdate();
         },
       });
     };
