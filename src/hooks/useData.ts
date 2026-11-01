@@ -158,3 +158,26 @@ export function usePrefs(): AppPreferences {
 }
 
 export { updatePrefs };
+
+/** Documents of one employer profile (live). */
+export function useEmployerAttachments(employerId: string | undefined): Attachment[] | undefined {
+  return useLiveQuery(
+    () => (employerId ? db.attachments.where("employerId").equals(employerId).sortBy("createdAt") : []),
+    [employerId],
+  );
+}
+
+/** Studio folders (ابزار عکس) — live. */
+export function useStudioFolders() {
+  return useLiveQuery(() => db.studioFolders.orderBy("createdAt").toArray(), []);
+}
+
+/** All studio images — live. */
+export function useStudioImages() {
+  return useLiveQuery(() => db.studioImages.orderBy("createdAt").reverse().toArray(), []);
+}
+
+/** One employer record (live). */
+export function useEmployer(id: string | undefined): Employer | undefined {
+  return useLiveQuery(() => (id ? db.employers.get(id) : undefined), [id]);
+}

@@ -86,3 +86,17 @@ export async function setRepresentativePhoto(
     title: photo ? `عکس پروفایل «${name}» ثبت شد` : `عکس پروفایل «${name}» حذف شد`,
   });
 }
+
+export async function setEmployerPhoto(
+  id: string,
+  photo: string | null,
+  name: string,
+): Promise<void> {
+  await db.employers.update(id, { photo, updatedAt: Date.now() });
+  await logActivity({
+    type: "update",
+    entity: "employer",
+    entityId: id,
+    title: photo ? `عکس پروفایل «${name}» ثبت شد` : `عکس پروفایل «${name}» حذف شد`,
+  });
+}

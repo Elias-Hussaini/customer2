@@ -169,3 +169,60 @@ export async function prepareFilesForAi(
     truncated,
   };
 }
+
+/* ----------------------- deterministic import pipeline --------------------- */
+
+export interface PdfImportPage {
+  /** 1-based page number inside the PDF. */
+  index: number;
+  dataUrl: string;
+}
+
+/**
+ * «هوش مصنوعی افزودن مدارک» — the deterministic engine: render EVERY page
+ * of a PDF (up to maxPages) locally with pdf.js, then drop the blank ones
+ * (scanner leftovers) so only real content becomes an image. No cloud AI,
+ * no guessing — titles are entered by the user.
+ */
+export async function renderPdfPagesForImport(
+  file: File,
+  opts: { maxPages?: number; onProgress?: (p: PdfRenderProgress) => void } = {},
+): Promise<{ pages: PdfImportPage[]; blanksRemoved: number; truncated: boolean }> {
+  const maxPages = Math.max(1, Math.min(80, opts.maxPages ?? 40));
+  const lib = await loadPdfjs();
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const doc = await lib.getDocument({ data: bytes }).promise;
+  try {
+    const total = Math.min(doc.numPages, maxPages);
+    const out: PdfImportPage[] = [];
+    let blanks = 0;
+    for (let i = 1; i <= total; i++) {
+      opts.onProgress?.({ page: i, totalPages: total });
+      const page = await doc.getPage(i);
+      const base = page.getViewport({ scale: 1 });
+      const scale = Math.min(200 / 72, MAX_EDGE / Math.max(base.width, base.height));
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(viewport.width);
+      canvas.height = Math.round(viewport.height);
+      const ctx = canvas.getContext("2d", { alpha: false })!;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvas, canvasContext: ctx, viewport }).promise;
+      const dataUrl = canvasToJpeg(canvas);
+      if (await isBlankImage(dataUrl)) {
+        blanks++;
+        continue;
+      }
+      out.push({ index: i, dataUrl });
+    }
+    return { pages: out, blanksRemoved: blanks, truncated: doc.numPages > total };
+  } finally {
+    void doc.destroy();
+  }
+}
+
+/** Pure filter used by tests: keep non-blank pages in order. */
+export function planImportPages<T extends { blank: boolean }>(pages: T[]): T[] {
+  return pages.filter((p) => !p.blank);
+}

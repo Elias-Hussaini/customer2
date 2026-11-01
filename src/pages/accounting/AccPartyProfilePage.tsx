@@ -34,6 +34,7 @@ import {
   OUTSTANDING_KIND_LABELS,
   PARTY_TYPE_LABELS,
   TX_TYPE_LABELS,
+  type FinTransaction,
 } from "../../accounting/types";
 import {
   useAccDocsFor,
@@ -51,6 +52,7 @@ import {
 } from "../../accounting/components/Bits";
 import { PartyFormModal } from "../../accounting/components/PartyFormModal";
 import { TransactionFormModal } from "../../accounting/components/TransactionFormModal";
+import { TxActionSheet } from "../../accounting/components/TxActionSheet";
 import { useActivities } from "../../hooks/useData";
 
 export function AccPartyProfilePage() {
@@ -64,6 +66,8 @@ export function AccPartyProfilePage() {
   const [editOpen, setEditOpen] = useState(false);
   const [txModal, setTxModal] = useState<null | "receipt" | "payment">(null);
   const [exportOpen, setExportOpen] = useState(false);
+  /** Clicked transaction → manage it right here (edit / reverse / purge). */
+  const [activeTx, setActiveTx] = useState<FinTransaction | null>(null);
 
   const totals = useMemo(
     () => (party && transactions ? computePartyTotals(party.id, transactions) : null),
@@ -246,9 +250,11 @@ export function AccPartyProfilePage() {
                   </p>
                 )}
                 {(statement?.rows ?? []).map((row) => (
-                  <div
+                  <button
                     key={row.tx.id}
-                    className="glass flex flex-wrap items-center gap-2.5 rounded-2xl px-3.5 py-2.5 text-xs"
+                    className="glass flex flex-wrap items-center gap-2.5 rounded-2xl px-3.5 py-2.5 text-xs transition-colors hover:bg-brand-500/8"
+                    onClick={() => setActiveTx(row.tx)}
+                    title="برای ویرایش و عملیات، اینجا بزنید"
                   >
                     <span className="num shrink-0 text-ink-400">{formatJalali(row.tx.date)}</span>
                     <span className="num shrink-0 font-bold text-ink-500 dark:text-ink-400">{row.tx.number}</span>
@@ -266,7 +272,7 @@ export function AccPartyProfilePage() {
                       <TxStatusPill status={row.tx.status} />
                     )}
                     {!row.tx.affectsBalance && <InformationalBadge />}
-                  </div>
+                  </button>
                 ))}
                 {statement && statement.rows.length > 0 && (
                   <div className="glass mt-1 flex flex-wrap items-center justify-between gap-2 rounded-2xl px-4 py-3 text-xs font-bold">
@@ -371,6 +377,7 @@ export function AccPartyProfilePage() {
       />
 
       <PartyFormModal open={editOpen} onClose={() => setEditOpen(false)} editParty={party} />
+      <TxActionSheet tx={activeTx} onClose={() => setActiveTx(null)} />
       <TransactionFormModal
         open={txModal != null}
         onClose={() => setTxModal(null)}

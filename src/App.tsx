@@ -17,7 +17,10 @@ import { ArchivePage } from "./pages/ArchivePage";
 import { SmartArchivePage } from "./pages/SmartArchivePage";
 import { BackupPage } from "./pages/BackupPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { EmployersPage } from "./pages/EmployersPage";
+import { EmployerDetailPage } from "./pages/EmployerDetailPage";
 import { AgentChatPage } from "./pages/AgentChatPage";
+import { StudioPage } from "./pages/StudioPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { AccountingShell } from "./pages/accounting/AccountingShell";
 import { AccDashboardPage } from "./pages/accounting/AccDashboardPage";
@@ -42,6 +45,8 @@ export default function App() {
         <Route path="customers/:id" element={<CustomerDetailPage />} />
         <Route path="representatives" element={<RepresentativesPage />} />
         <Route path="representatives/:id" element={<RepresentativeDetailPage />} />
+        <Route path="employers" element={<EmployersPage />} />
+        <Route path="employers/:id" element={<EmployerDetailPage />} />
         <Route path="requests" element={<RequestsPage />} />
         <Route path="requests/new" element={<RequestFormPage />} />
         <Route path="requests/:id/edit" element={<RequestFormPage />} />
@@ -53,6 +58,7 @@ export default function App() {
         <Route path="smart-archive" element={<SmartArchivePage />} />
         <Route path="backup" element={<BackupPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="studio" element={<StudioPage />} />
         <Route path="ai" element={<AgentChatPage />} />
         {/* Accounting section — a separate financial world */}
         <Route path="accounting" element={<AccountingShell />}>

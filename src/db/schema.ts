@@ -10,6 +10,8 @@ import type {
   ListFolder,
   Payment,
   Representative,
+  StudioFolder,
+  StudioImage,
   Tag,
   VisaRequest,
   VisaType,
@@ -59,6 +61,9 @@ export class VisaDB extends Dexie {
   aiMeta!: Table<AiSettings, string>;
   // AI assistant chat history (دستیار هوشمند) — conversations with the agent.
   aiChats!: Table<AgentChatRecord, string>;
+  // Image studio (ابزار عکس) — in-app organized folders + saved images.
+  studioFolders!: Table<StudioFolder, string>;
+  studioImages!: Table<StudioImage, string>;
 
   constructor() {
     super("customer2-visa");
@@ -127,6 +132,14 @@ export class VisaDB extends Dexie {
     this.version(9).stores({
       aiChats: "id, updatedAt",
     });
+    // v10: employers grow into a full entity (profile fields, photo, custom
+    // values) and gain their OWN documents; customers gain شغل. The image
+    // studio (ابزار عکس) adds folders + saved images.
+    this.version(10).stores({
+      attachments: "id, customerId, paymentId, employerId, kind, createdAt",
+      studioFolders: "id, createdAt",
+      studioImages: "id, folderId, createdAt, updatedAt",
+    });
   }
 }
 
@@ -146,4 +159,6 @@ export const DB_TABLES = [
   "attachments",
   "docTypes",
   "preferences",
+  "studioFolders",
+  "studioImages",
 ] as const;

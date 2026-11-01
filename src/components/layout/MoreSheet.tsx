@@ -7,6 +7,7 @@ import {
   FileBarChart,
   Search,
   Settings,
+  Wand2,
   type LucideIcon,
 } from "lucide-react";
 import { BottomSheet } from "../ui/Modal";
@@ -69,6 +70,13 @@ const MORE_ITEMS: MoreItem[] = [
     description: "فیلدها، تگ‌ها و ظاهر",
     to: "/settings",
     tint: "bg-[#f59e0b]/14 text-[#c77d0a] dark:text-[#f5b84f]",
+  },
+  {
+    icon: Wand2,
+    label: "ابزار عکس",
+    description: "ویرایشگر حرفه‌ای و کتابخانه",
+    to: "/studio",
+    tint: "bg-[#ec4899]/12 text-[#db2777] dark:text-[#f9a8d4]",
   },
 ];
 

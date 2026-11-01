@@ -1044,3 +1044,101 @@ export async function resetAccounting(): Promise<void> {
     },
   );
 }
+
+/* ------------------------ permanent hard delete ----------------------------- */
+
+/**
+ * «حذف دائمی» — remove a transaction from history COMPLETELY, together with
+ * its financial effect (balances are derived, so the row IS the effect):
+ *
+ *  - a plain final/cancelled/informational row is simply deleted;
+ *  - a REVERSED original (reversedBy set) takes its counter-reversal with it
+ *    — the pair's net effect is zero, so balances stay identical;
+ *  - a counter-reversal on its own is REFUSED: deleting just one half of a
+ *    pair would silently change balances. The original must be deleted.
+ *
+ * Settlement parts created by the deleted rows are removed from their
+ * outstanding items (status recomputed). Linked document FILES survive —
+ * they are only detached (transactionId → null), never destroyed.
+ */
+export async function deleteTransactionPermanently(id: string): Promise<void> {
+  await db.transaction(
+    "rw",
+    db.accTransactions,
+    db.accOutstanding,
+    db.accDocs,
+    db.activities,
+    async () => {
+      const tx = await db.accTransactions.get(id);
+      if (!tx) throw new TxValidationError(["تراکنش یافت نشد."]);
+
+      // A counter-reversal can only be purged together with its original.
+      if (tx.reversalOf) {
+        const original = await db.accTransactions.get(tx.reversalOf);
+        if (!original) {
+          // Original already gone (broken pair) — plain delete is the only
+          // sensible cleanup left.
+          await db.accTransactions.delete(id);
+          return;
+        }
+        throw new TxValidationError([
+          "این تراکنش، برگشتِ تراکنش دیگری است. برای حذف دائمی، تراکنش اصلی را حذف کنید تا هر دو با هم پاک شوند.",
+        ]);
+      }
+
+      // A reversed original takes its counter with it (net effect zero).
+      const counter = tx.reversedBy
+        ? ((await db.accTransactions.get(tx.reversedBy)) ?? null)
+        : null;
+      if (tx.reversedBy && !counter) {
+        throw new TxValidationError([
+          "تراکنش برگشتی این رکورد در تاریخچه پیدا نشد — ساختار داده خراب است.",
+        ]);
+      }
+
+      const now = Date.now();
+      const removedIds = [tx.id, ...(counter ? [counter.id] : [])];
+
+      // Remove settlement parts the removed rows had created.
+      for (const removedId of removedIds) {
+        const row = removedId === tx.id ? tx : (counter as FinTransaction);
+        if (row.settlementOf) {
+          const item = await db.accOutstanding.get(row.settlementOf);
+          if (item) {
+            const settlements = item.settlements.filter(
+              (s) => s.transactionId !== removedId,
+            );
+            await db.accOutstanding.put({
+              ...item,
+              settlements,
+              status: deriveOutstandingStatus(item.amount, settlements, item.currency),
+              updatedAt: now,
+            });
+          }
+        }
+      }
+
+      // Detach linked documents — the FILES stay as standalone docs.
+      for (const removedId of removedIds) {
+        const docs = await db.accDocs.where("transactionId").equals(removedId).toArray();
+        if (docs.length > 0) {
+          await db.accDocs.bulkPut(
+            docs.map((d) => ({ ...d, transactionId: null })),
+          );
+        }
+      }
+
+      await db.accTransactions.bulkDelete(removedIds);
+
+      await logActivity({
+        type: "delete",
+        entity: "accTx",
+        entityId: tx.id,
+        title: `تراکنش ${tx.number} برای همیشه حذف شد`,
+        detail: counter
+          ? `تراکنش برگشتی ${counter.number} هم همراه آن پاک شد. اثر مالی هر دو از تاریخچه برداشته شد؛ اسناد پیوست فقط جدا شدند و پاک نشدند.`
+          : "اثر مالی آن از تاریخچه برداشته شد؛ اسناد پیوست فقط جدا شدند و پاک نشدند.",
+      });
+    },
+  );
+}

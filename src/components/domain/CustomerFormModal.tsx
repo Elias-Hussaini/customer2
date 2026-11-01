@@ -59,6 +59,7 @@ interface FormState {
   passportIssueDate: string | null;
   passportExpiryDate: string | null;
   referrer: string;
+  job: string;
   notes: string;
   representativeId: string | null;
   listId: string | null;
@@ -76,6 +77,7 @@ const EMPTY: FormState = {
   passportIssueDate: null,
   passportExpiryDate: null,
   referrer: "",
+  job: "",
   notes: "",
   representativeId: null,
   listId: null,
@@ -232,6 +234,7 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
           passportIssueDate: customer.passportIssueDate ?? null,
           passportExpiryDate: customer.passportExpiryDate ?? null,
           referrer: customer.referrer ?? "",
+          job: customer.job ?? "",
           notes: customer.notes ?? "",
           representativeId: customer.representativeId ?? null,
           listId: customer.listId ?? null,
@@ -642,6 +645,7 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
         passportIssueDate: form.passportIssueDate ?? undefined,
         passportExpiryDate: form.passportExpiryDate ?? undefined,
         referrer: form.referrer,
+        job: form.job,
         notes: form.notes,
         representativeId: form.representativeId,
         listId: form.listId,
@@ -962,6 +966,13 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
               value={form.referrer}
               onChange={(e) => setForm({ ...form, referrer: e.target.value })}
               placeholder="چه کسی معرفی کرده؟"
+            />
+          </FormField>
+          <FormField label="شغل">
+            <Input
+              value={form.job}
+              onChange={(e) => setForm({ ...form, job: e.target.value })}
+              placeholder="مثلاً برق‌کار، معلم، راننده…"
             />
           </FormField>
           <FormField

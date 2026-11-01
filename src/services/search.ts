@@ -143,6 +143,7 @@ export function searchDataset(query: string, ds: SearchDataset, filters: SearchF
         { text: c.firstName ?? "", weight: 4 },
         { text: c.lastName ?? "", weight: 4 },
         { text: c.passportNo ?? "", weight: 4 },
+        { text: c.job ?? "", weight: 2 },
         { text: c.referrer ?? "", weight: 2 },
         { text: c.notes ?? "", weight: 1 },
         // find customers by their representative / list / employer name too

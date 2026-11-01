@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
-  Briefcase, Archive, FileDown, FilePenLine, FilePlus2, Trash2 } from "lucide-react";
+  Briefcase, Archive, FileDown, FileImage, FilePenLine, FilePlus2, Trash2 } from "lucide-react";
 import { PageHeader } from "../components/ui/StatCard";
 import { SectionCard } from "../components/ui/inputs";
 import { Button } from "../components/ui/Button";
@@ -9,6 +9,8 @@ import { GlassCard } from "../components/ui/GlassCard";
 import { ActivityFeed } from "../components/ui/ActivityFeed";
 import { CustomFieldValue } from "../components/ui/CustomFields";
 import { DocumentSlots } from "../components/ui/DocumentSlots";
+import { CopyRow } from "../components/ui/CopyRow";
+import { ProfileDocsManager } from "../components/domain/ProfileDocsManager";
 import { CustomerFormModal } from "../components/domain/CustomerFormModal";
 import { ProfilePhotoCard } from "../components/domain/ProfilePhotoCard";
 import { RequestsTable } from "../components/domain/RequestsTable";
@@ -50,6 +52,7 @@ const BASE_FIELDS: BaseFieldDef[] = [
   { key: "employerId", label: "کارفرما", ref: "employer" },
   { key: "firstName", label: "نام" },
   { key: "lastName", label: "نام خانوادگی" },
+  { key: "job", label: "شغل" },
   { key: "passportNo", label: "شماره پاسپورت" },
   { key: "birthDate", label: "تاریخ تولد", date: true, calendar: "passport" },
   { key: "passportIssueDate", label: "تاریخ صدور پاسپورت", date: true, calendar: "passport" },
@@ -79,6 +82,8 @@ export function CustomerDetailPage() {
   const [exportOpen, setExportOpen] = useState(false);
   /** Files dropped anywhere on the profile — waiting for a destination. */
   const [droppedFiles, setDroppedFiles] = useState<File[] | null>(null);
+  /** Full docs manager (ادیت مدارک). */
+  const [docsOpen, setDocsOpen] = useState(false);
 
   // Full-profile drag & drop: overlay + window navigation guard + a
   // page-level fallback target that opens the destination picker.
@@ -172,6 +177,7 @@ export function CustomerDetailPage() {
                 }
                 const raw = customer[f.key] as string | undefined;
                 let display: ReactNode;
+                let copyText: string | null = null;
                 if (f.ref === "rep") {
                   const rep = raw ? (representatives ?? []).find((r) => r.id === raw) : undefined;
                   display = rep ? (
@@ -184,16 +190,21 @@ export function CustomerDetailPage() {
                   ) : (
                     <span className="text-ink-400">—</span>
                   );
+                  copyText = rep?.name ?? null;
                 } else if (f.ref === "employer") {
                   const emp = raw ? (employers ?? []).find((e) => e.id === raw) : undefined;
                   display = emp ? (
-                    <span className="inline-flex items-center gap-1 font-semibold">
+                    <Link
+                      to={`/employers/${emp.id}`}
+                      className="inline-flex items-center gap-1 font-semibold text-brand-600 hover:underline dark:text-brand-300"
+                    >
                       <Briefcase size={12} className="text-brand-500" />
                       {emp.name}
-                    </span>
+                    </Link>
                   ) : (
                     <span className="text-ink-400">بدون کارفرما</span>
                   );
+                  copyText = emp?.name ?? null;
                 } else if (f.ref === "list") {
                   const list = raw ? (lists ?? []).find((l) => l.id === raw) : undefined;
                   display = list ? (
@@ -206,40 +217,51 @@ export function CustomerDetailPage() {
                   ) : (
                     <span className="text-ink-400">—</span>
                   );
+                  copyText = list?.name ?? null;
                 } else if (f.date) {
-                  display = (
-                    <span className="num">
-                      {raw
-                        ? f.calendar === "passport"
-                          ? formatDateByMode(raw, passportCal)
-                          : formatJalali(raw)
-                        : "—"}
-                    </span>
-                  );
+                  const shown = raw
+                    ? f.calendar === "passport"
+                      ? formatDateByMode(raw, passportCal)
+                      : formatJalali(raw)
+                    : null;
+                  display = <span className="num">{shown ?? "—"}</span>;
+                  copyText = shown;
                 } else {
                   display = <span className="min-w-0 truncate font-semibold">{raw || "—"}</span>;
+                  copyText = raw ?? null;
                 }
                 return (
-                  <div
+                  <CopyRow
                     key={String(f.key)}
-                    className="flex items-center justify-between gap-3 border-b border-ink-900/5 py-2.5 text-[13px] last:border-0 dark:border-white/5"
-                  >
-                    <span className="text-ink-500 dark:text-ink-400">{f.label}</span>
-                    <span className="min-w-0 truncate">{display}</span>
-                  </div>
+                    label={f.label}
+                    display={display}
+                    copy={copyText}
+                    copyLabel={f.label}
+                  />
                 );
               })}
-              {detailCustomFields.map((field) => (
-                <div
-                  key={field.key}
-                  className="flex items-center justify-between gap-3 border-b border-ink-900/5 py-2.5 text-[13px] last:border-0 dark:border-white/5"
-                >
-                  <span className="text-ink-500 dark:text-ink-400">{field.label}</span>
-                  <span className="min-w-0 truncate font-semibold">
-                    <CustomFieldValue field={field} value={customer.customValues?.[field.key]} />
-                  </span>
-                </div>
-              ))}
+              {detailCustomFields.map((field) => {
+                const value = customer.customValues?.[field.key];
+                const copyText =
+                  value == null || value === "" || value === false
+                    ? null
+                    : Array.isArray(value)
+                      ? (value as string[]).join("، ")
+                      : String(value);
+                return (
+                  <CopyRow
+                    key={field.key}
+                    label={field.label}
+                    display={
+                      <span className="font-semibold">
+                        <CustomFieldValue field={field} value={value} />
+                      </span>
+                    }
+                    copy={copyText}
+                    copyLabel={field.label}
+                  />
+                );
+              })}
             </div>
             {customer.notes && (
               <div className="mt-3 rounded-2xl bg-brand-500/6 px-4 py-3 text-[12.5px] leading-6">
@@ -282,6 +304,11 @@ export function CustomerDetailPage() {
 
         <div className="flex flex-col gap-4">
           <SectionCard title="مدارک و تصاویر" icon={<Archive size={15} className="text-brand-500" />}>
+            <div className="mb-3 flex flex-wrap gap-2">
+              <button className="btn btn-primary btn-sm" onClick={() => setDocsOpen(true)}>
+                <FileImage size={14} /> ادیت مدارک
+              </button>
+            </div>
             <DocumentSlots customerId={customer.id} customer={customer} />
           </SectionCard>
 
@@ -374,6 +401,15 @@ export function CustomerDetailPage() {
           files={droppedFiles}
           customerId={customer.id}
           onClose={() => setDroppedFiles(null)}
+        />
+      )}
+
+      {/* Full documents manager (ادیت مدارک) */}
+      {customer && (
+        <ProfileDocsManager
+          open={docsOpen}
+          onClose={() => setDocsOpen(false)}
+          target={{ kind: "customer", id: customer.id, name }}
         />
       )}
     </div>

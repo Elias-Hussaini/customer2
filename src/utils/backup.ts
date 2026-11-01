@@ -306,7 +306,7 @@ export async function applyRestore(backup: BackupFile, mode: RestoreMode): Promi
   // A database.json extracted from a ZIP archive carries attachment metadata
   // whose bytes are NOT in the JSON — restoring it would create broken
   // attachment rows. Refuse and point at the ZIP restore instead.
-  if (d.attachments || d.aiWorkers) {
+  if (d.attachments || d.aiWorkers || d.studioImages) {
     throw new Error(
       "این فایل بخشی از یک بایگانی ZIP کامل است (بدون خود تصاویر). لطفاً فایل ZIP پشتیبان را انتخاب کنید تا همه‌چیز کامل بازیابی شود.",
     );
@@ -458,10 +458,11 @@ function guessExt(mime: string): string {
 }
 
 /** Quick stats for the backup screen — the WHOLE system (main app +
- *  accounting + AI chats), mirroring what the complete ZIP backup covers. */
+ *  accounting + AI chats + studio), mirroring what the complete ZIP backup covers. */
 export async function getStorageStats(): Promise<{
   tableCounts: Record<string, number>;
   attachments: { count: number; bytes: number };
+  studio: { count: number; bytes: number };
 }> {
   const [
     reps,
@@ -481,6 +482,8 @@ export async function getStorageStats(): Promise<{
     accOutstanding,
     accDocs,
     aiChats,
+    studioFolders,
+    studioImages,
   ] = await Promise.all([
     db.representatives.count(),
     db.employers.count(),
@@ -499,6 +502,8 @@ export async function getStorageStats(): Promise<{
     db.accOutstanding.count(),
     db.accDocs.count(),
     db.aiChats.count(),
+    db.studioFolders.count(),
+    db.studioImages.count(),
   ]);
   const atts = await db.attachments.toArray();
   return {
@@ -521,10 +526,16 @@ export async function getStorageStats(): Promise<{
       accDocs,
       aiChats,
       attachments: atts.length,
+      studioFolders,
+      studioImages,
     },
     attachments: {
       count: atts.length,
       bytes: atts.reduce((s, a) => s + a.size, 0),
+    },
+    studio: {
+      count: studioImages,
+      bytes: (await db.studioImages.toArray()).reduce((s, i) => s + i.size, 0),
     },
   };
 }

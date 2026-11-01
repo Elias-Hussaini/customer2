@@ -60,9 +60,10 @@ export async function saveAttachment(
   customerId: string,
   kind: string,
   file: File,
+  title?: string,
 ): Promise<Attachment> {
-  const res = await compressImage({ blob: file, name: file.name });
-  const att = rowFrom(customerId, null, kind, res, file.name || `${kind}.jpg`);
+  const res = await compressImage({ blob: file, name: title?.trim() || file.name });
+  const att = rowFrom(customerId, null, kind, res, title?.trim() || file.name || `${kind}.jpg`);
   await db.attachments.add(att);
   return att;
 }
@@ -174,4 +175,64 @@ export async function rotateAttachmentImage(att: Attachment, degrees: number): P
 export async function totalAttachmentsSize(): Promise<{ count: number; bytes: number }> {
   const all = await db.attachments.toArray();
   return { count: all.length, bytes: all.reduce((s, a) => s + a.size, 0) };
+}
+
+/* ------------------------- Employer (کارفرما) docs ------------------------- */
+
+/** Save a document onto an employer profile (compressed at rest). */
+export async function saveEmployerAttachment(
+  employerId: string,
+  file: File,
+  title?: string,
+): Promise<Attachment> {
+  const res = await compressImage({ blob: file, name: title?.trim() || file.name });
+  const att = rowFrom(null, null, "other", res, title?.trim() || file.name || "سند.jpg");
+  await db.attachments.add({ ...att, employerId });
+  return att;
+}
+
+/** Save a rendered page (data URL) as an employer document with a title. */
+export async function saveEmployerAttachmentDataUrl(
+  employerId: string,
+  dataUrl: string,
+  name: string,
+): Promise<Attachment> {
+  const raw = dataUrlToBlob(dataUrl);
+  const res = await compressImage({ blob: raw, name, mime: raw.type });
+  const att = rowFrom(null, null, "other", res, name);
+  await db.attachments.add({ ...att, employerId });
+  return att;
+}
+
+export async function getEmployerAttachments(employerId: string): Promise<Attachment[]> {
+  return db.attachments.where("employerId").equals(employerId).sortBy("createdAt");
+}
+
+/* ------------------------------ in-place edits ----------------------------- */
+
+/** Rename a stored document (its title). */
+export async function renameAttachment(id: string, name: string): Promise<void> {
+  const clean = name.trim();
+  if (!clean) throw new Error("عنوان سند الزامی است.");
+  await db.attachments.update(id, { name: clean });
+}
+
+/**
+ * Replace the bytes of an existing document IN PLACE — the studio editor's
+ * «ذخیره در پرونده». The row keeps its slot (kind), owner and createdAt; only
+ * the pixels change. The opt marker is set so the background pass never
+ * re-compresses a user-chosen quality.
+ */
+export async function replaceAttachmentBlob(
+  id: string,
+  next: { blob: Blob; mime: string; name?: string },
+): Promise<void> {
+  const patch: Partial<Attachment> = {
+    blob: next.blob,
+    mime: next.mime,
+    size: next.blob.size,
+    opt: Date.now(),
+  };
+  if (next.name?.trim()) patch.name = next.name.trim();
+  await db.attachments.update(id, patch);
 }

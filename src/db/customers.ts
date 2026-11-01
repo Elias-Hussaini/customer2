@@ -13,6 +13,8 @@ export interface CustomerInput {
   passportIssueDate?: string;
   passportExpiryDate?: string;
   referrer?: string;
+  /** شغل */
+  job?: string;
   notes?: string;
   /** Required in forms: every customer sits inside a list, under a representative. */
   representativeId?: string | null;
@@ -53,6 +55,7 @@ export async function createCustomer(input: CustomerInput): Promise<Customer> {
     passportIssueDate: input.passportIssueDate || undefined,
     passportExpiryDate: input.passportExpiryDate || undefined,
     referrer: input.referrer?.trim() || undefined,
+    job: input.job?.trim() || undefined,
     notes: input.notes?.trim() || undefined,
     representativeId: input.representativeId ?? null,
     listId: input.listId ?? null,
@@ -82,6 +85,7 @@ export async function updateCustomer(id: string, input: CustomerInput): Promise<
     passportIssueDate: input.passportIssueDate || undefined,
     passportExpiryDate: input.passportExpiryDate || undefined,
     referrer: input.referrer?.trim() || undefined,
+    job: input.job?.trim() || undefined,
     notes: input.notes?.trim() || undefined,
     representativeId: input.representativeId ?? null,
     listId: input.listId ?? null,

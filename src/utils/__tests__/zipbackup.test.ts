@@ -421,7 +421,7 @@ describe("complete-system v2 archive (accounting + chats + employers)", () => {
     const built = await buildFullZipBackup();
     const parsed = await parseZipBackup(built.blob);
 
-    expect(parsed.manifest.version).toBe(2);
+    expect(parsed.manifest.version).toBe(3);
     expect(parsed.manifest.counts.employers).toBe(1);
     expect(parsed.manifest.counts.accParties).toBe(1);
     expect(parsed.manifest.counts.accAccounts).toBe(1);
@@ -652,7 +652,7 @@ describe("corruption and version guards", () => {
     const built = await buildFullZipBackup();
     const future = await mutateZip(built.blob, async (out, raw) => {
       await copyEntry(raw, out, "manifest.json", (s) =>
-        s.replace('"version": 2', '"version": 99'),
+        s.replace('"version": 3', '"version": 99'),
       );
       await copyEntry(raw, out, "data/database.json");
       await copyEntry(raw, out, "integrity/checksums.json");

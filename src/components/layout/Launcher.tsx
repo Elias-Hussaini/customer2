@@ -1,6 +1,7 @@
 import { useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
+  Briefcase,
   Calculator,
   FolderArchive,
   FolderOpen,
@@ -8,6 +9,7 @@ import {
   MoreHorizontal,
   Users,
   UserRound,
+  Wand2,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -27,8 +29,10 @@ const ICONS: Record<string, LucideIcon> = {
   lists: FolderOpen,
   customers: Users,
   reps: UserRound,
+  employers: Briefcase,
   archive: FolderArchive,
   accounting: Calculator,
+  studio: Wand2,
 };
 
 /** Hold this long before the drag engages (ms) — touch/pen long-press. */

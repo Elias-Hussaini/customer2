@@ -191,7 +191,7 @@ export function CustomersPage() {
     if (query.trim()) {
       const q = query.trim().toLowerCase();
       list = list.filter((c) =>
-        `${c.firstName ?? ""} ${c.lastName ?? ""} ${c.passportNo ?? ""} ${c.referrer ?? ""} ${
+        `${c.firstName ?? ""} ${c.lastName ?? ""} ${c.passportNo ?? ""} ${c.job ?? ""} ${c.referrer ?? ""} ${
           c.employerId ? (employerById.get(c.employerId)?.name ?? "") : ""
         }`
           .toLowerCase()

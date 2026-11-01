@@ -29,6 +29,8 @@ import {
 import { TransactionFormModal } from "../../accounting/components/TransactionFormModal";
 import { ReconcileModal } from "../../accounting/components/OutstandingModals";
 import { InformationalBadge, TxTypePill } from "../../accounting/components/Bits";
+import { TxActionSheet } from "../../accounting/components/TxActionSheet";
+import type { FinTransaction } from "../../accounting/types";
 
 export function AccAccountDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -40,6 +42,8 @@ export function AccAccountDetailPage() {
   const [reconcileOpen, setReconcileOpen] = useState(false);
   const [txModal, setTxModal] = useState<null | "receipt" | "payment" | "transfer">(null);
   const [exportOpen, setExportOpen] = useState(false);
+  /** Clicked transaction → manage it right here (edit / reverse / purge). */
+  const [activeTx, setActiveTx] = useState<FinTransaction | null>(null);
 
   /** All transactions touching this account, newest first. */
   const accountTx = useMemo(() => {
@@ -187,9 +191,11 @@ export function AccAccountDetailPage() {
                   </p>
                 )}
                 {statementRows.map((r) => (
-                  <div
+                  <button
                     key={r.tx.id}
-                    className="glass flex flex-wrap items-center gap-2.5 rounded-2xl px-3.5 py-2.5 text-xs"
+                    className="glass flex flex-wrap items-center gap-2.5 rounded-2xl px-3.5 py-2.5 text-xs transition-colors hover:bg-brand-500/8"
+                    onClick={() => setActiveTx(r.tx)}
+                    title="برای ویرایش و عملیات، اینجا بزنید"
                   >
                     <span className="num shrink-0 text-ink-400">{formatJalali(r.tx.date)}</span>
                     <span className="num shrink-0 font-bold text-ink-500 dark:text-ink-400">{r.tx.number}</span>
@@ -210,7 +216,7 @@ export function AccAccountDetailPage() {
                     <span className="num shrink-0 rounded-lg bg-white/50 px-2 py-1 text-[11px] font-bold dark:bg-white/8">
                       {formatMoney(toMajor(r.running), account.currency)}
                     </span>
-                  </div>
+                  </button>
                 ))}
               </div>
             ),
@@ -249,6 +255,7 @@ export function AccAccountDetailPage() {
       />
 
       <FinAccountFormModal open={editOpen} onClose={() => setEditOpen(false)} editAccount={account} />
+      <TxActionSheet tx={activeTx} onClose={() => setActiveTx(null)} />
       <ReconcileModal open={reconcileOpen} onClose={() => setReconcileOpen(false)} account={account} />
       <TransactionFormModal
         open={txModal != null}

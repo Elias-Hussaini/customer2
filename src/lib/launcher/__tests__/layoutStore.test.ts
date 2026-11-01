@@ -23,7 +23,7 @@ beforeEach(() => {
 });
 
 describe("layoutStore — defaults & persistence", () => {
-  it("defaults: 5 dock items (dashboard first) + accounting floating", () => {
+  it("defaults: 6 dock items (dashboard first) + accounting floating", () => {
     const items = getLauncherLayout();
     const dock = items.filter((i) => i.place === "dock");
     const free = items.filter((i) => i.place === "free");
@@ -32,6 +32,7 @@ describe("layoutStore — defaults & persistence", () => {
       "nav-lists",
       "nav-customers",
       "nav-reps",
+      "nav-employers",
       "nav-archive",
     ]);
     expect(dock[0].end).toBe(true);
@@ -66,7 +67,7 @@ describe("layoutStore — defaults & persistence", () => {
     const items = getLauncherLayout();
     saveLauncherLayout(items.map((i) => ({ ...i, place: "free", fx: 0.2, fy: 0.2 })));
     const restored = resetLauncherLayout();
-    expect(restored.filter((i) => i.place === "dock").length).toBe(5);
+    expect(restored.filter((i) => i.place === "dock").length).toBe(6);
     expect(restored.find((i) => i.id === "acc-accounting")?.place).toBe("free");
   });
 
@@ -75,7 +76,7 @@ describe("layoutStore — defaults & persistence", () => {
       i.place === "dock" ? { ...i, order: i.order * 10 + 7 } : i,
     );
     const saved = saveLauncherLayout(items);
-    expect(saved.filter((i) => i.place === "dock").map((i) => i.order)).toEqual([0, 1, 2, 3, 4]);
+    expect(saved.filter((i) => i.place === "dock").map((i) => i.order)).toEqual([0, 1, 2, 3, 4, 5]);
   });
 });
 
@@ -133,7 +134,7 @@ describe("previewDrop", () => {
     const dock = preview.filter((i) => i.place === "dock");
     expect(dock[0].id).toBe("nav-customers");
     expect(dock.map((i) => i.order)).toEqual([0, 1, 2, 3, 4, 5].slice(0, dock.length));
-    expect(dock.length).toBe(5);
+    expect(dock.length).toBe(6);
   });
 
   it("outside the dock: the item becomes floating at the pointer", () => {
@@ -150,8 +151,8 @@ describe("previewDrop", () => {
     expect(dragged?.place).toBe("free");
     expect(dragged?.fx).toBeCloseTo(0.75);
     expect(dragged?.fy).toBeCloseTo(0.2);
-    // the dock now has 4 items and accounting is untouched
-    expect(preview.filter((i) => i.place === "dock").length).toBe(4);
+    // the dock now has 5 items and accounting is untouched
+    expect(preview.filter((i) => i.place === "dock").length).toBe(5);
     expect(preview.find((i) => i.id === "acc-accounting")?.place).toBe("free");
   });
 

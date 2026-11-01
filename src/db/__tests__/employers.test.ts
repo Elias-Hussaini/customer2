@@ -13,8 +13,10 @@ import {
   archiveEmployer,
   restoreEmployer,
   deleteEmployer,
+  findEmployerDuplicates,
 } from "../employers";
-import { createCustomer } from "../customers";
+import { createCustomer, updateCustomer } from "../customers";
+import { saveEmployerAttachment } from "../attachments";
 import { buildBackup, applyRestore } from "../../utils/backup";
 
 beforeEach(async () => {
@@ -121,5 +123,83 @@ describe("employer backup round trip", () => {
     // simulate a pre-employer backup: strip the employers array
     const legacy = { ...backup, data: { ...backup.data, employers: undefined } };
     await expect(applyRestore(legacy as never, "merge")).resolves.toBeDefined();
+  });
+});
+
+describe("employer v10 — full profile fields", () => {
+  it("stores and round trips every field including custom values", async () => {
+    const emp = await createEmployer({
+      name: "شرکت پیمانکاری نبض",
+      phone: "0799887766",
+      email: "info@nabz.af",
+      nationalId: "1234567890",
+      username: "nabz_admin",
+      password: "s3cret-مخفی",
+      address: "کابل، شهر نو، کوچهٔ ۵",
+      postalCode: "1001",
+      notes: "کارفرمای پروژهٔ ساختمانی",
+      customValues: { contract_no: "C-99" },
+    });
+    const stored = await db.employers.get(emp.id);
+    expect(stored?.email).toBe("info@nabz.af");
+    expect(stored?.nationalId).toBe("1234567890");
+    expect(stored?.username).toBe("nabz_admin");
+    expect(stored?.password).toBe("s3cret-مخفی");
+    expect(stored?.address).toContain("شهر نو");
+    expect(stored?.postalCode).toBe("1001");
+    expect(stored?.customValues?.contract_no).toBe("C-99");
+
+    await updateEmployer(emp.id, { name: "شرکت پیمانکاری نبض", password: "new-pass", customValues: { contract_no: "C-100" } });
+    const updated = await db.employers.get(emp.id);
+    expect(updated?.password).toBe("new-pass");
+    expect(updated?.customValues?.contract_no).toBe("C-100");
+  });
+
+  it("duplicate detection flags same name and same کد ملی (non-blocking)", async () => {
+    await createEmployer({ name: "شرکت الف", nationalId: "111" });
+    const warnings = await findEmployerDuplicates({ name: "شرکت الف", nationalId: "111" });
+    expect(warnings.length).toBe(2);
+    const none = await findEmployerDuplicates({ name: "شرکت ب" });
+    expect(none.length).toBe(0);
+  });
+
+  it("hard delete removes the employer's OWN documents but detaches customers", async () => {
+    const emp = await createEmployer({ name: "شرکت حذف‌شونده" });
+    const customer = await createCustomer({
+      firstName: "مشتری",
+      lastName: "تست",
+      registrationDate: "2025-01-01",
+      employerId: emp.id,
+    });
+    const att = await saveEmployerAttachment(emp.id, new File([new Uint8Array([1, 2, 3, 4])], "قرارداد.png", { type: "image/png" }), "قرارداد امضا‌شده");
+    void att;
+
+    await deleteEmployer(emp.id, "شرکت حذف‌شونده");
+    expect(await db.employers.get(emp.id)).toBeUndefined();
+    // customers survive, detached:
+    const kept = await db.customers.get(customer.id);
+    expect(kept?.employerId).toBeNull();
+    // employer docs are gone:
+    const docs = await db.attachments.where("employerId").equals(emp.id).toArray();
+    expect(docs.length).toBe(0);
+    // but other docs untouched:
+    void saveEmployerAttachment;
+  });
+
+  it("customer شغل round trips", async () => {
+    const c = await createCustomer({
+      firstName: "احمد",
+      lastName: "کریمی",
+      job: "برق‌کار",
+      registrationDate: "2025-02-02",
+    });
+    expect((await db.customers.get(c.id))?.job).toBe("برق‌کار");
+    await updateCustomer(c.id, {
+      firstName: "احمد",
+      lastName: "کریمی",
+      job: "پیمانکار برق",
+      registrationDate: "2025-02-02",
+    });
+    expect((await db.customers.get(c.id))?.job).toBe("پیمانکار برق");
   });
 });

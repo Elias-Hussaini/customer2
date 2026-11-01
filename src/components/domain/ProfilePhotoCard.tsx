@@ -13,6 +13,7 @@ import { Modal } from "../ui/Modal";
 import {
   fileToSquareDataUrl,
   setCustomerPhoto,
+  setEmployerPhoto,
   setRepresentativePhoto,
   validatePhotoFile,
 } from "../../db/photos";
@@ -20,7 +21,7 @@ import { useConfirm } from "../../hooks/useConfirm";
 import { useToast } from "../../hooks/useToast";
 
 interface Props {
-  kind: "customer" | "rep";
+  kind: "customer" | "rep" | "employer";
   id: string;
   photo?: string | null;
   name: string;
@@ -47,6 +48,7 @@ export function ProfilePhotoCard({ kind, id, photo, name, subtitle }: Props) {
     try {
       const dataUrl = await fileToSquareDataUrl(file);
       if (kind === "customer") await setCustomerPhoto(id, dataUrl, name);
+      else if (kind === "employer") await setEmployerPhoto(id, dataUrl, name);
       else await setRepresentativePhoto(id, dataUrl, name);
       toast.success("عکس پروفایل ذخیره شد");
     } catch {
@@ -65,6 +67,7 @@ export function ProfilePhotoCard({ kind, id, photo, name, subtitle }: Props) {
     });
     if (!ok) return;
     if (kind === "customer") await setCustomerPhoto(id, null, name);
+    else if (kind === "employer") await setEmployerPhoto(id, null, name);
     else await setRepresentativePhoto(id, null, name);
     toast.info("عکس پروفایل حذف شد");
   };

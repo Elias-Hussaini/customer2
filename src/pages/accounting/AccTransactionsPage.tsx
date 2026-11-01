@@ -14,6 +14,7 @@ import {
   Pencil,
   Plus,
   Receipt,
+  Trash2,
   Undo2,
 } from "lucide-react";
 import { Button, IconButton } from "../../components/ui/Button";
@@ -28,7 +29,7 @@ import { useConfirm } from "../../hooks/useConfirm";
 import { useToast } from "../../hooks/useToast";
 import { formatJalali } from "../../utils/jalali";
 import { formatMoney } from "../../utils/num";
-import { reverseTransaction, cancelInformationalTx } from "../../accounting/repo";
+import { reverseTransaction, cancelInformationalTx, deleteTransactionPermanently } from "../../accounting/repo";
 import {
   TX_TYPE_LABELS,
   type FinTransaction,
@@ -161,6 +162,24 @@ export function AccTransactionsPage() {
     }
   };
 
+  const doPurge = async (tx: FinTransaction) => {
+    const ok = await confirm({
+      title: `حذف دائمی ${tx.number} از تاریخچه؟`,
+      message:
+        "تراکنش با همه اثر مالی‌اش برای همیشه پاک می‌شود (اگر برگشت خورده باشد، تراکنش خنثی‌سازش هم همراهش پاک می‌شود). اسناد پیوست فقط جدا می‌شوند و پاک نمی‌شوند. این عمل بازگشت‌پذیر نیست!",
+      danger: true,
+      confirmLabel: "حذف دائمی",
+    });
+    if (!ok) return;
+    try {
+      await deleteTransactionPermanently(tx.id);
+      toast.success("تراکنش برای همیشه حذف شد");
+      setDetail(null);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "حذف دائمی ناموفق بود.");
+    }
+  };
+
   const columns: Column<FinTransaction>[] = [
     {
       key: "date",
@@ -254,6 +273,7 @@ export function AccTransactionsPage() {
                     : [{ label: "ابطال رکورد", icon: Ban, onClick: () => void doCancel(t) }]),
                 ]
               : []),
+            { label: "حذف دائمی از تاریخچه", icon: Trash2, danger: true, onClick: () => void doPurge(t) },
           ]}
         />
       ),
@@ -463,6 +483,15 @@ export function AccTransactionsPage() {
                       ابطال رکورد
                     </Button>
                   ))}
+                <Button
+                  size="sm"
+                  variant="danger-soft"
+                  icon={Trash2}
+                  className="!text-rose-600 dark:!text-rose-400"
+                  onClick={() => void doPurge(detail)}
+                >
+                  حذف دائمی
+                </Button>
               </div>
             </div>
           )

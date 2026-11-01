@@ -54,7 +54,7 @@ import {
 import pkg from "../../package.json";
 
 export const ZIP_BACKUP_FORMAT = "emanagement-zip-backup";
-export const ZIP_BACKUP_VERSION = 2;
+export const ZIP_BACKUP_VERSION = 3;
 /** Binary magic at the start of every encrypted backup envelope. */
 export const ENC_ZIP_MAGIC = "EMENCZIP";
 export const ENC_ZIP_FORMAT = "emanagement-encrypted-zip";
@@ -74,6 +74,7 @@ const DATABASE_PATH = "data/database.json";
 const CHECKSUMS_PATH = "integrity/checksums.json";
 const ASSET_PREFIX = "assets/attachments/";
 const ACC_ASSET_PREFIX = "assets/acc-docs/";
+const STUDIO_ASSET_PREFIX = "assets/studio/";
 
 /** Accounting tables — bundled into the full-system snapshot (v2). */
 const ACC_TABLES = [
@@ -108,6 +109,8 @@ const RESTORE_TABLES = [
   db.accDocs,
   db.accMeta,
   db.aiChats,
+  db.studioFolders,
+  db.studioImages,
 ];
 
 /** Record tables whose rows are upserted by id (used for counting/duplicates). */
@@ -173,6 +176,8 @@ export interface ZipManifest {
   aiConfigIncluded: boolean;
   /** v2: accounting documents bundled under assets/acc-docs/. */
   accDocs: { count: number; bytes: number };
+  /** v3: studio images (ابزار عکس) bundled under assets/studio/. */
+  studioImages: { count: number; bytes: number };
   generator: string;
 }
 
@@ -189,6 +194,8 @@ export interface ZipDatabasePayload extends BackupFile {
     aiWorkers?: AiWorker[];
     aiMeta?: AiSettings | null;
     chats?: AgentChatRecord[];
+    studioFolders?: import("../db/studio").StudioFolder[];
+    studioImages?: import("../db/studio").StudioImageMeta[];
   };
 }
 
@@ -199,6 +206,8 @@ export interface ParsedZipBackup {
   assets: Map<string, Blob>;
   /** Accounting docId → binary content (SHA-256 verified). v2 archives only. */
   accAssets: Map<string, Blob>;
+  /** Studio imageId → binary content (SHA-256 verified). v3 archives only. */
+  studioAssets: Map<string, Blob>;
   /** Non-fatal notes detected while parsing (unknown files, dangling refs…). */
   warnings: string[];
 }
@@ -239,6 +248,7 @@ function stripAttachmentBlob(att: Attachment): AttachmentMeta {
   return {
     id: att.id,
     customerId: att.customerId,
+    employerId: att.employerId ?? null,
     paymentId: att.paymentId ?? null,
     kind: att.kind,
     name: att.name,
@@ -247,6 +257,11 @@ function stripAttachmentBlob(att: Attachment): AttachmentMeta {
     createdAt: att.createdAt,
     opt: att.opt,
   };
+}
+
+function stripStudioImageBlob(img: import("../db/studio").StudioImage): import("../db/studio").StudioImageMeta {
+  const { blob: _blob, ...meta } = img;
+  return meta;
 }
 
 function stripAccDocBlob(doc: AccDoc): Omit<AccDoc, "blob"> {
@@ -285,6 +300,8 @@ export async function buildFullZipBackup(
   let acc: AccBackupData | null = null;
   let accDocs: AccDoc[] = [];
   let chats: AgentChatRecord[] = [];
+  let studioFolders: import("../db/studio").StudioFolder[] = [];
+  let studioImages: import("../db/studio").StudioImage[] = [];
 
   const snapshotTables = encrypted
     ? [...RESTORE_TABLES, db.aiWorkers, db.aiMeta]
@@ -314,6 +331,11 @@ export async function buildFullZipBackup(
     };
     // AI assistant chat history (v2).
     chats = await db.aiChats.toArray();
+    // Image studio (v3) — folders + saved images.
+    [studioFolders, studioImages] = await Promise.all([
+      db.studioFolders.toArray(),
+      db.studioImages.toArray(),
+    ]);
     if (encrypted) {
       // API keys only ever leave the device inside an encrypted archive.
       aiWorkers = await db.aiWorkers.toArray();
@@ -353,6 +375,9 @@ export async function buildFullZipBackup(
     accDocs: accData.docsMeta.length,
     // گفتگوهای دستیار (v2)
     aiChats: chats.length,
+    // ابزار عکس (v3)
+    studioFolders: studioFolders.length,
+    studioImages: studioImages.length,
   };
 
   const payload: ZipDatabasePayload = {
@@ -367,6 +392,8 @@ export async function buildFullZipBackup(
       acc: accData,
       chats,
       attachments: attMetas,
+      studioFolders,
+      studioImages: studioImages.map(stripStudioImageBlob),
       ...(encrypted ? { aiWorkers, aiMeta } : {}),
     },
   };
@@ -387,6 +414,10 @@ export async function buildFullZipBackup(
     accDocs: {
       count: accDocs.length,
       bytes: accDocs.reduce((s, d) => s + d.size, 0),
+    },
+    studioImages: {
+      count: studioImages.length,
+      bytes: studioImages.reduce((s, i) => s + i.size, 0),
     },
     generator: "E-managment",
   };
@@ -422,7 +453,22 @@ export async function buildFullZipBackup(
     accPacked++;
     onProgress?.({
       phase: "reading",
-      percent: 32 + Math.round((accPacked / Math.max(1, accDocs.length)) * 8),
+      percent: 32 + Math.round((accPacked / Math.max(1, accDocs.length)) * 4),
+    });
+  }
+
+  // Studio images (v3) — bytes exactly as the editor produced them.
+  const studioAssetBytes = new Map<string, Uint8Array>();
+  let studioPacked = 0;
+  for (const img of studioImages) {
+    assertNotCancelled(opts);
+    const bytes = new Uint8Array(await img.blob.arrayBuffer());
+    studioAssetBytes.set(img.id, bytes);
+    checksumFiles[`${STUDIO_ASSET_PREFIX}${img.id}`] = await sha256Hex(bytes);
+    studioPacked++;
+    onProgress?.({
+      phase: "reading",
+      percent: 36 + Math.round((studioPacked / Math.max(1, studioImages.length)) * 4),
     });
   }
 
@@ -440,6 +486,10 @@ export async function buildFullZipBackup(
   const accDocFolder = zip.folder("assets")!.folder("acc-docs")!;
   for (const [id, bytes] of accAssetBytes) {
     accDocFolder.file(id, bytes, { compression: "STORE" });
+  }
+  const studioFolder = zip.folder("assets")!.folder("studio")!;
+  for (const [id, bytes] of studioAssetBytes) {
+    studioFolder.file(id, bytes, { compression: "STORE" });
   }
 
   assertNotCancelled(opts);
@@ -700,9 +750,11 @@ export async function parseZipBackup(
 
   const assetEntries = entryNames.filter((n) => n.startsWith(ASSET_PREFIX));
   const accAssetEntries = entryNames.filter((n) => n.startsWith(ACC_ASSET_PREFIX));
+  const studioAssetEntries = entryNames.filter((n) => n.startsWith(STUDIO_ASSET_PREFIX));
   const knownPaths = new Set<string>([MANIFEST_PATH, DATABASE_PATH, CHECKSUMS_PATH]);
   for (const e of assetEntries) knownPaths.add(e);
   for (const e of accAssetEntries) knownPaths.add(e);
+  for (const e of studioAssetEntries) knownPaths.add(e);
   const unknownFiles = entryNames.filter((n) => !knownPaths.has(n));
   if (unknownFiles.length > 0) {
     warnings.push(
@@ -749,6 +801,8 @@ export async function parseZipBackup(
 
   // ---- accounting (v2): records + document bytes ----------------------------
   const accAssets = new Map<string, Blob>();
+  /** Total uncompressed bytes of acc-docs seen so far (studio adds on top). */
+  let accBytesTotal = 0;
   const accData = payload.data.acc;
   if (accData) {
     const accCountKeys = [
@@ -793,6 +847,7 @@ export async function parseZipBackup(
       }
       accAssets.set(id, new Blob([bytes], { type: meta.mime }));
     }
+    accBytesTotal = accBytes;
     if (accAssets.size !== accMetaById.size) {
       const missing = accData.docsMeta.filter((d) => !accAssets.has(d.id)).length;
       throw new Error(
@@ -811,6 +866,66 @@ export async function parseZipBackup(
   const chatIds = new Set(chats.map((c) => c.id));
   if (chatIds.size !== chats.length) {
     throw new Error("شناسه گفتگوی تکراری در بایگانی — فایل خراب است.");
+  }
+
+  // ---- studio (v3): folders + image bytes -----------------------------------
+  const studioAssets = new Map<string, Blob>();
+  const studioFolders = payload.data.studioFolders ?? [];
+  const studioImages = payload.data.studioImages ?? [];
+  if (manifest.version >= 3) {
+    if (manifest.counts.studioFolders != null && studioFolders.length !== manifest.counts.studioFolders) {
+      throw new Error("تعداد پوشه‌های ابزار عکس با manifest نمی‌خواند — بایگانی ناقص است.");
+    }
+    if (manifest.counts.studioImages != null && studioImages.length !== manifest.counts.studioImages) {
+      throw new Error("تعداد تصاویر ابزار عکس با manifest نمی‌خواند — بایگانی ناقص است.");
+    }
+    const folderIdSet = new Set(studioFolders.map((f) => f.id));
+    if (folderIdSet.size !== studioFolders.length) {
+      throw new Error("شناسه پوشه تکراری در ابزار عکس — بایگانی خراب است.");
+    }
+    const imageIds = new Set(studioImages.map((i) => i.id));
+    if (imageIds.size !== studioImages.length) {
+      throw new Error("شناسه تصویر تکراری در ابزار عکس — بایگانی خراب است.");
+    }
+    const studioMetaById = new Map(studioImages.map((i) => [i.id, i]));
+    let studioBytes = 0;
+    for (const entryName of studioAssetEntries) {
+      const id = entryName.slice(STUDIO_ASSET_PREFIX.length);
+      const meta = studioMetaById.get(id);
+      if (!meta) {
+        throw new Error(`فایل ابزار عکس بدون متادیتا در بایگانی: ${id}`);
+      }
+      const entry = loaded.file(entryName);
+      if (!entry) continue;
+      const bytes = new Uint8Array(await entry.async("uint8array"));
+      studioBytes += bytes.length;
+      if (totalBytes + accBytesTotal + studioBytes > MAX_UNCOMPRESSED_BYTES) {
+        throw new Error("حجم باز شدهٔ بایگانی بیش از حد مجاز است.");
+      }
+      if ((await sha256Hex(bytes)) !== sums.files[entryName]) {
+        throw new Error(`فایل ابزار عکس «${meta.name}» با چک‌سام نمی‌خواند — خراب یا دستکاری شده است.`);
+      }
+      if (bytes.length !== meta.size) {
+        throw new Error(`حجم فایل ابزار عکس «${meta.name}» با متادیتا نمی‌خواند.`);
+      }
+      studioAssets.set(id, new Blob([bytes], { type: meta.mime }));
+    }
+    if (studioAssets.size !== studioMetaById.size) {
+      const missing = studioImages.filter((i) => !studioAssets.has(i.id)).length;
+      throw new Error(
+        `بایگانی ناقص است — ${missing} فایل ابزار عکس کم دارد. از نسخهٔ سالم پشتیبان استفاده کنید.`,
+      );
+    }
+    const danglingFolders = studioImages.filter(
+      (i) => i.folderId && !folderIdSet.has(i.folderId),
+    ).length;
+    if (danglingFolders > 0) {
+      warnings.push(
+        `${danglingFolders} تصویر ابزار عکس به پوشه‌ای اشاره می‌کند که در این بایگانی نیست — در «سایر» نگه داشته می‌شود.`,
+      );
+    }
+  } else if (studioAssetEntries.length > 0) {
+    throw new Error("فایل‌های ابزار عکس در بایگانی قدیمی — فایل خراب است.");
   }
 
   // v1 archives predate the complete-system format.
@@ -846,7 +961,7 @@ export async function parseZipBackup(
   }
 
   onProgress?.({ phase: "validating", percent: 75 });
-  return { manifest, backup: payload, assets, accAssets, warnings };
+  return { manifest, backup: payload, assets, accAssets, studioAssets, warnings };
 }
 
 /* ------------------------------ unified facade ---------------------------- */
@@ -891,6 +1006,8 @@ export interface UnifiedPreview {
   counts: Record<string, number>;
   /** ZIP only; legacy JSON never carries attachments. */
   attachments: { count: number; bytes: number } | null;
+  /** ZIP v3+ only; studio images (ابزار عکس). */
+  studioImages: { count: number; bytes: number } | null;
   duplicates: number;
   existingCounts: Record<string, number>;
   warnings: string[];
@@ -920,6 +1037,7 @@ export async function buildUnifiedPreview(b: AnyBackup): Promise<UnifiedPreview>
       kind: "zip",
       counts: manifest.counts,
       attachments: { ...manifest.attachments },
+      studioImages: manifest.version >= 3 ? { ...manifest.studioImages } : null,
       duplicates,
       existingCounts,
       warnings,
@@ -937,6 +1055,7 @@ export async function buildUnifiedPreview(b: AnyBackup): Promise<UnifiedPreview>
     kind: "legacy",
     counts: b.backup.counts,
     attachments: null,
+    studioImages: null,
     duplicates: preview.duplicates,
     existingCounts: preview.existingCounts,
     warnings,
@@ -1007,6 +1126,7 @@ export async function applyZipRestore(
   const d = parsed.backup.data;
   const restoreAi = Array.isArray(d.aiWorkers);
   const restoreAcc = d.acc != null;
+  const restoreStudio = parsed.manifest.version >= 3;
   const tables: AnyTable[] = restoreAi
     ? [...RESTORE_TABLES, db.aiWorkers, db.aiMeta]
     : [...RESTORE_TABLES];
@@ -1023,6 +1143,7 @@ export async function applyZipRestore(
       if (mode === "replace") {
         // v1 archives never carried accounting/chats — replacing from them
         // must NOT wipe those worlds (they stay untouched by design).
+        // v2 archives predate the studio (ابزار عکس) — same protection.
         const PRESERVE_ON_V1 = new Set([
           "accParties",
           "accAccounts",
@@ -1032,8 +1153,14 @@ export async function applyZipRestore(
           "accMeta",
           "aiChats",
         ]);
-        const clearList =
-          parsed.manifest.version >= 2 ? tables : tables.filter((t) => !PRESERVE_ON_V1.has(t.name));
+        const PRESERVE_ON_V2 = new Set(["studioFolders", "studioImages"]);
+        let clearList = tables;
+        if (parsed.manifest.version < 2) {
+          clearList = clearList.filter((t) => !PRESERVE_ON_V1.has(t.name));
+        }
+        if (!restoreStudio) {
+          clearList = clearList.filter((t) => !PRESERVE_ON_V2.has(t.name));
+        }
         for (const t of clearList) await t.clear();
       }
       const upsert = async (table: AnyTable, records: { id: string }[]) => {
@@ -1098,6 +1225,20 @@ export async function applyZipRestore(
       for (const chat of d.chats ?? []) {
         await db.aiChats.put(chat as never);
       }
+
+      // ابزار عکس (v3) — folders + verified bytes reunited by id.
+      if (restoreStudio) {
+        for (const folder of d.studioFolders ?? []) {
+          await db.studioFolders.put(folder as never);
+        }
+        for (const meta of d.studioImages ?? []) {
+          const blob = parsed.studioAssets.get(meta.id);
+          if (!blob) throw new Error(`فایل ابزار عکس «${meta.name}» در بایگانی نیست.`);
+          // A folder that exists locally but not in THIS archive keeps its
+          // images on merge; on replace the table was cleared above.
+          await db.studioImages.put({ ...meta, blob } as never);
+        }
+      }
     });
 
     // Post-apply verification: every backed-up id must exist, attachment
@@ -1142,6 +1283,16 @@ export async function applyZipRestore(
       const row = await db.aiChats.get(chat.id);
       if (row == null) throw new Error("تأیید نهایی گفتگوها ناموفق بود.");
     }
+    if (restoreStudio) {
+      for (const meta of d.studioImages ?? []) {
+        const row = (await db.studioImages.get(meta.id)) as
+          | { size: number; name: string }
+          | undefined;
+        if (!row || row.size !== meta.size) {
+          throw new Error("تأیید نهایی فایل‌های ابزار عکس ناموفق بود.");
+        }
+      }
+    }
   } catch (e) {
     // The transaction itself is atomic; this covers post-commit verification
     // failures and any unexpected error path — restore the pre-apply state.
@@ -1161,7 +1312,7 @@ export async function applyZipRestore(
         mode === "replace"
           ? "بازیابی کامل از پشتیبان ZIP انجام شد"
           : "بازیابی ادغامی از پشتیبان ZIP انجام شد",
-      detail: `${inserted} رکورد جدید، ${updated} به‌روزرسانی، ${d.attachments?.length ?? 0} پیوست${restoreAcc ? `، ${d.acc?.docsMeta?.length ?? 0} سند حسابداری` : ""}${d.chats?.length ? `، ${d.chats.length} گفتگو` : ""}`,
+      detail: `${inserted} رکورد جدید، ${updated} به‌روزرسانی، ${d.attachments?.length ?? 0} پیوست${restoreAcc ? `، ${d.acc?.docsMeta?.length ?? 0} سند حسابداری` : ""}${d.chats?.length ? `، ${d.chats.length} گفتگو` : ""}${restoreStudio ? `، ${d.studioImages?.length ?? 0} تصویر ابزار عکس` : ""}`,
     });
   } catch {
     /* activity log is best-effort */

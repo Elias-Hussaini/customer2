@@ -23,7 +23,7 @@ export type FieldType =
   | "checkbox"
   | "url";
 
-export type FieldEntity = "customer" | "request";
+export type FieldEntity = "customer" | "request" | "employer";
 
 export interface Representative {
   id: string;
@@ -38,12 +38,28 @@ export interface Representative {
   archivedAt?: number | null;
 }
 
-/** کارفرما — optional employer/sponsor attached to a customer. */
+/** کارفرما — optional employer/sponsor attached to a customer.
+ *
+ *  Managed as a full entity (like customers & representatives): its own
+ *  section, profile page with documents, and a rich contact record. */
 export interface Employer {
   id: string;
   name: string;
   phone?: string;
+  email?: string;
+  /** کد ملی */
+  nationalId?: string;
+  /** نام کاربری سامانه‌های کارفرما */
+  username?: string;
+  /** رمز عبور — kept ONLY in the local IndexedDB, masked everywhere. */
+  password?: string;
+  address?: string;
+  postalCode?: string;
   notes?: string;
+  /** Round profile photo / logo — JPEG data URL. */
+  photo?: string | null;
+  /** Values keyed by custom-field key (entity: employer). */
+  customValues?: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;
   archivedAt?: number | null;
@@ -61,6 +77,8 @@ export interface Customer {
   passportIssueDate?: string;
   passportExpiryDate?: string;
   referrer?: string;
+  /** شغل — free-text occupation. */
+  job?: string;
   notes?: string;
   /** Every customer is registered under a representative and inside a list. */
   representativeId?: string | null;
@@ -226,8 +244,10 @@ export type AttachmentKind = string;
 
 export interface Attachment {
   id: string;
-  /** Owning customer — null for payment receipt photos. */
+  /** Owning customer — null for payment receipts and employer documents. */
   customerId: string | null;
+  /** Set for employer (کارفرما) profile documents. */
+  employerId?: string | null;
   /** Set when this is the receipt photo of a payment. */
   paymentId?: string | null;
   /** DocType id ("passport", "nidFront", … custom ids) or "receipt" / "other". */
@@ -293,8 +313,9 @@ export interface AppPreferences {
  */
 export interface AttachmentMeta {
   id: string;
-  /** Owning customer — null for payment receipt photos. */
+  /** Owning customer — null for payment receipt photos and employer documents. */
   customerId: string | null;
+  employerId?: string | null;
   paymentId?: string | null;
   kind: AttachmentKind;
   name: string;
@@ -304,6 +325,37 @@ export interface AttachmentMeta {
   /** Last at-rest compression timestamp — survives the ZIP round trip. */
   opt?: number;
 }
+
+
+/* ------------------------- Image Studio (ابزار عکس) ----------------------- */
+
+/** A named folder in the image studio's in-app library. */
+export interface StudioFolder {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** An edited image saved into the studio library (bytes as chosen by the user). */
+export interface StudioImage {
+  id: string;
+  /** null = «سایر» (unfiled). */
+  folderId: string | null;
+  name: string;
+  mime: string;
+  size: number;
+  blob: Blob;
+  width: number;
+  height: number;
+  /** Optional note attached in the library. */
+  note?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Metadata only — bytes travel separately inside the ZIP backup. */
+export type StudioImageMeta = Omit<StudioImage, "blob">;
 
 /** JSON backup file (attachments excluded by design). */
 export interface BackupFile {
@@ -340,6 +392,12 @@ export interface BackupFile {
      *  A legacy JSON restore refuses files carrying this field — the
      *  complete ZIP archive must be used instead. */
     attachments?: AttachmentMeta[];
+    /** ZIP full backup (v3+): studio folders (ابزار عکس) — records only. */
+    studioFolders?: import("../db/studio").StudioFolder[];
+    /** ZIP full backup (v3+) only: studio image metadata (bytes live in
+     *  assets/studio/). A legacy JSON restore refuses files carrying this
+     *  field — the complete ZIP archive must be used instead. */
+    studioImages?: import("../db/studio").StudioImageMeta[];
     /** ZIP full backup (encrypted) only: AI worker accounts. API keys are
      *  only ever exported inside a password-encrypted archive. */
     aiWorkers?: import("../lib/ai/types").AiWorker[];

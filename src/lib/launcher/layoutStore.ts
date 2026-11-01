@@ -64,7 +64,8 @@ export function defaultLayout(): LauncherItem[] {
     { id: "nav-lists", to: "/lists", label: "لیست‌ها", icon: "lists", place: "dock", order: 1 },
     { id: "nav-customers", to: "/customers", label: "مشتریان", icon: "customers", place: "dock", order: 2 },
     { id: "nav-reps", to: "/representatives", label: "نمایندگان", icon: "reps", place: "dock", order: 3 },
-    { id: "nav-archive", to: "/smart-archive", label: "بایگانی هوشمند", icon: "archive", place: "dock", order: 4 },
+    { id: "nav-employers", to: "/employers", label: "کارفرماها", icon: "employers", place: "dock", order: 4 },
+    { id: "nav-archive", to: "/smart-archive", label: "بایگانی هوشمند", icon: "archive", place: "dock", order: 5 },
     // The accounting button starts as a round floating button on the left
     // edge — its old home — and can be dragged anywhere (or into the dock).
     { id: "acc-accounting", to: "/accounting", label: "حسابداری", icon: "accounting", place: "free", order: 0, fx: 0.1, fy: 0.68 },
@@ -87,12 +88,41 @@ function read(): LauncherItem[] {
     const parsed = raw ? (JSON.parse(raw) as LauncherItem[]) : null;
     cached =
       Array.isArray(parsed) && parsed.length > 0
-        ? parsed.map(cloneItem)
+        ? mergeMissingDefaults(parsed.map(cloneItem))
         : defaultLayout();
   } catch {
     cached = defaultLayout();
   }
   return cached;
+}
+
+/**
+ * Forward-compat migration: a stored layout from BEFORE a new default item
+ * existed (e.g. «کارفرماها», added with the employers section) would never
+ * show it. Merge any missing default item back in — dock items append at
+ * the end of the dock, free items are never injected (they're deliberate
+ * user choices only). The merged layout is PERSISTED back so the storage
+ * self-heals instead of re-migrating on every launch.
+ */
+function mergeMissingDefaults(stored: LauncherItem[]): LauncherItem[] {
+  const defaults = defaultLayout();
+  const byId = new Map(stored.map((i) => [i.id, i]));
+  const changed = defaults.filter((d) => !byId.has(d.id) && d.place === "dock");
+  if (changed.length === 0) return stored;
+  const maxDockOrder = Math.max(
+    0,
+    ...stored.filter((i) => i.place === "dock").map((i) => i.order),
+  );
+  const merged = normalize([
+    ...stored,
+    ...changed.map((d, idx) => ({ ...d, order: maxDockOrder + 1 + idx })),
+  ]);
+  try {
+    storage().setItem(KEY, JSON.stringify(merged));
+  } catch {
+    /* private mode — the in-memory layout is enough for this session */
+  }
+  return merged;
 }
 
 function normalize(items: LauncherItem[]): LauncherItem[] {
