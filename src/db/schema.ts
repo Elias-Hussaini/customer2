@@ -140,6 +140,11 @@ export class VisaDB extends Dexie {
       studioFolders: "id, createdAt",
       studioImages: "id, folderId, createdAt, updatedAt",
     });
+    // v11: Windows-style folder hierarchy — lists gain a parentId so folders
+    // can nest inside each other (root = null). Existing lists stay at root.
+    this.version(11).stores({
+      lists: "id, name, createdAt, archivedAt, parentId",
+    });
   }
 }
 

@@ -14,7 +14,9 @@ import type { StudioImage } from "../../db/studio";
 export type StudioSource =
   | { kind: "attachment"; attachment: Attachment }
   | { kind: "library"; image: StudioImage }
-  | { kind: "files"; files: File[] };
+  | { kind: "files"; files: File[] }
+  /** A profile photo (عکس پروفایل) — customer / rep / employer avatar. */
+  | { kind: "photo"; entity: "customer" | "rep" | "employer"; id: string; name: string; photo: string };
 
 let pending: { source: StudioSource; stamp: number } | null = null;
 

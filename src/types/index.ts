@@ -137,6 +137,8 @@ export interface ListFolder {
   createdAt: number;
   updatedAt: number;
   archivedAt?: number | null;
+  /** Windows-style hierarchy — the folder this list lives inside (null = root). */
+  parentId?: string | null;
 }
 
 export interface Payment {

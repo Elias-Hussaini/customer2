@@ -6,10 +6,12 @@
  */
 
 import { useRef, useState } from "react";
-import { Camera, Eye, Loader2, Trash2 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Camera, Eye, Loader2, Pencil, Trash2 } from "lucide-react";
 import { Avatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
 import { Modal } from "../ui/Modal";
+import { openStudioFor } from "../../lib/studio/session";
 import {
   fileToSquareDataUrl,
   setCustomerPhoto,
@@ -30,12 +32,21 @@ interface Props {
 
 export function ProfilePhotoCard({ kind, id, photo, name, subtitle }: Props) {
   const toast = useToast();
+  const navigate = useNavigate();
   const { confirm } = useConfirm();
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [viewing, setViewing] = useState(false);
 
   const pick = () => fileRef.current?.click();
+
+  /** Open the studio editor on this avatar — same tools as every other
+   *  image; saving square-crops and writes straight back onto the record. */
+  const editInStudio = () => {
+    if (!photo) return;
+    openStudioFor({ kind: "photo", entity: kind, id, name, photo });
+    navigate("/studio");
+  };
 
   const onFile = async (file: File | undefined) => {
     if (!file) return;
@@ -98,6 +109,11 @@ export function ProfilePhotoCard({ kind, id, photo, name, subtitle }: Props) {
           {photo && (
             <Button size="sm" variant="glass" icon={Eye} onClick={() => setViewing(true)}>
               مشاهده عکس
+            </Button>
+          )}
+          {photo && (
+            <Button size="sm" variant="glass" icon={Pencil} onClick={editInStudio}>
+              ویرایش عکس
             </Button>
           )}
           {photo && (

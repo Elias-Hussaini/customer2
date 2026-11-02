@@ -1,6 +1,16 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { FileDown, FilePenLine, FilePlus2, FolderInput, ListChecks, Users } from "lucide-react";
+import {
+  ChevronLeft,
+  FileDown,
+  FilePenLine,
+  FilePlus2,
+  FolderInput,
+  FolderPlus,
+  Home,
+  ListChecks,
+  Users,
+} from "lucide-react";
 import { PageHeader } from "../components/ui/StatCard";
 import { EmptyState } from "../components/ui/EmptyState";
 import { FilterSelect, SearchBox, SectionCard } from "../components/ui/inputs";
@@ -8,8 +18,10 @@ import { JalaliDatePicker } from "../components/ui/JalaliDatePicker";
 import { Modal } from "../components/ui/Modal";
 import { RequestsTable } from "../components/domain/RequestsTable";
 import { ListFormModal } from "../components/domain/ListFormModal";
+import { WinFolderIcon } from "../components/domain/FolderIcon";
 import { ExportDialog } from "../components/exports/ExportDialog";
 import { moveRequestsToList } from "../db/requests";
+import { childrenOf } from "../db/lists";
 import { uiActions } from "../components/layout/uiStore";
 import {
   useCustomers,
@@ -33,7 +45,7 @@ import {
 } from "../utils/requestDateFilter";
 import { customerFullName } from "../db/customers";
 import { requestStatusFa } from "../types";
-import type { VisaRequest } from "../types";
+import type { VisaRequest, ListFolder } from "../types";
 import { currencyLabel } from "../types";
 
 export function ListDetailPage() {
@@ -58,9 +70,34 @@ export function ListDetailPage() {
   const [from, setFrom] = useState<string | null>(null);
   const [to, setTo] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
+  const [subOpen, setSubOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [moveTarget, setMoveTarget] = useState<VisaRequest | null>(null);
   const [moveListId, setMoveListId] = useState("");
+
+  /** Breadcrumb chain of THIS folder (root → parent → … → this list). */
+  const path = useMemo<ListFolder[]>(() => {
+    if (!list || !lists) return [];
+    const byId = new Map(lists.map((l) => [l.id, l]));
+    const chain: ListFolder[] = [];
+    let cursor: string | null = list.parentId ?? null;
+    const seen = new Set<string>([list.id]);
+    while (cursor) {
+      if (seen.has(cursor)) break;
+      seen.add(cursor);
+      const f: ListFolder | undefined = byId.get(cursor);
+      if (!f) break;
+      chain.unshift(f);
+      cursor = f.parentId ?? null;
+    }
+    return chain;
+  }, [list, lists]);
+
+  /** Sub-folders living directly inside this folder. */
+  const subFolders = useMemo(
+    () => (list ? childrenOf(lists ?? [], list.id) : []),
+    [lists, list],
+  );
 
   const inList = useMemo(
     () => (requests ?? []).filter((r) => r.listId === id),
@@ -118,7 +155,6 @@ export function ListDetailPage() {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        back
         title={list.name}
         subtitle={
           <>
@@ -142,7 +178,7 @@ export function ListDetailPage() {
               <FileDown size={14} /> خروجی
             </button>
             <button className="btn btn-glass btn-sm" onClick={() => setEditOpen(true)}>
-              <FilePenLine size={14} /> ویرایش لیست
+              <FilePenLine size={14} /> ویرایش
             </button>
             <button
               className="btn btn-primary btn-sm"
@@ -153,6 +189,72 @@ export function ListDetailPage() {
           </>
         }
       />
+
+      {/* ------------------- explorer breadcrumb + back ------------------- */}
+      <div className="glass flex flex-wrap items-center gap-1.5 rounded-2xl px-2.5 py-2">
+        <button
+          className="icon-btn glass !h-8 !w-8"
+          aria-label="بازگشت"
+          title="بازگشت به پوشه قبلی"
+          onClick={() =>
+            list.parentId ? navigate(`/lists?folder=${list.parentId}`) : navigate("/lists")
+          }
+        >
+          <ChevronLeft size={16} />
+        </button>
+        <span className="mx-1 h-5 w-px bg-ink-900/10 dark:bg-white/10" />
+        <nav className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto" aria-label="مسیر پوشه">
+          <Link
+            className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1.5 text-[12.5px] font-bold transition-colors hover:bg-brand-500/10"
+            to="/lists"
+          >
+            <Home size={14} />
+            خانه
+          </Link>
+          {path.map((f) => (
+            <span key={f.id} className="flex shrink-0 items-center gap-0.5">
+              <ChevronLeft size={13} className="text-ink-400" />
+              <Link
+                className="shrink-0 rounded-lg px-2 py-1.5 text-[12.5px] font-medium text-ink-600 transition-colors hover:bg-brand-500/10 dark:text-ink-300"
+                to={`/lists?folder=${f.id}`}
+              >
+                {f.name}
+              </Link>
+            </span>
+          ))}
+          <span className="flex shrink-0 items-center gap-0.5">
+            <ChevronLeft size={13} className="text-ink-400" />
+            <span className="rounded-lg px-2 py-1.5 text-[12.5px] font-extrabold text-brand-600 dark:text-brand-300">
+              {list.name}
+            </span>
+          </span>
+        </nav>
+        <button className="btn btn-glass btn-sm shrink-0" onClick={() => setSubOpen(true)}>
+          <FolderPlus size={14} /> زیرپوشه جدید
+        </button>
+      </div>
+
+      {/* ------------------------- sub-folders --------------------------- */}
+      {subFolders.length > 0 && (
+        <div className="glass rounded-3xl p-3">
+          <p className="mb-1.5 px-1 text-[11px] font-bold text-ink-500 dark:text-ink-400">
+            زیرپوشه‌های این پوشه
+          </p>
+          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+            {subFolders.map((sub) => (
+              <button
+                key={sub.id}
+                className="win-folder"
+                onClick={() => navigate(`/lists/${sub.id}`)}
+                aria-label={`باز کردن پوشه ${sub.name}`}
+              >
+                <WinFolderIcon size={44} />
+                <span className="win-folder-name">{sub.name}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {list.description && (
         <p className="text-[13px] leading-6 text-ink-600 dark:text-ink-300">{list.description}</p>
@@ -258,6 +360,7 @@ export function ListDetailPage() {
       />
 
       <ListFormModal open={editOpen} onClose={() => setEditOpen(false)} list={list} />
+      <ListFormModal open={subOpen} onClose={() => setSubOpen(false)} parentId={list.id} />
 
       {/* Move-to-list modal */}
       <Modal

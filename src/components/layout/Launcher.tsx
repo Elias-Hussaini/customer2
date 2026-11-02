@@ -274,6 +274,12 @@ export function Launcher() {
   const dockItems = view.filter((i) => i.place === "dock");
   const freeItems = view.filter((i) => i.place === "free" && (!drag || i.id !== drag.id));
 
+  /** Dock item width that always fits the viewport — with 7+ nav items the
+   *  fixed CSS default (2.85rem/4.85rem) would overflow narrow screens. */
+  const dockTotal = dockItems.length + 1; // + بیشتر
+  const dockBase = vp.w < 640 ? 45.6 : 77.6; // px, matches the CSS defaults
+  const dockItemW = Math.min(dockBase, Math.floor((vp.w - 42) / dockTotal));
+
   const isActive = (item: LauncherItem) =>
     item.end ? location.pathname === item.to : location.pathname.startsWith(item.to);
   const activeIndex = dockItems.findIndex((item) => isActive(item));
@@ -330,7 +336,12 @@ export function Launcher() {
 
       {/* ---- the dock ---- */}
       <nav className="dock-wrap no-print" aria-label="ناوبری اصلی">
-        <div className="dock" role="tablist" ref={dockRef}>
+        <div
+          className="dock"
+          role="tablist"
+          ref={dockRef}
+          style={{ "--dock-item-w": `${dockItemW}px` } as React.CSSProperties}
+        >
           <span
             className="dock-indicator"
             aria-hidden

@@ -1,25 +1,93 @@
-import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import { Archive, FilePenLine, FolderPlus, ListChecks, Trash2 } from "lucide-react";
+/**
+ * لیست‌ها — the folder explorer, Windows-style.
+ *
+ * • Toolbar: back button + clickable breadcrumb (خانه / پوشه / زیرپوشه)
+ * • Two view modes: شبکه (folder tiles) and فهرست (details rows) — persisted
+ * • Folders nest: create a folder INSIDE the open folder; the back button
+ *   (and the browser/phone back) always climbs one level up
+ * • Opening a folder goes to its file page (/lists/:id) where requests live
+ */
+
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import {
+  Archive,
+  ChevronLeft,
+  FilePenLine,
+  FolderPlus,
+  Home,
+  LayoutGrid,
+  List,
+  ListChecks,
+  Trash2,
+} from "lucide-react";
 import { PageHeader } from "../components/ui/StatCard";
 import { EmptyState } from "../components/ui/EmptyState";
 import { Menu } from "../components/ui/Menu";
 import { ListFormModal } from "../components/domain/ListFormModal";
-import { archiveList, deleteList } from "../db/lists";
+import { WinFolderIcon } from "../components/domain/FolderIcon";
+import { archiveList, deleteList, childrenOf } from "../db/lists";
 import { useLists, useRequests } from "../hooks/useData";
 import { useConfirm } from "../hooks/useConfirm";
 import { useToast } from "../hooks/useToast";
-import { formatJalali, toPersianDigits } from "../utils/jalali";
+import { toPersianDigits } from "../utils/jalali";
 import type { ListFolder } from "../types";
 
+const VIEW_KEY = "lists.view.v1";
+type ViewMode = "grid" | "list";
+
+function loadView(): ViewMode {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "list" ? "list" : "grid";
+  } catch {
+    return "grid";
+  }
+}
+
 export function ListsPage() {
+  const navigate = useNavigate();
   const { confirm } = useConfirm();
   const toast = useToast();
   const lists = useLists();
+  const allLists = useLists(false);
   const requests = useRequests();
 
+  const [params, setParams] = useSearchParams();
+  const folderId = params.get("folder") || null;
+  const [view, setView] = useState<ViewMode>(loadView);
   const [editOpen, setEditOpen] = useState(false);
   const [editing, setEditing] = useState<ListFolder | null>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(VIEW_KEY, view);
+    } catch {
+      /* private mode — ignore */
+    }
+  }, [view]);
+
+  /** The breadcrumb chain: root → … → current folder. */
+  const path = useMemo(() => {
+    if (!allLists || !folderId) return [] as ListFolder[];
+    const byId = new Map(allLists.map((l) => [l.id, l]));
+    const chain: ListFolder[] = [];
+    let cursor: string | null = folderId;
+    const seen = new Set<string>();
+    while (cursor) {
+      if (seen.has(cursor)) break;
+      seen.add(cursor);
+      const f = byId.get(cursor);
+      if (!f) break;
+      chain.unshift(f);
+      cursor = f.parentId ?? null;
+    }
+    return chain;
+  }, [allLists, folderId]);
+
+  const folders = useMemo(
+    () => childrenOf(lists ?? [], folderId),
+    [lists, folderId],
+  );
 
   const statsByList = useMemo(() => {
     const map = new Map<string, { total: number; issued: number; rejected: number }>();
@@ -34,11 +102,69 @@ export function ListsPage() {
     return map;
   }, [requests]);
 
+  /** Descendant folder count per folder (shown as «n زیرپوشه»). */
+  const subCount = useMemo(() => {
+    const kids = new Map<string, number>();
+    for (const l of allLists ?? []) {
+      if (l.parentId) kids.set(l.parentId, (kids.get(l.parentId) ?? 0) + 1);
+    }
+    return kids;
+  }, [allLists]);
+
+  const goFolder = (id: string | null) => {
+    setParams(id ? { folder: id } : {}, { replace: false });
+  };
+
+  const openFolder = (id: string) => navigate(`/lists/${id}`);
+
+  const menuItems = (list: ListFolder) => {
+    const stats = statsByList.get(list.id) ?? { total: 0, issued: 0, rejected: 0 };
+    return [
+      {
+        icon: FilePenLine,
+        label: "ویرایش",
+        onClick: () => {
+          setEditing(list);
+          setEditOpen(true);
+        },
+      },
+      {
+        icon: Archive,
+        label: "بایگانی",
+        onClick: async () => {
+          const ok = await confirm({ title: `بایگانی پوشه «${list.name}»؟` });
+          if (ok) {
+            await archiveList(list.id, list.name);
+            toast.info("پوشه بایگانی شد");
+          }
+        },
+      },
+      {
+        icon: Trash2,
+        label: "حذف",
+        danger: true,
+        onClick: async () => {
+          const ok = await confirm({
+            title: `حذف پوشه «${list.name}»`,
+            message:
+              "درخواست‌ها و زیرپوشه‌های داخل آن حذف نمی‌شوند — زیرپوشه‌ها یک سطح بالا می‌روند.",
+            danger: true,
+            confirmLabel: "حذف قطعی",
+          });
+          if (ok) {
+            await deleteList(list.id, list.name);
+            toast.info("پوشه حذف شد");
+          }
+        },
+      },
+    ];
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
         title="لیست‌ها"
-        subtitle="پوشه‌بندی درخواست‌ها — مثل «ویزای داخله» یا «درخواست‌های آبان»"
+        subtitle="پوشه‌بندی درخواست‌ها — مثل پوشه ویندوز: بسازید، داخل هم بسازید، با بک برگردید"
         actions={
           <button
             className="btn btn-primary btn-sm"
@@ -47,83 +173,126 @@ export function ListsPage() {
               setEditOpen(true);
             }}
           >
-            <FolderPlus size={15} /> لیست جدید
+            <FolderPlus size={15} /> پوشه جدید
           </button>
         }
       />
 
+      {/* ------------------------- explorer toolbar ------------------------- */}
+      <div className="glass flex flex-wrap items-center gap-1.5 rounded-2xl px-2.5 py-2">
+        {/* back */}
+        <button
+          className="icon-btn glass !h-8 !w-8"
+          aria-label="بازگشت"
+          title="بازگشت به پوشه قبلی"
+          disabled={!folderId}
+          onClick={() => {
+            const parent = path.length > 1 ? path[path.length - 2].id : null;
+            goFolder(parent);
+          }}
+        >
+          <ChevronLeft size={16} />
+        </button>
+        <span className="mx-1 h-5 w-px bg-ink-900/10 dark:bg-white/10" />
+
+        {/* breadcrumb */}
+        <nav className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto" aria-label="مسیر پوشه">
+          <button
+            className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1.5 text-[12.5px] font-bold transition-colors hover:bg-brand-500/10"
+            onClick={() => goFolder(null)}
+          >
+            <Home size={14} />
+            خانه
+          </button>
+          {path.map((f, i) => (
+            <span key={f.id} className="flex shrink-0 items-center gap-0.5">
+              <ChevronLeft size={13} className="text-ink-400" />
+              <button
+                className={`rounded-lg px-2 py-1.5 text-[12.5px] transition-colors hover:bg-brand-500/10 ${
+                  i === path.length - 1 ? "font-extrabold text-brand-600 dark:text-brand-300" : "font-medium text-ink-600 dark:text-ink-300"
+                }`}
+                onClick={() => goFolder(f.id)}
+              >
+                {f.name}
+              </button>
+            </span>
+          ))}
+        </nav>
+
+        {/* view toggle */}
+        <div className="flex shrink-0 items-center gap-0.5 rounded-xl bg-ink-900/5 p-0.5 dark:bg-white/5">
+          <button
+            className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
+              view === "grid" ? "bg-white text-brand-600 shadow-sm dark:bg-ink-800 dark:text-brand-300" : "text-ink-400"
+            }`}
+            onClick={() => setView("grid")}
+            aria-label="نمایش شبکه‌ای"
+            title="نمایش شبکه‌ای"
+          >
+            <LayoutGrid size={14} />
+          </button>
+          <button
+            className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
+              view === "list" ? "bg-white text-brand-600 shadow-sm dark:bg-ink-800 dark:text-brand-300" : "text-ink-400"
+            }`}
+            onClick={() => setView("list")}
+            aria-label="نمایش فهرستی"
+            title="نمایش فهرستی"
+          >
+            <List size={14} />
+          </button>
+        </div>
+      </div>
+
+      {/* ------------------------------ folders ---------------------------- */}
       {lists === undefined ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="h-40 animate-pulse rounded-3xl bg-ink-900/5 dark:bg-white/5" />
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="h-32 animate-pulse rounded-3xl bg-ink-900/5 dark:bg-white/5" />
           ))}
         </div>
-      ) : lists.length === 0 ? (
+      ) : folders.length === 0 ? (
         <EmptyState
           icon={ListChecks}
-          title="هنوز لیستی نساخته‌اید"
-          description="لیست‌ها مثل پوشه عمل می‌کنند: درخواست‌ها را در بازه‌های زمانی یا دسته‌بندی‌های دلخواه سازمان‌دهی می‌کنند"
+          title={folderId ? "این پوشه خالی است" : "هنوز پوشه‌ای نساخته‌اید"}
+          description={
+            folderId
+              ? "با دکمه «پوشه جدید» می‌توانید همین‌جا داخل این پوشه، زیرپوشه بسازید"
+              : "پوشه‌ها مثل ویندوز کار می‌کنند: درخواست‌ها را در دسته‌های دلخواه سازمان‌دهی کنید و داخل هم پوشه بسازید"
+          }
           action={
             <button className="btn btn-primary btn-sm" onClick={() => setEditOpen(true)}>
-              <FolderPlus size={15} /> ساخت اولین لیست
+              <FolderPlus size={15} /> ساخت پوشه
             </button>
           }
         />
-      ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {lists.map((list) => {
+      ) : view === "grid" ? (
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+          {folders.map((list) => {
             const stats = statsByList.get(list.id) ?? { total: 0, issued: 0, rejected: 0 };
+            const subs = subCount.get(list.id) ?? 0;
             return (
-              <div key={list.id} className="glass group relative rounded-3xl p-5 transition-transform duration-150 hover:-translate-y-0.5">
-                <div className="mb-3 flex items-start justify-between gap-2">
-                  <Link to={`/lists/${list.id}`} className="min-w-0 flex-1">
-                    <h3 className="truncate text-[15px] font-extrabold group-hover:text-brand-600 dark:group-hover:text-brand-300">
-                      {list.name}
-                    </h3>
-                    {list.category && <span className="chip mt-1.5 inline-flex">{list.category}</span>}
-                  </Link>
+              <div key={list.id} className="group relative">
+                <button
+                  type="button"
+                  className="win-folder w-full"
+                  onDoubleClick={() => openFolder(list.id)}
+                  onClick={() => openFolder(list.id)}
+                  aria-label={`باز کردن پوشه ${list.name}`}
+                >
+                  <WinFolderIcon size={62} />
+                  <span className="win-folder-name">{list.name}</span>
+                  <span className="win-folder-meta num">
+                    {toPersianDigits(stats.total)} درخواست
+                    {subs > 0 && ` • ${toPersianDigits(subs)} زیرپوشه`}
+                  </span>
+                </button>
+                <div className="absolute left-1 top-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                   <Menu
-                    items={[
-                      {
-                        icon: FilePenLine,
-                        label: "ویرایش",
-                        onClick: () => {
-                          setEditing(list);
-                          setEditOpen(true);
-                        },
-                      },
-                      {
-                        icon: Archive,
-                        label: "بایگانی",
-                        onClick: async () => {
-                          const ok = await confirm({ title: `بایگانی لیست «${list.name}»؟` });
-                          if (ok) {
-                            await archiveList(list.id, list.name);
-                            toast.info("لیست بایگانی شد");
-                          }
-                        },
-                      },
-                      {
-                        icon: Trash2,
-                        label: "حذف",
-                        danger: true,
-                        onClick: async () => {
-                          const ok = await confirm({
-                            title: `حذف لیست «${list.name}»`,
-                            message: `${stats.total} درخواست داخل این لیست حذف نمی‌شوند و بدون لیست باقی می‌مانند.`,
-                            danger: true,
-                            confirmLabel: "حذف قطعی",
-                          });
-                          if (ok) {
-                            await deleteList(list.id, list.name);
-                            toast.info("لیست حذف شد");
-                          }
-                        },
-                      },
-                    ]}
+                    items={menuItems(list)}
                     trigger={
-                      <span className="icon-btn !h-8 !w-8" aria-label="عملیات لیست">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                      <span className="icon-btn !h-7 !w-7 glass" aria-label="عملیات پوشه">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
                           <circle cx="12" cy="5" r="1.8" />
                           <circle cx="12" cy="12" r="1.8" />
                           <circle cx="12" cy="19" r="1.8" />
@@ -132,35 +301,58 @@ export function ListsPage() {
                     }
                   />
                 </div>
-
-                {list.description && (
-                  <p className="line-clamp-2 mb-3 min-h-[36px] text-[12px] leading-6 text-ink-500 dark:text-ink-400">
-                    {list.description}
-                  </p>
-                )}
-
-                {(list.startDate || list.endDate) && (
-                  <p className="num mb-3 text-[11px] text-ink-400">
-                    {list.startDate ? formatJalali(list.startDate, "long") : "…"}
-                    {" تا "}
-                    {list.endDate ? formatJalali(list.endDate, "long") : "…"}
-                  </p>
-                )}
-
-                <div className="flex items-center gap-2">
-                  <span className="chip-soft num inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px]">
-                    {toPersianDigits(stats.total)} درخواست
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="glass flex flex-col gap-0.5 rounded-3xl p-2">
+          <div className="flex items-center gap-3 px-3 pb-1.5 text-[10.5px] font-bold text-ink-400">
+            <span className="w-6" />
+            <span className="min-w-0 flex-1">نام پوشه</span>
+            <span className="w-20 text-center">درخواست</span>
+            <span className="hidden w-24 text-center sm:block">صادر شده</span>
+            <span className="w-10" />
+          </div>
+          {folders.map((list) => {
+            const stats = statsByList.get(list.id) ?? { total: 0, issued: 0, rejected: 0 };
+            const subs = subCount.get(list.id) ?? 0;
+            return (
+              <div key={list.id} className="group relative">
+                <button type="button" className="win-row w-full" onClick={() => openFolder(list.id)}>
+                  <span className="w-6 shrink-0">
+                    <WinFolderIcon size={26} />
                   </span>
-                  {stats.issued > 0 && (
-                    <span className="num inline-flex items-center gap-1 rounded-full bg-[#10b981]/12 px-2.5 py-1 text-[11px] font-semibold text-[#0b9e6e] dark:text-[#3ddc9a]">
-                      {toPersianDigits(stats.issued)} صادر شده
-                    </span>
-                  )}
-                  {stats.rejected > 0 && (
-                    <span className="num inline-flex items-center gap-1 rounded-full bg-[#ef4444]/12 px-2.5 py-1 text-[11px] font-semibold text-[#dc3535] dark:text-[#f87b7b]">
-                      {toPersianDigits(stats.rejected)} رد شده
-                    </span>
-                  )}
+                  <span className="min-w-0 flex-1 text-right">
+                    <span className="block truncate text-[13px] font-bold">{list.name}</span>
+                    {list.category && (
+                      <span className="block truncate text-[10px] text-ink-400">
+                        {list.category}
+                        {subs > 0 && ` • ${toPersianDigits(subs)} زیرپوشه`}
+                      </span>
+                    )}
+                  </span>
+                  <span className="num w-20 text-center text-[12.5px] font-bold">
+                    {toPersianDigits(stats.total)}
+                  </span>
+                  <span className="num hidden w-24 text-center text-[12.5px] font-bold text-[#0b9e6e] dark:text-[#3ddc9a] sm:block">
+                    {toPersianDigits(stats.issued)}
+                  </span>
+                  <span className="flex w-10 justify-end" />
+                </button>
+                <div className="absolute left-2 top-1/2 -translate-y-1/2 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                  <Menu
+                    items={menuItems(list)}
+                    trigger={
+                      <span className="icon-btn !h-7 !w-7 glass" aria-label="عملیات پوشه">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                          <circle cx="12" cy="5" r="1.8" />
+                          <circle cx="12" cy="12" r="1.8" />
+                          <circle cx="12" cy="19" r="1.8" />
+                        </svg>
+                      </span>
+                    }
+                  />
                 </div>
               </div>
             );
@@ -172,6 +364,7 @@ export function ListsPage() {
         open={editOpen}
         onClose={() => setEditOpen(false)}
         list={editing ?? undefined}
+        parentId={folderId}
       />
     </div>
   );

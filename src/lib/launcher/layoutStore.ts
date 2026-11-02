@@ -65,7 +65,9 @@ export function defaultLayout(): LauncherItem[] {
     { id: "nav-customers", to: "/customers", label: "مشتریان", icon: "customers", place: "dock", order: 2 },
     { id: "nav-reps", to: "/representatives", label: "نمایندگان", icon: "reps", place: "dock", order: 3 },
     { id: "nav-employers", to: "/employers", label: "کارفرماها", icon: "employers", place: "dock", order: 4 },
-    { id: "nav-archive", to: "/smart-archive", label: "بایگانی هوشمند", icon: "archive", place: "dock", order: 5 },
+    // ابزار عکس lives in the dock RIGHT NEXT TO کارفرماها — never in بیشتر.
+    { id: "nav-studio", to: "/studio", label: "ابزار عکس", icon: "studio", place: "dock", order: 5 },
+    { id: "nav-archive", to: "/smart-archive", label: "بایگانی هوشمند", icon: "archive", place: "dock", order: 6 },
     // The accounting button starts as a round floating button on the left
     // edge — its old home — and can be dragged anywhere (or into the dock).
     { id: "acc-accounting", to: "/accounting", label: "حسابداری", icon: "accounting", place: "free", order: 0, fx: 0.1, fy: 0.68 },
@@ -98,31 +100,46 @@ function read(): LauncherItem[] {
 
 /**
  * Forward-compat migration: a stored layout from BEFORE a new default item
- * existed (e.g. «کارفرماها», added with the employers section) would never
- * show it. Merge any missing default item back in — dock items append at
- * the end of the dock, free items are never injected (they're deliberate
- * user choices only). The merged layout is PERSISTED back so the storage
- * self-heals instead of re-migrating on every launch.
+ * existed (e.g. «ابزار عکس», added with the studio) would never show it.
+ * Merge any missing default item back in — each one is inserted right AFTER
+ * its default-order predecessor when that button still lives in the stored
+ * dock (so ابزار عکس lands next to کارفرماها, not at the far end); when the
+ * predecessor is gone (pulled out / reordered away) it appends at the end of
+ * the dock. Free items are never injected (they're deliberate user choices
+ * only). The merged layout is PERSISTED back so the storage self-heals
+ * instead of re-migrating on every launch.
  */
 function mergeMissingDefaults(stored: LauncherItem[]): LauncherItem[] {
   const defaults = defaultLayout();
   const byId = new Map(stored.map((i) => [i.id, i]));
   const changed = defaults.filter((d) => !byId.has(d.id) && d.place === "dock");
   if (changed.length === 0) return stored;
-  const maxDockOrder = Math.max(
-    0,
-    ...stored.filter((i) => i.place === "dock").map((i) => i.order),
-  );
-  const merged = normalize([
-    ...stored,
-    ...changed.map((d, idx) => ({ ...d, order: maxDockOrder + 1 + idx })),
-  ]);
+  let merged = stored.map(cloneItem);
+  for (const d of changed) {
+    const defIdx = defaults.findIndex((x) => x.id === d.id);
+    // Fresh map each round: earlier insertions shifted dock orders.
+    const current = new Map(merged.map((i) => [i.id, i]));
+    let insertAt = -1;
+    for (let k = defIdx - 1; k >= 0 && insertAt < 0; k--) {
+      const prev = current.get(defaults[k].id);
+      if (prev && prev.place === "dock") insertAt = prev.order + 1;
+    }
+    if (insertAt < 0) {
+      const dock = merged.filter((i) => i.place === "dock");
+      insertAt = dock.length ? Math.max(...dock.map((i) => i.order)) + 1 : 0;
+    }
+    merged = merged.map((i) =>
+      i.place === "dock" && i.order >= insertAt ? { ...i, order: i.order + 1 } : i,
+    );
+    merged.push({ ...d, place: "dock", order: insertAt });
+  }
+  const out = normalize(merged);
   try {
-    storage().setItem(KEY, JSON.stringify(merged));
+    storage().setItem(KEY, JSON.stringify(out));
   } catch {
     /* private mode — the in-memory layout is enough for this session */
   }
-  return merged;
+  return out;
 }
 
 function normalize(items: LauncherItem[]): LauncherItem[] {
@@ -160,6 +177,12 @@ export function saveLauncherLayout(items: LauncherItem[]): LauncherItem[] {
 /** Back to the factory defaults (Settings › چیدمان). */
 export function resetLauncherLayout(): LauncherItem[] {
   return saveLauncherLayout(defaultLayout());
+}
+
+/** Test-only: drop the in-memory cache so the next read goes through the
+ *  storage + migration path (exactly like a fresh app load). */
+export function __resetLauncherCacheForTests(): void {
+  cached = null;
 }
 
 /* ------------------------- pure drag-geometry helpers --------------------- */

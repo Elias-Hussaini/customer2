@@ -5,6 +5,7 @@ import {
   FolderMinus,
   ImagePlus,
   Inbox,
+  Pencil,
   Pin,
   RotateCcw,
   RotateCw,
@@ -16,10 +17,12 @@ import {
   FileUp,
 } from "lucide-react";
 import { saveAs } from "file-saver";
+import { useNavigate } from "react-router-dom";
 import { db } from "../../db/schema";
 import type { Attachment, DocType } from "../../types";
 import { saveAttachment, deleteAttachment, rotateAttachmentImage, saveIssuedVisaAttachment, ISSUED_VISA_KIND } from "../../db/attachments";
 import { deleteDocType, getDocTypesForCustomer } from "../../db/docTypes";
+import { openStudioFor } from "../../lib/studio/session";
 import { AiDocSortButton } from "../domain/AiDocSortButton";
 import { Modal } from "./Modal";
 import { useDropTarget } from "./DropZone";
@@ -38,14 +41,13 @@ import { toPersianDigits } from "../../utils/jalali";
  * right here. "other" is a fixed bucket for extra files; receipt photos live
  * on payments.
  *
- * Every slot row and the «سایر مدارک» area are DROP TARGETS — drag files onto
- * a specific row to file them there, or drop anywhere on the profile to pick
- * a destination. Dropping directly on the AI button starts the smart filing.
+ * Slots render as a COMPACT GRID of tiles (side by side, not stacked) —
+ * practical on phones and pretty on desktop. Every tile and the «سایر مدارک»
+ * area are DROP TARGETS; the preview opens the full ابزار عکس editor.
  */
 
-/** One document slot row — a top-level component so each row owns its own
- *  drop-highlight state without remounting on every parent render. */
-function SlotRow({
+/** One document slot tile — owns its own drop-highlight state. */
+function SlotTile({
   dt,
   files,
   busy,
@@ -67,9 +69,9 @@ function SlotRow({
   return (
     <li
       data-slot={dt.id}
-      className={`glass-soft flex items-center gap-3 rounded-2xl border p-2.5 transition-all duration-150 ${
+      className={`glass-soft flex flex-col overflow-hidden rounded-2xl border transition-all duration-150 ${
         hovering
-          ? "scale-[1.01] border-brand-400 bg-brand-500/10 ring-2 ring-brand-400/40"
+          ? "scale-[1.02] border-brand-400 bg-brand-500/10 ring-2 ring-brand-400/40"
           : "border-transparent"
       }`}
       {...dropHandlers}
@@ -78,7 +80,7 @@ function SlotRow({
       {latest ? (
         <button
           type="button"
-          className="h-16 w-16 shrink-0 overflow-hidden rounded-[14px] border border-ink-900/5 dark:border-white/10"
+          className="relative block aspect-[4/3] w-full overflow-hidden bg-ink-900/5 dark:bg-white/5"
           onClick={() => onPreview(latest)}
           aria-label={`مشاهده ${dt.label}`}
         >
@@ -90,97 +92,96 @@ function SlotRow({
             />
           ) : (
             <span className="flex h-full w-full items-center justify-center text-ink-400">
-              <FileImage size={20} />
+              <FileImage size={22} />
+            </span>
+          )}
+          {files.length > 1 && (
+            <span className="num absolute right-1.5 top-1.5 rounded-full bg-ink-950/55 px-2 py-0.5 text-[10px] font-bold text-white">
+              {toPersianDigits(files.length)}
             </span>
           )}
         </button>
       ) : (
         <button
           type="button"
-          className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[14px] border border-dashed border-ink-300/70 text-ink-400 transition-colors hover:border-brand-400 hover:text-brand-500 dark:border-ink-700"
+          className="flex aspect-[4/3] w-full flex-col items-center justify-center gap-1.5 rounded-t-2xl border border-dashed border-ink-300/60 text-ink-400 transition-colors hover:border-brand-400 hover:text-brand-500 dark:border-ink-700"
           onClick={() => inputRef.current?.click()}
           aria-label={`افزودن ${dt.label}`}
         >
           <ImagePlus size={20} />
+          <span className="px-2 text-center text-[10px] font-semibold leading-4 opacity-80">
+            افزودن
+          </span>
         </button>
       )}
 
-      {/* One-line texts — never wrap into the mess below */}
-      <div className="min-w-0 flex-1">
-        <p className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-[13px] font-bold" title={dt.label}>
-            {dt.label}
-          </span>
-          {files.length > 1 && (
-            <span className="chip-soft num shrink-0 rounded-full px-2 py-0.5 text-[10px]">
-              {toPersianDigits(files.length)}
-            </span>
-          )}
+      {/* Label + actions */}
+      <div className="flex flex-col gap-1 p-2">
+        <p className="truncate text-[11.5px] font-bold" title={dt.label}>
+          {dt.label}
         </p>
-        <p className="truncate text-[11px] text-ink-500 dark:text-ink-400">
+        <p className="truncate text-[9.5px] text-ink-500 dark:text-ink-400">
           {latest ? formatTimestamp(latest.createdAt) : "بارگذاری نشده"}
         </p>
-      </div>
-
-      {/* Actions */}
-      <div className="flex shrink-0 items-center gap-1">
-        <button
-          type="button"
-          className="icon-btn !h-8 !w-8 text-brand-600 dark:text-brand-300"
-          title={latest ? "جایگزینی با فایل جدید" : "افزودن"}
-          aria-label={latest ? "جایگزینی" : "افزودن"}
-          disabled={busy}
-          onClick={() => inputRef.current?.click()}
-        >
-          <ImagePlus size={15} />
-        </button>
-        {latest && (
-          <>
-            <button
-              type="button"
-              className="icon-btn !h-8 !w-8"
-              title="مشاهده"
-              aria-label="مشاهده"
-              onClick={() => onPreview(latest)}
-            >
-              <Eye size={15} />
-            </button>
-            <button
-              type="button"
-              className="icon-btn !h-8 !w-8 hover:!text-[#ef4444]"
-              title="حذف"
-              aria-label="حذف"
-              onClick={async () => {
-                await deleteAttachment(latest.id);
-                toast.info("مدرک حذف شد");
-              }}
-            >
-              <Trash2 size={15} />
-            </button>
-          </>
-        )}
-        {dt.customerId && (
+        <div className="mt-0.5 flex items-center gap-0.5">
           <button
             type="button"
-            className="icon-btn !h-8 !w-8 hover:!text-[#ef4444]"
-            title="حذف این بخش (فایل‌ها به «سایر مدارک» منتقل می‌شوند)"
-            aria-label="حذف این بخش"
-            onClick={async () => {
-              const ok = await confirm({
-                title: `حذف بخش «${dt.label}» از همین پرونده؟`,
-                message:
-                  "این بخش فقط برای همین مشتری است. فایل‌های داخلش حذف نمی‌شوند؛ به «سایر مدارک» منتقل می‌شوند.",
-                confirmLabel: "حذف بخش",
-              });
-              if (ok) {
-                await deleteDocType(dt.id, dt.label);
-                toast.info("بخش حذف شد");
-              }
-            }}
+            className="icon-btn !h-6.5 !w-6.5 text-brand-600 dark:text-brand-300"
+            title={latest ? "جایگزینی با فایل جدید" : "افزودن"}
+            aria-label={latest ? "جایگزینی" : "افزودن"}
+            disabled={busy}
+            onClick={() => inputRef.current?.click()}
           >
-            <FolderMinus size={15} />
+            <ImagePlus size={13} />
           </button>
-        )}
+          {latest && (
+            <>
+              <button
+                type="button"
+                className="icon-btn !h-6.5 !w-6.5"
+                title="مشاهده"
+                aria-label="مشاهده"
+                onClick={() => onPreview(latest)}
+              >
+                <Eye size={13} />
+              </button>
+              <button
+                type="button"
+                className="icon-btn !h-6.5 !w-6.5 hover:!text-[#ef4444]"
+                title="حذف"
+                aria-label="حذف"
+                onClick={async () => {
+                  await deleteAttachment(latest.id);
+                  toast.info("مدرک حذف شد");
+                }}
+              >
+                <Trash2 size={13} />
+              </button>
+            </>
+          )}
+          {dt.customerId && (
+            <button
+              type="button"
+              className="icon-btn !h-6.5 !w-6.5 hover:!text-[#ef4444]"
+              title="حذف این بخش (فایل‌ها به «سایر مدارک» منتقل می‌شوند)"
+              aria-label="حذف این بخش"
+              onClick={async () => {
+                const ok = await confirm({
+                  title: `حذف بخش «${dt.label}» از همین پرونده؟`,
+                  message:
+                    "این بخش فقط برای همین مشتری است. فایل‌های داخلش حذف نمی‌شوند؛ به «سایر مدارک» منتقل می‌شوند.",
+                  confirmLabel: "حذف بخش",
+                });
+                if (ok) {
+                  await deleteDocType(dt.id, dt.label);
+                  toast.info("بخش حذف شد");
+                }
+              }}
+            >
+              <FolderMinus size={13} />
+            </button>
+          )}
+        </div>
       </div>
       <input
         ref={inputRef}
@@ -212,6 +213,16 @@ export function DocumentSlots({ customerId, customer }: { customerId: string; cu
   const [rotBusy, setRotBusy] = useState(false);
   const otherInputRef = useRef<HTMLInputElement | null>(null);
   const visaInputRef = useRef<HTMLInputElement | null>(null);
+  const navigate = useNavigate();
+
+  /** Open the studio editor on the previewed image — full ابزار عکس toolset,
+   *  saved straight back onto this attachment («ذخیره در پرونده»). */
+  const editInStudio = () => {
+    if (!preview || !preview.mime.startsWith("image/")) return;
+    openStudioFor({ kind: "attachment", attachment: preview });
+    setPreview(null);
+    navigate("/studio");
+  };
 
   const attachments = useLiveQuery(
     () => db.attachments.where("customerId").equals(customerId).toArray(),
@@ -391,7 +402,7 @@ export function DocumentSlots({ customerId, customer }: { customerId: string; cu
               PDF ویزای صادرشده را همین‌جا بارگذاری کنید یا فایل را مستقیم روی همین کادر رها کنید — فایل با نام مشتری ذخیره می‌شود
             </p>
           ) : (
-            <ul className="flex flex-col gap-1.5">
+            <ul className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
               {visaFiles.map((a) => (
                 <li
                   key={a.id}
@@ -449,9 +460,9 @@ export function DocumentSlots({ customerId, customer }: { customerId: string; cu
                 <Pin size={12} className="shrink-0" />
                 مخصوص این پرونده
               </p>
-              <ul className="flex flex-col gap-2">
+              <ul className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
                 {ownSlots.map((dt) => (
-                  <SlotRow
+                  <SlotTile
                     key={dt.id}
                     dt={dt}
                     files={byKind(dt.id)}
@@ -468,9 +479,9 @@ export function DocumentSlots({ customerId, customer }: { customerId: string; cu
           )}
           {/* Global slots (Settings-defined, shared by every profile) */}
           {globalSlots.length > 0 && (
-            <ul className="flex flex-col gap-2">
+            <ul className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
               {globalSlots.map((dt) => (
-                <SlotRow
+                <SlotTile
                   key={dt.id}
                   dt={dt}
                   files={byKind(dt.id)}
@@ -528,7 +539,7 @@ export function DocumentSlots({ customerId, customer }: { customerId: string; cu
             فایل دیگری بارگذاری نشده — می‌توانید فایل‌ها را همین‌جا رها کنید
           </p>
         ) : (
-          <ul className="flex flex-col gap-2">
+          <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             {others.map((a) => (
               <li
                 key={a.id}
@@ -624,10 +635,18 @@ export function DocumentSlots({ customerId, customer }: { customerId: string; cu
             ) : (
               <span />
             )}
-            <button className="btn btn-glass" onClick={() => saveAs(preview.blob, preview.name)}>
-              <Download size={15} />
-              دانلود
-            </button>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {preview.mime.startsWith("image/") && (
+                <button className="btn btn-glass btn-sm" onClick={editInStudio}>
+                  <Pencil size={14} />
+                  ویرایش
+                </button>
+              )}
+              <button className="btn btn-glass" onClick={() => saveAs(preview.blob, preview.name)}>
+                <Download size={15} />
+                دانلود
+              </button>
+            </div>
           </div>
         )}
       </Modal>

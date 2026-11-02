@@ -5,6 +5,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { robotBus } from "../../robot/eventBus";
 import {
+  __resetLauncherCacheForTests,
   clampFree,
   commitDrag,
   defaultLayout,
@@ -23,7 +24,7 @@ beforeEach(() => {
 });
 
 describe("layoutStore — defaults & persistence", () => {
-  it("defaults: 6 dock items (dashboard first) + accounting floating", () => {
+  it("defaults: 7 dock items (dashboard first, studio next to employers) + accounting floating", () => {
     const items = getLauncherLayout();
     const dock = items.filter((i) => i.place === "dock");
     const free = items.filter((i) => i.place === "free");
@@ -33,6 +34,7 @@ describe("layoutStore — defaults & persistence", () => {
       "nav-customers",
       "nav-reps",
       "nav-employers",
+      "nav-studio",
       "nav-archive",
     ]);
     expect(dock[0].end).toBe(true);
@@ -67,7 +69,7 @@ describe("layoutStore — defaults & persistence", () => {
     const items = getLauncherLayout();
     saveLauncherLayout(items.map((i) => ({ ...i, place: "free", fx: 0.2, fy: 0.2 })));
     const restored = resetLauncherLayout();
-    expect(restored.filter((i) => i.place === "dock").length).toBe(6);
+    expect(restored.filter((i) => i.place === "dock").length).toBe(7);
     expect(restored.find((i) => i.id === "acc-accounting")?.place).toBe("free");
   });
 
@@ -76,7 +78,57 @@ describe("layoutStore — defaults & persistence", () => {
       i.place === "dock" ? { ...i, order: i.order * 10 + 7 } : i,
     );
     const saved = saveLauncherLayout(items);
-    expect(saved.filter((i) => i.place === "dock").map((i) => i.order)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(saved.filter((i) => i.place === "dock").map((i) => i.order)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+  });
+
+  it("migration inserts a missing dock item right AFTER its default predecessor", () => {
+    // A layout saved BEFORE ابزار عکس existed: studio must merge in next to
+    // کارفرماها (its default predecessor), never appended at the far end.
+    const legacy = defaultLayout()
+      .filter((i) => i.id !== "nav-studio")
+      .map((i, idx, arr) =>
+        i.place === "dock" ? { ...i, order: arr.filter((x) => x.place === "dock" && x.id !== "nav-studio").indexOf(i) } : i,
+      );
+    saveLauncherLayout(legacy);
+    __resetLauncherCacheForTests(); // fresh app load → migration runs
+    const merged = getLauncherLayout();
+    const dock = merged.filter((i) => i.place === "dock");
+    const empIdx = dock.findIndex((i) => i.id === "nav-employers");
+    const studioIdx = dock.findIndex((i) => i.id === "nav-studio");
+    expect(studioIdx).toBe(empIdx + 1);
+    expect(dock.map((i) => i.order)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    // self-healed storage: reading again keeps the same shape
+    __resetLauncherCacheForTests();
+    expect(getLauncherLayout().filter((i) => i.place === "dock").map((i) => i.id)).toEqual(
+      dock.map((i) => i.id),
+    );
+  });
+
+  it("migration restores EVERY missing default dock item in default order", () => {
+    // A legacy layout without studio OR employers: both return on the next
+    // load — employers right after reps, studio right after employers —
+    // exactly their default positions, archive still last.
+    const legacy = defaultLayout().filter(
+      (i) => i.id !== "nav-studio" && i.id !== "nav-employers",
+    );
+    const dockOnly = legacy.filter((i) => i.place === "dock");
+    const normalized = legacy.map((i) =>
+      i.place === "dock" ? { ...i, order: dockOnly.indexOf(i) } : i,
+    );
+    saveLauncherLayout(normalized);
+    __resetLauncherCacheForTests(); // fresh app load → migration runs
+    const merged = getLauncherLayout();
+    const dock = merged.filter((i) => i.place === "dock");
+    expect(dock.map((i) => i.id)).toEqual([
+      "nav-dashboard",
+      "nav-lists",
+      "nav-customers",
+      "nav-reps",
+      "nav-employers",
+      "nav-studio",
+      "nav-archive",
+    ]);
+    expect(dock.map((i) => i.order)).toEqual([0, 1, 2, 3, 4, 5, 6]);
   });
 });
 
@@ -122,7 +174,7 @@ describe("nearestSlotIndex", () => {
 
 describe("previewDrop", () => {
   it("over dock: inserts the dragged item at the slot index", () => {
-    const items = getLauncherLayout(); // dock: 0..4, drag index 2 (customers)
+    const items = getLauncherLayout(); // dock: 0..6, drag index 2 (customers)
     const preview = previewDrop(items, "nav-customers", {
       overDock: true,
       dockIndex: 0,
@@ -133,8 +185,8 @@ describe("previewDrop", () => {
     });
     const dock = preview.filter((i) => i.place === "dock");
     expect(dock[0].id).toBe("nav-customers");
-    expect(dock.map((i) => i.order)).toEqual([0, 1, 2, 3, 4, 5].slice(0, dock.length));
-    expect(dock.length).toBe(6);
+    expect(dock.map((i) => i.order)).toEqual([0, 1, 2, 3, 4, 5, 6].slice(0, dock.length));
+    expect(dock.length).toBe(7);
   });
 
   it("outside the dock: the item becomes floating at the pointer", () => {
@@ -151,8 +203,8 @@ describe("previewDrop", () => {
     expect(dragged?.place).toBe("free");
     expect(dragged?.fx).toBeCloseTo(0.75);
     expect(dragged?.fy).toBeCloseTo(0.2);
-    // the dock now has 5 items and accounting is untouched
-    expect(preview.filter((i) => i.place === "dock").length).toBe(5);
+    // the dock now has 6 items and accounting is untouched
+    expect(preview.filter((i) => i.place === "dock").length).toBe(6);
     expect(preview.find((i) => i.id === "acc-accounting")?.place).toBe("free");
   });
 

@@ -104,6 +104,14 @@ const MAXEDGE_OPTIONS: { value: number; label: string }[] = [
 export interface EditorSaveTargets {
   /** Save into the in-app library (folders). */
   onOpenLibraryTab: () => void;
+  /** A PDF was dropped/picked/pasted — hand it to the quick-convert board
+   *  (تبدیل سریع) which splits it into editable page images. */
+  onForwardPdfs?: (files: File[]) => void;
+}
+
+/** A file the editor treats as a PDF (by mime or extension). */
+function isPdfFile(f: File): boolean {
+  return f.type === "application/pdf" || /\.pdf$/i.test(f.name);
 }
 
 export function ImageEditor({
@@ -197,8 +205,27 @@ export function ImageEditor({
       void loadBlob(source.attachment.blob, source.attachment.name, source, source.attachment.size);
     } else if (source.kind === "library") {
       void loadBlob(source.image.blob, source.image.name, source, source.image.size);
+    } else if (source.kind === "photo") {
+      // عکس پروفایل — a data URL: fetch it back into a Blob and load that.
+      void (async () => {
+        try {
+          const res = await fetch(source.photo);
+          const blob = await res.blob();
+          await loadBlob(blob, `${source.name} — عکس پروفایل`, source, blob.size);
+        } catch {
+          toast.error("خواندن عکس پروفایل ناموفق بود");
+        }
+      })();
     } else if (source.kind === "files" && source.files.length > 0) {
-      void loadBlob(source.files[0], source.files[0].name, null, source.files[0].size);
+      const pdfs = source.files.filter(isPdfFile);
+      if (pdfs.length > 0) {
+        // PDFs can't be edited directly — forward to تبدیل سریع.
+        librarySlot.onForwardPdfs?.(pdfs);
+        const images = source.files.filter((f) => !isPdfFile(f));
+        if (images.length > 0) void loadBlob(images[0], images[0].name, null, images[0].size);
+      } else {
+        void loadBlob(source.files[0], source.files[0].name, null, source.files[0].size);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source]);
@@ -206,13 +233,26 @@ export function ImageEditor({
   // Drop / paste anywhere on the editor.
   const dragging = useFilesDragging();
   const drop = useDropTarget((files) => {
+    const pdfs = files.filter(isPdfFile);
+    if (pdfs.length > 0) {
+      librarySlot.onForwardPdfs?.(pdfs);
+      const image = files.find((f) => f.type.startsWith("image/"));
+      if (image) void loadBlob(image, image.name, null, image.size);
+      return;
+    }
     const image = files.find((f) => f.type.startsWith("image/"));
     if (image) void loadBlob(image, image.name, null, image.size);
-    else toast.error("فقط تصویر قابل ویرایش است");
+    else toast.error("فقط تصویر و PDF قابل استفاده است");
   });
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
-      const file = Array.from(e.clipboardData?.files ?? []).find((f) => f.type.startsWith("image/"));
+      const all = Array.from(e.clipboardData?.files ?? []);
+      const pdfs = all.filter(isPdfFile);
+      if (pdfs.length > 0) {
+        librarySlot.onForwardPdfs?.(pdfs);
+        return;
+      }
+      const file = all.find((f) => f.type.startsWith("image/"));
       if (file) void loadBlob(file, file.name || "pasted.png", null, file.size);
     };
     window.addEventListener("paste", onPaste as EventListener);
@@ -444,6 +484,31 @@ export function ImageEditor({
       toast.success("در پرونده ذخیره شد — همان سند جایگزین شد");
       return;
     }
+    if (origin?.kind === "photo") {
+      // عکس پروفایل: square-crop the result exactly like every avatar, then
+      // write it back onto the record (survives JSON backups like all photos).
+      const final = await encodeFinal();
+      if (!final) return;
+      try {
+        const { dataUrlToSquareDataUrl, setCustomerPhoto, setRepresentativePhoto, setEmployerPhoto } =
+          await import("../../db/photos");
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(String(fr.result));
+          fr.onerror = () => reject(fr.error);
+          fr.readAsDataURL(final.blob);
+        });
+        const square = await dataUrlToSquareDataUrl(dataUrl);
+        if (origin.entity === "customer") await setCustomerPhoto(origin.id, square, origin.name);
+        else if (origin.entity === "rep") await setRepresentativePhoto(origin.id, square, origin.name);
+        else await setEmployerPhoto(origin.id, square, origin.name);
+        toast.success("عکس پروفایل ویرایش و ذخیره شد");
+      } catch (e) {
+        console.error(e);
+        toast.error("ذخیره عکس پروفایل ناموفق بود");
+      }
+      return;
+    }
     if (origin?.kind === "library") {
       const img = origin.image;
       const { replaceStudioImage } = await import("../../db/studio");
@@ -600,12 +665,17 @@ export function ImageEditor({
       <input
         ref={fileRef}
         type="file"
-        accept="image/*"
+        accept="image/*,.pdf"
+        multiple
         className="hidden"
         onChange={(e) => {
-          const f = e.target.files?.[0];
+          const files = Array.from(e.target.files ?? []);
           e.target.value = "";
-          if (f) void loadBlob(f, f.name, null, f.size);
+          if (files.length === 0) return;
+          const pdfs = files.filter(isPdfFile);
+          if (pdfs.length > 0) librarySlot.onForwardPdfs?.(pdfs);
+          const image = files.find((f) => !isPdfFile(f));
+          if (image) void loadBlob(image, image.name, null, image.size);
         }}
       />
 
@@ -946,7 +1016,11 @@ export function ImageEditor({
             <span className="flex-1" />
             {origin && (
               <Button size="sm" variant="glass" icon={FolderPlus} onClick={() => void saveInPlace()}>
-                {origin.kind === "attachment" ? "ذخیره در پرونده" : "ذخیره روی همان تصویر"}
+                {origin.kind === "attachment"
+                  ? "ذخیره در پرونده"
+                  : origin.kind === "photo"
+                    ? "ذخیره عکس پروفایل"
+                    : "ذخیره روی همان تصویر"}
               </Button>
             )}
           </div>
