@@ -70,6 +70,7 @@ import {
   type OutputFormat,
 } from "../../lib/studio/canvas";
 import type { StudioSource } from "../../lib/studio/session";
+import { loadStudioPrefs, saveStudioPrefs } from "../../lib/studio/prefs";
 
 const CROP_PRESETS: { key: string; label: string; ratio: number | null }[] = [
   { key: "free", label: "آزاد", ratio: null },
@@ -90,7 +91,12 @@ interface OutputSettings {
   maxEdge: number; // 0 = unchanged
 }
 
-const DEFAULT_OUTPUT: OutputSettings = { format: "image/webp", quality: 0.86, maxEdge: 0 };
+/** Output defaults come from the remembered prefs (JPEG first run — «پیشفرض
+ *  jpg، نه webp» — and the user's last format/quality/max-edge afterwards). */
+const fallbackOutput = (): OutputSettings => {
+  const p = loadStudioPrefs();
+  return { format: p.format, quality: p.quality, maxEdge: p.maxEdge };
+};
 
 const MAXEDGE_OPTIONS: { value: number; label: string }[] = [
   { value: 0, label: "بدون تغییر" },
@@ -156,7 +162,7 @@ export function ImageEditor({
   const [adjust, setAdjust] = useState<Adjustments>(DEFAULT_ADJUSTMENTS);
 
   // output
-  const [output, setOutput] = useState<OutputSettings>(DEFAULT_OUTPUT);
+  const [output, setOutput] = useState<OutputSettings>(fallbackOutput);
   const [estimate, setEstimate] = useState<{ bytes: number } | null>(null);
   const [estimating, setEstimating] = useState(false);
 
@@ -397,6 +403,18 @@ export function ImageEditor({
     toast.success("تنظیمات در تصویر اعمال شد");
   };
 
+  /* ---------------------- remembered preferences -------------------------- */
+
+  // Every output change is remembered (device-level) so the next session
+  // starts exactly where this one ended — «از اول همهٔ تنظیمات رو انجام بدم» نه.
+  useEffect(() => {
+    saveStudioPrefs({
+      format: output.format,
+      quality: output.quality,
+      maxEdge: output.maxEdge,
+    });
+  }, [output]);
+
   /* ------------------------------ output estimate ------------------------- */
 
   useEffect(() => {
@@ -526,6 +544,15 @@ export function ImageEditor({
 
   /* ------------------------------ save to library -------------------------- */
 
+  /** Open the save dialog with the last-used folder preselected (if it still
+   *  exists — a deleted folder falls back to سایر). */
+  const folders = useStudioFolders() ?? [];
+  const openSaveDialog = () => {
+    const last = loadStudioPrefs().lastFolderId;
+    setSaveFolder(last && folders.some((f) => f.id === last) ? last : null);
+    setSaveOpen(true);
+  };
+
   const doSaveToLibrary = async () => {
     if (!current) return;
     const final = await encodeFinal();
@@ -540,6 +567,7 @@ export function ImageEditor({
       height: final.height,
     });
     toast.success("در کتابخانهٔ ابزار عکس ذخیره شد");
+    saveStudioPrefs({ lastFolderId: saveFolder });
     setSaveOpen(false);
     librarySlot.onOpenLibraryTab();
   };
@@ -997,7 +1025,7 @@ export function ImageEditor({
 
           {/* action bar */}
           <div className="glass sticky bottom-2 z-10 flex flex-wrap items-center gap-2 rounded-3xl px-3.5 py-3">
-            <Button size="sm" variant="primary" icon={Save} onClick={() => setSaveOpen(true)}>
+            <Button size="sm" variant="primary" icon={Save} onClick={openSaveDialog}>
               ذخیره در کتابخانه
             </Button>
             <span className="mx-1 hidden h-6 w-px bg-ink-900/10 dark:bg-white/10 sm:block" />

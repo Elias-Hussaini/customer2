@@ -17,13 +17,19 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Building2, ImagePlus, Search, UserRound, X } from "lucide-react";
+import { Building2, History, ImagePlus, Search, UserRound, X } from "lucide-react";
 import { PageHeader } from "../components/ui/StatCard";
 import { Tabs } from "../components/ui/Tabs";
 import { ImageEditor } from "../components/studio/ImageEditor";
 import { StudioLibrary } from "../components/studio/StudioLibrary";
 import { QuickConvert } from "../components/studio/QuickConvert";
 import { takePendingSource, type StudioSource } from "../lib/studio/session";
+import {
+  getJumpHistory,
+  pushJumpHistory,
+  recentQueries,
+  type JumpHistoryEntry,
+} from "../lib/studio/jumpHistory";
 import { useStudioImages, useCustomers, useEmployers } from "../hooks/useData";
 import { customerFullName } from "../db/customers";
 import { normalizeFa } from "../utils/normalize";
@@ -37,14 +43,27 @@ interface JumpResult {
   subtitle: string;
 }
 
-/** The jump search: customers + employers, one tap → their پرونده. */
+/** The jump search: customers + employers, one tap → their پرونده.
+ *
+ *  History (سابقه): the last 8 jumps live under the box whenever it's empty —
+ *  «حداقل ۵ تا سابقه» — and Backspace on the empty input recalls the previous
+ *  query one step at a time, so nothing ever has to be typed from scratch. */
 function JumpSearch() {
   const navigate = useNavigate();
   const customers = useCustomers();
   const employers = useEmployers();
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
-  const boxRef = useRef<HTMLDivElement | null>(null);
+  const [history, setHistory] = useState<JumpHistoryEntry[]>([]);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  /** Cursor into the Backspace recall chain (recent queries, newest first). */
+  const recallIdx = useRef(0);
+
+  useEffect(() => {
+    setHistory(getJumpHistory());
+  }, []);
+
+  const queries = useMemo(() => recentQueries(history), [history]);
 
   const results = useMemo<JumpResult[]>(() => {
     const q = normalizeFa(query.trim());
@@ -71,25 +90,60 @@ function JumpSearch() {
     return out;
   }, [query, customers, employers]);
 
-  const go = (r: JumpResult) => {
+  const go = (r: JumpResult, queryUsed: string) => {
+    pushJumpHistory({
+      id: r.id,
+      type: r.type,
+      title: r.title,
+      subtitle: r.subtitle,
+      query: queryUsed.trim(),
+    });
+    setHistory(getJumpHistory());
+    recallIdx.current = 0;
     setQuery("");
     setOpen(false);
     navigate(r.type === "customer" ? `/customers/${r.id}` : `/employers/${r.id}`);
   };
 
+  /** Backspace on the empty input → step back through previous queries. The
+   *  restored text arrives fully selected, so the NEXT Backspace clears it and
+   *  the one after recalls the older query — a natural step-by-step rhythm. */
+  const recallPrevious = () => {
+    if (queries.length === 0) return;
+    const q = queries[recallIdx.current % queries.length];
+    recallIdx.current += 1;
+    setQuery(q);
+    setOpen(true);
+    requestAnimationFrame(() => inputRef.current?.select());
+  };
+
   return (
-    <div ref={boxRef} className="relative z-10">
+    <div className="relative z-10">
       <div className="glass flex items-center gap-2 rounded-2xl px-3.5 py-2.5">
         <Search size={17} className="shrink-0 text-ink-400" />
         <input
+          ref={inputRef}
           value={query}
           onChange={(e) => {
-            setQuery(e.target.value);
+            const v = e.target.value;
+            setQuery(v);
+            // Typing restarts the recall chain; CLEARING (backspace on a
+            // recalled selection) keeps the cursor so the next Backspace
+            // continues stepping back through previous queries.
+            if (v !== "") recallIdx.current = 0;
             setOpen(true);
           }}
           onFocus={() => setOpen(true)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && results[0]) go(results[0]);
+            if (e.key === "Backspace" && query === "") {
+              e.preventDefault();
+              recallPrevious();
+              return;
+            }
+            if (e.key === "Enter") {
+              if (results[0]) go(results[0], query);
+              else if (history[0]) go(history[0], history[0].query);
+            }
             if (e.key === "Escape") setOpen(false);
           }}
           placeholder="جستجوی مشتری یا کارفرما — وارد شدن سریع به پرونده…"
@@ -101,6 +155,7 @@ function JumpSearch() {
             aria-label="پاک کردن"
             onClick={() => {
               setQuery("");
+              recallIdx.current = 0;
               setOpen(false);
             }}
           >
@@ -109,37 +164,92 @@ function JumpSearch() {
         )}
       </div>
 
-      {open && query.trim() !== "" && (
+      {open && (
         <>
           <div className="fixed inset-0 z-0" onClick={() => setOpen(false)} />
           <div className="absolute inset-x-0 top-full z-10 mt-2 overflow-hidden rounded-2xl border border-ink-900/8 bg-white/95 shadow-xl backdrop-blur-xl dark:border-white/10 dark:bg-ink-900/95">
-            {results.length === 0 ? (
-              <p className="px-4 py-3.5 text-center text-[12px] text-ink-400">موردی یافت نشد</p>
-            ) : (
-              <ul className="max-h-72 overflow-y-auto">
-                {results.map((r) => (
-                  <li key={`${r.type}-${r.id}`}>
-                    <button
-                      className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-right transition-colors hover:bg-brand-500/8"
-                      onClick={() => go(r)}
-                    >
-                      <span
-                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${
-                          r.type === "customer"
-                            ? "bg-brand-500/12 text-brand-600 dark:text-brand-300"
-                            : "bg-[#f59e0b]/14 text-[#c77d0a] dark:text-[#f5b84f]"
-                        }`}
+            {query.trim() !== "" ? (
+              results.length === 0 ? (
+                <p className="px-4 py-3.5 text-center text-[12px] text-ink-400">موردی یافت نشد</p>
+              ) : (
+                <ul className="max-h-72 overflow-y-auto">
+                  {results.map((r) => (
+                    <li key={`${r.type}-${r.id}`}>
+                      <button
+                        className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-right transition-colors hover:bg-brand-500/8"
+                        onClick={() => go(r, query)}
                       >
-                        {r.type === "customer" ? <UserRound size={15} /> : <Building2 size={15} />}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13px] font-bold">{r.title}</span>
-                        <span className="block truncate text-[10.5px] text-ink-400">{r.subtitle}</span>
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
+                        <span
+                          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${
+                            r.type === "customer"
+                              ? "bg-brand-500/12 text-brand-600 dark:text-brand-300"
+                              : "bg-[#f59e0b]/14 text-[#c77d0a] dark:text-[#f5b84f]"
+                          }`}
+                        >
+                          {r.type === "customer" ? <UserRound size={15} /> : <Building2 size={15} />}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13px] font-bold">{r.title}</span>
+                          <span className="block truncate text-[10.5px] text-ink-400">{r.subtitle}</span>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )
+            ) : history.length > 0 ? (
+              <div>
+                <p className="flex items-center gap-2 border-b border-ink-900/6 px-3.5 py-2 text-[11px] font-bold text-ink-500 dark:border-white/8 dark:text-ink-400">
+                  <History size={13} className="text-brand-600 dark:text-brand-300" />
+                  سابقهٔ جستجو
+                  <span className="num chip-soft rounded-full px-2 py-0.5 text-[10px]">
+                    {toPersianDigits(history.length)}
+                  </span>
+                  <span className="mr-auto text-[10px] font-medium text-ink-400">
+                    ⌫ = جستجوی قبلی
+                  </span>
+                </p>
+                <ul className="max-h-72 overflow-y-auto">
+                  {history.map((h) => (
+                    <li key={`${h.type}-${h.id}`}>
+                      <button
+                        className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-right transition-colors hover:bg-brand-500/8"
+                        onClick={() => go(h, h.query)}
+                      >
+                        <span
+                          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${
+                            h.type === "customer"
+                              ? "bg-brand-500/12 text-brand-600 dark:text-brand-300"
+                              : "bg-[#f59e0b]/14 text-[#c77d0a] dark:text-[#f5b84f]"
+                          }`}
+                        >
+                          {h.type === "customer" ? <UserRound size={15} /> : <Building2 size={15} />}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13px] font-bold">{h.title}</span>
+                          <span className="block truncate text-[10.5px] text-ink-400">
+                            {h.subtitle}
+                          </span>
+                        </span>
+                        {h.query && (
+                          <span
+                            dir="auto"
+                            className="chip-soft hidden max-w-24 truncate rounded-full px-2 py-0.5 text-[10px] text-ink-500 dark:text-ink-400 sm:inline-block"
+                          >
+                            {h.query}
+                          </span>
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <p className="px-4 py-3.5 text-center text-[12px] leading-6 text-ink-400">
+                نام مشتری یا کارفرما را بنویسید تا مستقیم به پرونده‌اش بپرید.
+                <br />
+                سابقهٔ جستجوهایتان اینجا نگه داشته می‌شود.
+              </p>
             )}
           </div>
         </>

@@ -202,8 +202,20 @@ export async function encodeCanvas(
     if (!blob) throw new Error("PNG encoding failed");
     return blob;
   }
+  // JPEG has no alpha channel — a naive toBlob("image/jpeg") composites onto
+  // BLACK. Flatten onto white so transparent PNG logos/scans stay printable
+  // (JPEG is the default output format now).
+  let src = canvas;
+  if (mime === "image/jpeg") {
+    const flat = newCanvas(canvas.width, canvas.height);
+    const ctx = ctx2d(flat);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, flat.width, flat.height);
+    ctx.drawImage(canvas, 0, 0);
+    src = flat;
+  }
   const q = Math.min(1, Math.max(0.3, quality));
-  const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, mime, q));
+  const blob = await new Promise<Blob | null>((r) => src.toBlob(r, mime, q));
   if (!blob) throw new Error("encoding failed");
   return blob;
 }
