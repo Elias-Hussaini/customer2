@@ -113,6 +113,17 @@ export function recentQueries(entries: JumpHistoryEntry[]): string[] {
   return out;
 }
 
+/** Pick the next query in the recall chain (newest → oldest, wrapping around)
+ *  plus the cursor for the following step. An empty chain yields null. */
+export function nextRecall(
+  queries: string[],
+  cursor: number,
+): { query: string | null; next: number } {
+  if (queries.length === 0) return { query: null, next: cursor };
+  const i = ((cursor % queries.length) + queries.length) % queries.length;
+  return { query: queries[i], next: cursor + 1 };
+}
+
 /** Test hook. */
 export function __resetJumpHistoryForTests(): void {
   try {

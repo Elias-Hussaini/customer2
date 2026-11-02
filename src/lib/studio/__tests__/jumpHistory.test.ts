@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   __resetJumpHistoryForTests,
   getJumpHistory,
+  nextRecall,
   pushJumpHistory,
   recentQueries,
 } from "../jumpHistory";
@@ -67,6 +68,35 @@ describe("jump history — Backspace recall chain", () => {
     pushJumpHistory(entry("c3", "رضا"));
     pushJumpHistory(entry("c4", "")); // empty query (e.g. history click) → skipped
     expect(recentQueries(getJumpHistory())).toEqual(["رضا", "علی"]);
+  });
+});
+
+describe("jump history — nextRecall stepping (the arrow button)", () => {
+  it("steps newest → older → oldest, then wraps around", () => {
+    const qs = ["جدیدترین", "وسطی", "قدیمی"];
+    let cursor = 0;
+    const a = nextRecall(qs, cursor);
+    cursor = a.next;
+    expect(a.query).toBe("جدیدترین");
+    const b = nextRecall(qs, cursor);
+    cursor = b.next;
+    expect(b.query).toBe("وسطی");
+    const c = nextRecall(qs, cursor);
+    cursor = c.next;
+    expect(c.query).toBe("قدیمی");
+    const d = nextRecall(qs, cursor);
+    expect(d.query).toBe("جدیدترین"); // wrapped back to the newest
+    expect(d.next).toBe(cursor + 1);
+  });
+
+  it("empty chain → null (nothing to recall)", () => {
+    expect(nextRecall([], 3).query).toBeNull();
+    expect(nextRecall([], 3).next).toBe(3);
+  });
+
+  it("negative cursor is safe", () => {
+    expect(nextRecall(["تنها"], -1).query).toBe("تنها");
+    expect(nextRecall(["الف", "ب"], -3).query).toBe("ب"); // -3 % 2 = 1 (mod fix)
   });
 });
 

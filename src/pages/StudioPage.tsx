@@ -17,7 +17,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Building2, History, ImagePlus, Search, UserRound, X } from "lucide-react";
+import { Building2, History, ImagePlus, Search, Undo2, UserRound, X } from "lucide-react";
 import { PageHeader } from "../components/ui/StatCard";
 import { Tabs } from "../components/ui/Tabs";
 import { ImageEditor } from "../components/studio/ImageEditor";
@@ -26,6 +26,7 @@ import { QuickConvert } from "../components/studio/QuickConvert";
 import { takePendingSource, type StudioSource } from "../lib/studio/session";
 import {
   getJumpHistory,
+  nextRecall,
   pushJumpHistory,
   recentQueries,
   type JumpHistoryEntry,
@@ -46,8 +47,14 @@ interface JumpResult {
 /** The jump search: customers + employers, one tap → their پرونده.
  *
  *  History (سابقه): the last 8 jumps live under the box whenever it's empty —
- *  «حداقل ۵ تا سابقه» — and Backspace on the empty input recalls the previous
- *  query one step at a time, so nothing ever has to be typed from scratch. */
+ *  «حداقل ۵ تا سابقه» — and the previous queries come back two ways: the
+ *  recall ARROW beside the input (always works — «بک‌اسپیس کار نمیکنه» on
+ *  Persian mobile keyboards, which skip keydown on empty inputs) and
+ *  Backspace on the empty input (desktop keydown + native beforeinput for
+ *  mobile IMEs). Both step newest → oldest and wrap around.
+ *
+ *  The whole bar is STICKY under the top bar (top-16): the arrow stays
+ *  reachable while scrolling, gaining a soft backdrop only once floating. */
 function JumpSearch() {
   const navigate = useNavigate();
   const customers = useCustomers();
@@ -55,9 +62,13 @@ function JumpSearch() {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [history, setHistory] = useState<JumpHistoryEntry[]>([]);
+  const [stuck, setStuck] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
   /** Cursor into the Backspace recall chain (recent queries, newest first). */
   const recallIdx = useRef(0);
+  /** Latest recall callback for the native beforeinput listener. */
+  const recallRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     setHistory(getJumpHistory());
@@ -105,21 +116,66 @@ function JumpSearch() {
     navigate(r.type === "customer" ? `/customers/${r.id}` : `/employers/${r.id}`);
   };
 
-  /** Backspace on the empty input → step back through previous queries. The
-   *  restored text arrives fully selected, so the NEXT Backspace clears it and
-   *  the one after recalls the older query — a natural step-by-step rhythm. */
+  /** One step back through the previous queries (arrow or backspace): the
+   *  restored text arrives fully selected, so typing replaces it and the next
+   *  Backspace clears it — a natural step-by-step rhythm. */
   const recallPrevious = () => {
-    if (queries.length === 0) return;
-    const q = queries[recallIdx.current % queries.length];
-    recallIdx.current += 1;
+    const { query: q, next } = nextRecall(queries, recallIdx.current);
+    if (q === null) return;
+    recallIdx.current = next;
     setQuery(q);
     setOpen(true);
     requestAnimationFrame(() => inputRef.current?.select());
   };
+  recallRef.current = () => recallPrevious();
+
+  /* Sticky detection: the bar clamps at top-16 (the top bar's height) while
+   * scrolling — exactly when it floats over content and needs the soft
+   * backdrop. One rect read per scroll event; state flips only on change. */
+  useEffect(() => {
+    const onScroll = () => {
+      const el = wrapRef.current;
+      if (el) setStuck(el.getBoundingClientRect().top <= 65);
+    };
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, []);
+
+  /* Mobile backspace: Persian IMEs usually DON'T fire keydown on an empty
+   * input — the native beforeinput (deleteContentBackward) still fires, so
+   * the recall works on phones too. */
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const onBeforeInput = (e: Event) => {
+      const ie = e as InputEvent;
+      if (ie.inputType === "deleteContentBackward" && el.value === "") {
+        e.preventDefault();
+        recallRef.current();
+      }
+    };
+    el.addEventListener("beforeinput", onBeforeInput);
+    return () => el.removeEventListener("beforeinput", onBeforeInput);
+  }, []);
 
   return (
-    <div className="relative z-10">
-      <div className="glass flex items-center gap-2 rounded-2xl px-3.5 py-2.5">
+    <div
+      ref={wrapRef}
+      className={`sticky jump-search-wrap top-16 z-20 -mx-4 px-4 py-1.5 transition-all duration-200 sm:-mx-6 sm:px-6 ${
+        stuck
+          ? "bg-white/80 shadow-[0_14px_34px_-22px_rgba(30,27,75,0.5)] backdrop-blur-xl dark:bg-ink-950/80"
+          : ""
+      }`}
+    >
+      {/* z-10: the bar itself stays ABOVE its own click-outside overlay, so
+          the recall arrow / clear button stay clickable while the dropdown is
+          open (the overlay only swallows clicks elsewhere on the page). */}
+      <div className="glass relative z-10 flex items-center gap-2 rounded-2xl px-3.5 py-2.5">
         <Search size={17} className="shrink-0 text-ink-400" />
         <input
           ref={inputRef}
@@ -149,6 +205,18 @@ function JumpSearch() {
           placeholder="جستجوی مشتری یا کارفرما — وارد شدن سریع به پرونده…"
           className="min-w-0 flex-1 bg-transparent text-[13px] font-medium outline-none placeholder:text-ink-400"
         />
+        {/* Recall arrow — the always-visible, always-working «جستجوی قبلی»:
+            one tap = one step back through the previous queries. */}
+        {queries.length > 0 && (
+          <button
+            className="icon-btn !h-7 !w-7 shrink-0 !text-brand-600 dark:!text-brand-300"
+            aria-label="جستجوی قبلی"
+            title="جستجوی قبلی — یک قدم به عقب"
+            onClick={recallPrevious}
+          >
+            <Undo2 size={14} />
+          </button>
+        )}
         {query && (
           <button
             className="icon-btn !h-7 !w-7"
@@ -206,7 +274,7 @@ function JumpSearch() {
                     {toPersianDigits(history.length)}
                   </span>
                   <span className="mr-auto text-[10px] font-medium text-ink-400">
-                    ⌫ = جستجوی قبلی
+                    فلش یا ⌫ = جستجوی قبلی
                   </span>
                 </p>
                 <ul className="max-h-72 overflow-y-auto">
