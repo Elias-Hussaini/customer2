@@ -74,7 +74,7 @@ import {
 import type { DocType } from "../../types";
 import { createDocType, getDocTypesForCustomer } from "../../db/docTypes";
 import { saveAttachmentDataUrl } from "../../db/attachments";
-import { dataUrlToSquareDataUrl, setCustomerPhoto } from "../../db/photos";
+import { dataUrlToProfilePhoto, setCustomerPhoto } from "../../db/photos";
 import { customerFullName } from "../../db/customers";
 import { Modal } from "../ui/Modal";
 import { useDropTarget } from "../ui/DropZone";
@@ -503,8 +503,9 @@ export function AiDocSortButton({ customerId }: { customerId: string }) {
       const a = job.actions[i];
       if (a.target.kind === "photo") {
         if (customer && !customer.photo) {
-          const square = await dataUrlToSquareDataUrl(a.image);
-          await setCustomerPhoto(customerId, square, customerName);
+          // «چه از سمت هوش مصنوعی» — same auto 400×600 sizing as a manual pick.
+          const photo = await dataUrlToProfilePhoto(a.image);
+          await setCustomerPhoto(customerId, photo, customerName);
         } else {
           // Profile photo already exists — keep the user's choice, keep the image.
           await saveAttachmentDataUrl(customerId, "other", a.image, "عکس شخصی.jpg");

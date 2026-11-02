@@ -10,6 +10,8 @@ export const DEFAULT_PREFS: AppPreferences = {
   lastListId: null,
   lastEmployerId: null,
   employerFieldEnabled: true,
+  /** «عکس پروفایل … به ۴۰۰×۶۰۰ تبدیل بشه» — default ON (تنظیمات → پیش‌فرض‌های فرم). */
+  profilePhotoAutoSize: true,
   updatedAt: 0,
 };
 

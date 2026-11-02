@@ -8,12 +8,23 @@
 
 import { db } from "./schema";
 import { logActivity } from "./activities";
+import { getPrefs } from "./prefs";
 
 /** Largest accepted source file (photos are re-encoded anyway). */
 export const MAX_PHOTO_BYTES = 15 * 1024 * 1024;
 
 const PHOTO_SIZE = 256;
 const PHOTO_QUALITY = 0.85;
+
+/** Standard profile-photo size — «عرض ۴۰۰، طول ۶۰۰، نسبت آزاد». */
+export const PROFILE_PHOTO_W = 400;
+export const PROFILE_PHOTO_H = 600;
+
+/** Is the automatic 400×600 profile-photo sizing on? (تنظیمات، default ON) */
+export async function profileAutoSizeEnabled(): Promise<boolean> {
+  const prefs = await getPrefs();
+  return prefs.profilePhotoAutoSize !== false;
+}
 
 /** Center-crop any bitmap to a square 256×256 JPEG data URL. */
 function bitmapToSquareDataUrl(bitmap: ImageBitmap): string {
@@ -30,26 +41,47 @@ function bitmapToSquareDataUrl(bitmap: ImageBitmap): string {
   return canvas.toDataURL("image/jpeg", PHOTO_QUALITY);
 }
 
-/** Any image file → square-cropped 256×256 JPEG data URL. */
-export async function fileToSquareDataUrl(file: File): Promise<string> {
+/** Any image file → the stored profile photo: 400×600 exact-stretch when the
+ *  auto sizing is on (تنظیمات), the classic square 256×256 when it is off. */
+export async function fileToProfilePhoto(file: File): Promise<string> {
   const bitmap = await createImageBitmap(file);
   try {
-    return bitmapToSquareDataUrl(bitmap);
+    return await bitmapToStoredPhoto(bitmap);
   } finally {
     bitmap.close();
   }
 }
 
-/** Any image data URL → square-cropped 256×256 JPEG data URL (AI photo target). */
-export async function dataUrlToSquareDataUrl(dataUrl: string): Promise<string> {
+/** Any image data URL → the stored profile photo (the AI photo target). */
+export async function dataUrlToProfilePhoto(dataUrl: string): Promise<string> {
   const res = await fetch(dataUrl);
   const blob = await res.blob();
   const bitmap = await createImageBitmap(blob);
   try {
-    return bitmapToSquareDataUrl(bitmap);
+    return await bitmapToStoredPhoto(bitmap);
   } finally {
     bitmap.close();
   }
+}
+
+/** Route through the settings: 400×600 «نسبت آزاد» or the classic square. */
+async function bitmapToStoredPhoto(bitmap: ImageBitmap): Promise<string> {
+  return (await profileAutoSizeEnabled())
+    ? bitmapToProfileDataUrl(bitmap)
+    : bitmapToSquareDataUrl(bitmap);
+}
+
+/** Exact W×H stretch onto a white JPEG canvas — the same «نسبت آزاد»
+ *  semantics as the editor's resize (both numbers stay exactly as typed). */
+function bitmapToProfileDataUrl(bitmap: ImageBitmap): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = PROFILE_PHOTO_W;
+  canvas.height = PROFILE_PHOTO_H;
+  const ctx = canvas.getContext("2d", { alpha: false })!;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, PROFILE_PHOTO_W, PROFILE_PHOTO_H);
+  ctx.drawImage(bitmap, 0, 0, PROFILE_PHOTO_W, PROFILE_PHOTO_H);
+  return canvas.toDataURL("image/jpeg", PHOTO_QUALITY);
 }
 
 /** Persian error for an unusable file, or null when it is fine. */

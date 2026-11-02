@@ -71,6 +71,7 @@ import {
 } from "../../lib/studio/canvas";
 import type { StudioSource } from "../../lib/studio/session";
 import { loadStudioPrefs, saveStudioPrefs } from "../../lib/studio/prefs";
+import { studioFolderChain } from "../../db/studio";
 
 const CROP_PRESETS: { key: string; label: string; ratio: number | null }[] = [
   { key: "free", label: "آزاد", ratio: null },
@@ -218,6 +219,16 @@ export function ImageEditor({
           const res = await fetch(source.photo);
           const blob = await res.blob();
           await loadBlob(blob, `${source.name} — عکس پروفایل`, source, blob.size);
+          // «تنظیماتش ست بشه»: with the auto sizing on, the resize panel is
+          // pre-armed at 400×600 with a FREE ratio lock — one tap on
+          // «تغییر سایز» and the photo is exactly the standard size.
+          const { profileAutoSizeEnabled, PROFILE_PHOTO_W, PROFILE_PHOTO_H } =
+            await import("../../db/photos");
+          if (await profileAutoSizeEnabled()) {
+            setWInput(String(PROFILE_PHOTO_W));
+            setHInput(String(PROFILE_PHOTO_H));
+            setLockRatio(false);
+          }
         } catch {
           toast.error("خواندن عکس پروفایل ناموفق بود");
         }
@@ -336,31 +347,31 @@ export function ImageEditor({
     }
   };
 
-  const applyResizeInputs = () => {
+  /** Exact pixel resize — the canvas becomes exactly W×H («نسبت آزاد» when
+   *  `free`, the ratio lock chip is switched off so both numbers stay put). */
+  const resizeTo = (w: number, h: number, opts?: { free?: boolean }) => {
     if (!current) return;
-    const w = Number(wInput.replace(/[^\d]/g, ""));
-    let h = Number(hInput.replace(/[^\d]/g, ""));
-    if (!w || !h) {
-      if (lockRatio && w && current.width) {
-        const r = fitRatio(w, null, current.width / current.height);
-        h = r.h;
-      }
-      if (!w || !h) {
-        toast.error("عرض و ارتفاع را به پیکسل وارد کنید");
-        return;
-      }
-    }
-    if (lockRatio && w && h) {
-      const fitted = fitRatio(w, null, current.width / current.height);
-      h = fitted.h;
-      setHInput(String(h));
-    }
     if (w < 4 || h < 4) {
       toast.error("حداقل ۴ پیکسل");
       return;
     }
+    if (opts?.free) setLockRatio(false);
     push(applyResize(current, w, h));
-    toast.success(`سایز به ${w}×${h} تغییر کرد`);
+    toast.success(`سایز به ${w}×${h} تغییر کرد${opts?.free ? " — نسبت آزاد" : ""}`);
+  };
+
+  const applyResizeInputs = () => {
+    if (!current) return;
+    const w = Number(wInput.replace(/[^\d]/g, ""));
+    let h = Number(hInput.replace(/[^\d]/g, ""));
+    if (lockRatio && w && current.width) {
+      h = fitRatio(w, null, current.width / current.height).h;
+    }
+    if (!w || !h) {
+      toast.error("عرض و ارتفاع را به پیکسل وارد کنید");
+      return;
+    }
+    resizeTo(w, h);
   };
 
   const onWChange = (v: string) => {
@@ -503,12 +514,13 @@ export function ImageEditor({
       return;
     }
     if (origin?.kind === "photo") {
-      // عکس پروفایل: square-crop the result exactly like every avatar, then
-      // write it back onto the record (survives JSON backups like all photos).
+      // عکس پروفایل: convert to the standard stored size (auto 400×600 when
+      // the setting is on), then write it back onto the record (survives JSON
+      // backups like all photos).
       const final = await encodeFinal();
       if (!final) return;
       try {
-        const { dataUrlToSquareDataUrl, setCustomerPhoto, setRepresentativePhoto, setEmployerPhoto } =
+        const { dataUrlToProfilePhoto, setCustomerPhoto, setRepresentativePhoto, setEmployerPhoto } =
           await import("../../db/photos");
         const dataUrl = await new Promise<string>((resolve, reject) => {
           const fr = new FileReader();
@@ -516,10 +528,10 @@ export function ImageEditor({
           fr.onerror = () => reject(fr.error);
           fr.readAsDataURL(final.blob);
         });
-        const square = await dataUrlToSquareDataUrl(dataUrl);
-        if (origin.entity === "customer") await setCustomerPhoto(origin.id, square, origin.name);
-        else if (origin.entity === "rep") await setRepresentativePhoto(origin.id, square, origin.name);
-        else await setEmployerPhoto(origin.id, square, origin.name);
+        const stored = await dataUrlToProfilePhoto(dataUrl);
+        if (origin.entity === "customer") await setCustomerPhoto(origin.id, stored, origin.name);
+        else if (origin.entity === "rep") await setRepresentativePhoto(origin.id, stored, origin.name);
+        else await setEmployerPhoto(origin.id, stored, origin.name);
         toast.success("عکس پروفایل ویرایش و ذخیره شد");
       } catch (e) {
         console.error(e);
@@ -848,6 +860,16 @@ export function ImageEditor({
                 <button className="btn btn-glass btn-sm" onClick={() => quickScale(25)} title="یک‌چهارم">
                   <Scaling size={14} /> ۲۵٪
                 </button>
+                {/* دکمهٔ سایز آماده — «به محض اینکه اون دکمه رو زدی این تنظیمات ست
+                    بشه»: 800×600 با نسبت آزاد، یک ضرب اعمال می‌شود. */}
+                <button
+                  className="btn btn-glass btn-sm"
+                  onClick={() => resizeTo(800, 600, { free: true })}
+                  disabled={!current}
+                  title="سایز ۸۰۰×۶۰۰ با نسبت آزاد — فوری اعمال می‌شود"
+                >
+                  <Scaling size={14} /> ۸۰۰×۶۰۰
+                </button>
               </div>
               <div className="mt-3 flex flex-wrap items-end gap-2">
                 <label className="flex flex-col gap-1 text-[11px] font-bold text-ink-500 dark:text-ink-400">
@@ -1147,7 +1169,9 @@ function handlePositions(sel: Sel): { key: string; x: number; y: number; fx: num
   ];
 }
 
-/** Folder selector used by the save dialog. */
+/** Folder selector used by the save dialog — nested folders show their full
+ *  path («سفرها / مدارک») so same-named folders in different places stay
+ *  distinguishable. */
 function SaveFolderPicker({
   value,
   onChange,
@@ -1156,6 +1180,18 @@ function SaveFolderPicker({
   onChange: (v: string | null) => void;
 }) {
   const folders = useStudioFolders() ?? [];
+  const options = useMemo(
+    () =>
+      folders
+        .map((f) => ({
+          id: f.id,
+          label: studioFolderChain(folders, f.id)
+            .map((x) => x.name)
+            .join(" / "),
+        }))
+        .sort((a, b) => a.label.localeCompare(b.label, "fa")),
+    [folders],
+  );
   return (
     <label className="block text-[11px] font-bold text-ink-500 dark:text-ink-400">
       پوشه
@@ -1165,9 +1201,9 @@ function SaveFolderPicker({
         onChange={(e) => onChange(e.target.value === "" ? null : e.target.value)}
       >
         <option value="">سایر (بدون پوشه)</option>
-        {folders.map((f) => (
-          <option key={f.id} value={f.id}>
-            {f.name}
+        {options.map((o) => (
+          <option key={o.id} value={o.id}>
+            {o.label}
           </option>
         ))}
       </select>

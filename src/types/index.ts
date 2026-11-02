@@ -297,6 +297,8 @@ export interface AppPreferences {
   lastEmployerId?: string | null;
   /** کارفرما feature master switch — off hides the field everywhere. */
   employerFieldEnabled?: boolean;
+  /** Profile photos auto-convert to 400×600 (نسبت آزاد) when set — default ON. */
+  profilePhotoAutoSize?: boolean;
   /** Last mode used in the customer form: smart extraction vs manual. */
   /** Internal: default document slots have been seeded once. */
   docTypesSeeded?: boolean;
@@ -335,6 +337,8 @@ export interface AttachmentMeta {
 export interface StudioFolder {
   id: string;
   name: string;
+  /** Parent folder — null/undefined = root level (Windows-style nesting). */
+  parentId?: string | null;
   createdAt: number;
   updatedAt: number;
 }

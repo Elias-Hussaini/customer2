@@ -8,16 +8,20 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { db } from "../schema";
 import {
+  childrenOfStudio,
   createFolder,
-  renameFolder,
   deleteFolder,
+  isStudioDescendant,
+  moveFolder,
+  renameFolder,
+  deleteImage,
+  moveImage,
+  replaceStudioImage,
   saveStudioImage,
   renameImage,
-  moveImage,
-  deleteImage,
-  replaceStudioImage,
   getImagesInFolder,
   getStudioStats,
+  studioFolderChain,
 } from "../studio";
 
 beforeEach(async () => {
@@ -54,6 +58,93 @@ describe("studio folders", () => {
     const all = await db.studioImages.toArray();
     expect(all.length).toBe(2);
     expect(all.every((i) => i.folderId == null)).toBe(true);
+  });
+});
+
+describe("studio folders — Windows-style hierarchy (round 21)", () => {
+  it("nests folders via parentId and childrenOfStudio lists one level, fa-sorted", async () => {
+    const root = await createFolder("سفرها");
+    const b = await createFolder("مدارک", root.id);
+    const a = await createFolder("آلبوم", root.id);
+    const deep = await createFolder("صفحه اول", b.id);
+
+    const all = await db.studioFolders.toArray();
+    expect(childrenOfStudio(all, null).map((f) => f.id)).toEqual([root.id]);
+    expect(childrenOfStudio(all, root.id).map((f) => f.name)).toEqual(["آلبوم", "مدارک"]); // fa sort
+    expect(childrenOfStudio(all, b.id).map((f) => f.id)).toEqual([deep.id]);
+    expect((await db.studioFolders.get(deep.id))?.parentId).toBe(b.id);
+  });
+
+  it("duplicate names only clash inside the SAME level (Windows behavior)", async () => {
+    const root = await createFolder("سفرها");
+    await createFolder("مدارک", root.id);
+    // same name at root → fine; same name inside سفرها → clash
+    const other = await createFolder("مدارک");
+    expect(other.parentId).toBeNull();
+    await expect(createFolder("مدارک", root.id)).rejects.toThrow(/همین سطح/);
+  });
+
+  it("builds the breadcrumb chain and detects descendants", async () => {
+    const a = await createFolder("الف");
+    const b = await createFolder("ب", a.id);
+    const c = await createFolder("ج", b.id);
+    const all = await db.studioFolders.toArray();
+
+    expect(studioFolderChain(all, c.id).map((f) => f.name)).toEqual(["الف", "ب", "ج"]);
+    expect(studioFolderChain(all, null)).toEqual([]);
+    expect(isStudioDescendant(all, a.id, c.id)).toBe(true);
+    expect(isStudioDescendant(all, c.id, a.id)).toBe(false);
+  });
+
+  it("moveFolder nests whole subtrees and refuses cycles", async () => {
+    const a = await createFolder("الف");
+    const b = await createFolder("ب", a.id);
+    const c = await createFolder("ج", b.id);
+    const target = await createFolder("مقصد");
+
+    // move a WHOLE subtree (الف → inside ج, which is a's own descendant) → rejected
+    await expect(moveFolder(a.id, c.id)).rejects.toThrow(/خودش|زیرپوشه/);
+    // moving ج under مقصد is fine
+    await moveFolder(c.id, target.id);
+    expect((await db.studioFolders.get(c.id))?.parentId).toBe(target.id);
+    // ...and الف's chain is untouched
+    const all = await db.studioFolders.toArray();
+    expect(studioFolderChain(all, b.id).map((f) => f.name)).toEqual(["الف", "ب"]);
+    // move to root = null
+    await moveFolder(c.id, null);
+    expect((await db.studioFolders.get(c.id))?.parentId).toBeNull();
+  });
+
+  it("deleting a folder lifts sub-folders UP and unfiles only its OWN images (like lists)", async () => {
+    const root = await createFolder("سفرها");
+    const kid = await createFolder("مدارک", root.id);
+    const grandKid = await createFolder("پاسپورت", kid.id);
+    await saveStudioImage({ folderId: kid.id, name: "direct.webp", mime: "image/webp", blob: imgBlob(5), width: 10, height: 10 });
+    await saveStudioImage({ folderId: grandKid.id, name: "deep.webp", mime: "image/webp", blob: imgBlob(7), width: 10, height: 10 });
+
+    await deleteFolder(kid.id);
+
+    // پاسپورت climbed to سفرها (its deleted parent's parent)
+    expect((await db.studioFolders.get(grandKid.id))?.parentId).toBe(root.id);
+    // the image DIRECTLY inside the deleted folder became «سایر»…
+    expect((await getImagesInFolder(null)).map((i) => i.name)).toEqual(["direct.webp"]);
+    // …while the image inside the surviving sub-folder stayed right there
+    expect((await getImagesInFolder(grandKid.id)).map((i) => i.name)).toEqual(["deep.webp"]);
+  });
+
+  it("renaming stays sibling-scoped after a move", async () => {
+    const r1 = await createFolder("صندوق یک");
+    const r2 = await createFolder("صندوق دو");
+    const f1 = await createFolder("قراردادها", r1.id);
+    const f2 = await createFolder("قراردادها", r2.id);
+    // both keep the same name in different levels
+    expect(f1.name).toBe(f2.name);
+    await createFolder("گواهی", r1.id); // a SIBLING of f1
+    await expect(renameFolder(f1.id, "گواهی")).rejects.toThrow(/همین سطح/);
+    // the parent's own name (or a root folder's name) is NOT a sibling clash
+    await expect(renameFolder(f1.id, "صندوق یک")).resolves.toBeUndefined();
+    await renameFolder(f1.id, "عقدد");
+    expect((await db.studioFolders.get(f1.id))?.name).toBe("عقدد");
   });
 });
 

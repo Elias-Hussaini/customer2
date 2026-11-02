@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FileSearch, FolderOpen, Search, User, UserRound } from "lucide-react";
+import { FileSearch, FolderOpen, Search, Undo2, User, UserRound } from "lucide-react";
 import type { Customer, CustomFieldDef, Employer, ListFolder, Representative, Tag, VisaRequest } from "../../types";
 import { buildSearchDataset, searchDataset, type SearchHit } from "../../services/search";
 import { customerFullName } from "../../db/customers";
 import { normalizeFa } from "../../utils/normalize";
 import { robotBus } from "../../lib/robot/eventBus";
 import { Floating, isFloatingPanel } from "../ui/Floating";
+import { useFieldRecall } from "../../hooks/useFieldRecall";
 
 const TYPE_LABELS: Record<string, string> = {
   customer: "مشتری",
@@ -47,6 +48,18 @@ export function GlobalSearch({
   const navigate = useNavigate();
   const wrapRef = useRef<HTMLDivElement>(null);
 
+  /** Live search typing → the robot reacts (query-aware lines). */
+  const onQuery = (q: string) => {
+    setQuery(q);
+    setOpen(true);
+    if (normalizeFa(q).length >= 2) robotBus.emit({ type: "app:search", query: q });
+  };
+
+  // «هر وقت وارد فیلدی میشی بیاد و برگرده عقب» — the same recall arrow +
+  // Backspace that the studio jump search has, now in the global search too.
+  const rec = useFieldRecall({ key: "global", value: query, onChange: onQuery });
+  const showArrow = rec.focused && rec.hasHistory;
+
   const dataset = useMemo(
     () => buildSearchDataset(customers, representatives, requests, lists, tags, customFields, employers),
     [customers, representatives, requests, lists, tags, customFields, employers],
@@ -56,13 +69,6 @@ export function GlobalSearch({
     if (normalizeFa(query).length < 2) return [] as SearchHit[];
     return searchDataset(query, dataset, {}, 3);
   }, [query, dataset]);
-
-  /** Live search typing → the robot reacts (query-aware lines). */
-  const onQuery = (q: string) => {
-    setQuery(q);
-    setOpen(true);
-    if (normalizeFa(q).length >= 2) robotBus.emit({ type: "app:search", query: q });
-  };
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
@@ -75,6 +81,7 @@ export function GlobalSearch({
 
   const go = (hit: SearchHit) => {
     setOpen(false);
+    rec.commit(); // picking a result is a commit — the query joins the history
     setQuery("");
     const paths: Record<string, (id: string) => string> = {
       customer: (id) => `/customers/${id}`,
@@ -90,19 +97,38 @@ export function GlobalSearch({
       <div className="relative">
         <Search size={15} className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-400" />
         <input
-          className="field !py-2 pr-10 text-[13px]"
+          ref={rec.inputRef}
+          className={`field !py-2 pr-10 text-[13px] ${showArrow ? "pl-8" : ""}`}
           placeholder="جستجوی سراسری… (نام، پاسپورت، شماره تماس)"
           data-global-search
           value={query}
-          onFocus={() => setOpen(true)}
-          onChange={(e) => onQuery(e.target.value)}
+          onFocus={() => {
+            setOpen(true);
+            rec.onFocus();
+          }}
+          onChange={(e) => rec.handleChange(e.target.value)}
+          onBlur={rec.onBlur}
           onKeyDown={(e) => {
+            if (rec.backspaceOnEmpty(e)) return;
             if (e.key === "Enter" && query.trim()) {
+              rec.commit();
               navigate(`/search?q=${encodeURIComponent(query.trim())}`);
               setOpen(false);
             }
           }}
         />
+        {showArrow && (
+          <button
+            type="button"
+            className="absolute left-1.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-lg text-brand-600 transition-colors hover:bg-brand-500/10 dark:text-brand-300"
+            aria-label="جستجوی قبلی"
+            title="جستجوی قبلی — یک قدم به عقب (⌫ روی فیلد خالی)"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={rec.recall}
+          >
+            <Undo2 size={13} />
+          </button>
+        )}
       </div>
       {open && normalizeFa(query).length >= 2 && (
         <Floating
@@ -151,6 +177,7 @@ export function GlobalSearch({
               <button
                 className="w-full bg-brand-500/8 px-4 py-2.5 text-center text-xs font-bold text-brand-600 hover:bg-brand-500/14 dark:text-brand-300"
                 onClick={() => {
+                  rec.commit();
                   navigate(`/search?q=${encodeURIComponent(query.trim())}`);
                   setOpen(false);
                 }}

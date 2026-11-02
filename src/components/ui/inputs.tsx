@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, Plus, Search } from "lucide-react";
+import { ChevronDown, Plus, Search, Undo2 } from "lucide-react";
 import { normalizeFa } from "../../utils/normalize";
 import { Floating, isFloatingPanel } from "./Floating";
+import { useFieldRecall } from "../../hooks/useFieldRecall";
 
 export interface SearchSelectItem {
   id: string;
@@ -245,21 +246,49 @@ export function SearchBox({
   onChange,
   placeholder = "جستجو…",
   className = "",
+  recallKey,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   className?: string;
+  /** History identity for the recall arrow — defaults to the placeholder. */
+  recallKey?: string;
 }) {
+  // «هر وقت وارد فیلدی میشی بیاد و برگرده عقب»: focus the box → the small
+  // recall arrow appears (when this field has history); Backspace on the
+  // empty box steps back too. Values are remembered on Enter / blur.
+  const rec = useFieldRecall({ key: recallKey ?? `search:${placeholder}`, value, onChange });
+  const showArrow = rec.focused && rec.hasHistory;
   return (
     <div className={`relative ${className}`}>
       <Search size={15} className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-400" />
       <input
-        className="field !py-2 pr-10 text-[13px]"
+        ref={rec.inputRef}
+        className={`field !py-2 pr-10 text-[13px] ${showArrow ? "pl-8" : ""}`}
         placeholder={placeholder}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => rec.handleChange(e.target.value)}
+        onFocus={rec.onFocus}
+        onBlur={rec.onBlur}
+        onKeyDown={(e) => {
+          if (rec.backspaceOnEmpty(e)) return;
+          if (e.key === "Enter") rec.commit();
+        }}
       />
+      {showArrow && (
+        <button
+          type="button"
+          className="absolute left-1.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-lg text-brand-600 transition-colors hover:bg-brand-500/10 dark:text-brand-300"
+          aria-label="جستجوی قبلی"
+          title="جستجوی قبلی — یک قدم به عقب (⌫ روی فیلد خالی)"
+          /* keep the input focused so the arrow doesn't vanish mid-click */
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={rec.recall}
+        >
+          <Undo2 size={13} />
+        </button>
+      )}
     </div>
   );
 }

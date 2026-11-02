@@ -9,8 +9,11 @@
  *    «ذخیره عکس پروفایل» when opened from an avatar.
  *  - تبدیل سریع: drop PDFs → every page becomes an editable image tile; edit
  *    one instantly, download the batch, or save everything into the library.
- *  - کتابخانه: folders + images, drag & drop everywhere, re-open in the
- *    editor, whole-scope ZIP export or straight into an OS folder (Chrome).
+ *  - کتابخانه: the SAME Windows-style explorer as لیست‌ها — nested folders,
+ *    breadcrumb + back button, شبکه/فهرست views — with rich drag & drop:
+ *    OS files or image cards onto folder tiles/breadcrumbs, folder tiles into
+ *    each other, multi-select batch moves, re-open in the editor, whole-scope
+ *    ZIP export or straight into an OS folder (Chrome).
  *
  * The top search bar jumps straight into any customer's or employer's پرونده.
  */

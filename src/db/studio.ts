@@ -22,13 +22,69 @@ export type { StudioFolder, StudioImage, StudioImageMeta } from "../types";
 
 /* ------------------------------- Folders ---------------------------------- */
 
-export async function createFolder(name: string): Promise<StudioFolder> {
+/** Direct children of a folder (null = root), fa-name-sorted — the exact
+ *  ordering the lists explorer uses (childrenOf in db/lists). */
+export function childrenOfStudio(
+  folders: StudioFolder[],
+  parentId: string | null,
+): StudioFolder[] {
+  return folders
+    .filter((f) => (f.parentId ?? null) === parentId)
+    .sort((a, b) => a.name.localeCompare(b.name, "fa"));
+}
+
+/** The breadcrumb chain root → … → folder (cycle-proof for corrupt data). */
+export function studioFolderChain(
+  folders: StudioFolder[],
+  id: string | null,
+): StudioFolder[] {
+  if (!id) return [];
+  const byId = new Map(folders.map((f) => [f.id, f]));
+  const chain: StudioFolder[] = [];
+  const seen = new Set<string>();
+  let cursor: string | null = id;
+  while (cursor) {
+    if (seen.has(cursor)) break;
+    seen.add(cursor);
+    const f = byId.get(cursor);
+    if (!f) break;
+    chain.unshift(f);
+    cursor = f.parentId ?? null;
+  }
+  return chain;
+}
+
+/** Is `maybeChild` reachable by walking DOWN from `ancestor`? (cycle guard) */
+export function isStudioDescendant(
+  folders: StudioFolder[],
+  ancestor: string,
+  maybeChild: string,
+): boolean {
+  const byId = new Map(folders.map((f) => [f.id, f]));
+  let cursor = byId.get(maybeChild)?.parentId ?? null;
+  const seen = new Set<string>();
+  while (cursor) {
+    if (cursor === ancestor) return true;
+    if (seen.has(cursor)) return false;
+    seen.add(cursor);
+    cursor = byId.get(cursor)?.parentId ?? null;
+  }
+  return false;
+}
+
+export async function createFolder(
+  name: string,
+  parentId: string | null = null,
+): Promise<StudioFolder> {
   const clean = name.trim();
   if (!clean) throw new Error("نام پوشه الزامی است.");
-  const dupe = (await db.studioFolders.toArray()).find((f) => f.name.trim() === clean);
-  if (dupe) throw new Error("پوشه‌ای با این نام وجود دارد.");
+  // Duplicate names only clash INSIDE the same level — Windows allows a
+  // «مدارک» at root and another «مدارک» inside «سفر‌ها».
+  const all = await db.studioFolders.toArray();
+  const dupe = childrenOfStudio(all, parentId).find((f) => f.name.trim() === clean);
+  if (dupe) throw new Error("پوشه‌ای با این نام در همین سطح وجود دارد.");
   const now = Date.now();
-  const folder: StudioFolder = { id: uid(), name: clean, createdAt: now, updatedAt: now };
+  const folder: StudioFolder = { id: uid(), name: clean, parentId, createdAt: now, updatedAt: now };
   await db.studioFolders.add(folder);
   return folder;
 }
@@ -36,14 +92,39 @@ export async function createFolder(name: string): Promise<StudioFolder> {
 export async function renameFolder(id: string, name: string): Promise<void> {
   const clean = name.trim();
   if (!clean) throw new Error("نام پوشه الزامی است.");
-  const dupe = (await db.studioFolders.toArray()).find((f) => f.id !== id && f.name.trim() === clean);
-  if (dupe) throw new Error("پوشه‌ای با این نام وجود دارد.");
+  const all = await db.studioFolders.toArray();
+  const me = all.find((f) => f.id === id);
+  const dupe = childrenOfStudio(all, me?.parentId ?? null).find(
+    (f) => f.id !== id && f.name.trim() === clean,
+  );
+  if (dupe) throw new Error("پوشه‌ای با این نام در همین سطح وجود دارد.");
   await db.studioFolders.update(id, { name: clean, updatedAt: Date.now() });
 }
 
-/** Delete a folder — its images survive and become «سایر» (unfiled). */
+/** Move a folder (and everything inside it) into another folder / to root.
+ *  Moving a folder into itself or one of its own descendants is rejected. */
+export async function moveFolder(id: string, parentId: string | null): Promise<void> {
+  if (id === parentId) return;
+  if (parentId != null) {
+    const all = await db.studioFolders.toArray();
+    if (isStudioDescendant(all, id, parentId)) {
+      throw new Error("نمی‌شود پوشه را داخل خودش یا زیرپوشه‌هایش برد.");
+    }
+  }
+  await db.studioFolders.update(id, { parentId, updatedAt: Date.now() });
+}
+
+/** Delete a folder — EXACTLY like the lists explorer: sub-folders climb one
+ *  level up to the deleted folder's parent («زیرپوشه‌ها یک سطح بالا
+ *  می‌روند»); the images inside survive and become «سایر» (unfiled). */
 export async function deleteFolder(id: string): Promise<void> {
+  const folder = await db.studioFolders.get(id);
+  const parent = folder?.parentId ?? null;
   await db.transaction("rw", db.studioFolders, db.studioImages, async () => {
+    const kids = await db.studioFolders.where("parentId").equals(id).toArray();
+    await Promise.all(
+      kids.map((k) => db.studioFolders.update(k.id, { parentId: parent, updatedAt: Date.now() })),
+    );
     await db.studioFolders.delete(id);
     const inside = await db.studioImages.where("folderId").equals(id).toArray();
     if (inside.length > 0) {

@@ -145,6 +145,12 @@ export class VisaDB extends Dexie {
     this.version(11).stores({
       lists: "id, name, createdAt, archivedAt, parentId",
     });
+    // v12: the SAME Windows-style hierarchy for the image studio (ابزار عکس)
+    // — studioFolders gain parentId so image folders nest inside each other.
+    // Existing folders stay at root.
+    this.version(12).stores({
+      studioFolders: "id, createdAt, parentId",
+    });
   }
 }
 

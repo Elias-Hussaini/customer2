@@ -13,7 +13,7 @@ import { Button } from "../ui/Button";
 import { Modal } from "../ui/Modal";
 import { openStudioFor } from "../../lib/studio/session";
 import {
-  fileToSquareDataUrl,
+  fileToProfilePhoto,
   setCustomerPhoto,
   setEmployerPhoto,
   setRepresentativePhoto,
@@ -57,7 +57,8 @@ export function ProfilePhotoCard({ kind, id, photo, name, subtitle }: Props) {
     }
     setBusy(true);
     try {
-      const dataUrl = await fileToSquareDataUrl(file);
+      // «چه دستی» — auto 400×600 (نسبت آزاد) when the setting is on.
+      const dataUrl = await fileToProfilePhoto(file);
       if (kind === "customer") await setCustomerPhoto(id, dataUrl, name);
       else if (kind === "employer") await setEmployerPhoto(id, dataUrl, name);
       else await setRepresentativePhoto(id, dataUrl, name);

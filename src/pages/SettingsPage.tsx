@@ -1100,6 +1100,19 @@ function DefaultsSection() {
             onChange={(v) => void updatePrefs({ rememberLastSelections: v })}
           />
         </div>
+        <div className="flex items-center justify-between rounded-2xl bg-brand-500/6 px-4 py-3">
+          <div>
+            <p className="text-[13px] font-bold">اندازهٔ استاندارد عکس پروفایل (۴۰۰×۶۰۰)</p>
+            <p className="text-[11px] leading-5 text-ink-500 dark:text-ink-400">
+              هر عکس پروفایلی — چه با انتخاب دستی، چه از سمت هوش مصنوعی، چه با ویرایش در ابزار
+              عکس — هنگام ثبت خودکار به عرض ۴۰۰ و ارتفاع ۶۰۰ پیکسل با نسبت آزاد تبدیل می‌شود
+            </p>
+          </div>
+          <Toggle
+            checked={prefs.profilePhotoAutoSize !== false}
+            onChange={(v) => void updatePrefs({ profilePhotoAutoSize: v })}
+          />
+        </div>
         <FormField label="نوع ویزای پیش‌فرض">
           <Select
             value={prefs.defaultVisaType ?? ""}
