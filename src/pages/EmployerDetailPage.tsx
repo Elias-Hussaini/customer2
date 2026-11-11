@@ -25,7 +25,7 @@ import { ActivityFeed } from "../components/ui/ActivityFeed";
 import { Button } from "../components/ui/Button";
 import { CopyRow, copyText } from "../components/ui/CopyRow";
 import { EmptyState } from "../components/ui/EmptyState";
-import { Avatar } from "../components/ui/Avatar";
+import { useCustomerFilters, CustomerCardGrid } from "../components/domain/CustomerFilterPanel";
 import { ProfilePhotoCard } from "../components/domain/ProfilePhotoCard";
 import { EmployerFormModal } from "../components/domain/EmployerFormModal";
 import { ProfileDocsManager } from "../components/domain/ProfileDocsManager";
@@ -41,12 +41,17 @@ import {
   useCustomFields,
   useEmployerAttachments,
   useEmployer,
+  useLists,
+  useRepresentatives,
+  useRequests,
+  useTags,
 } from "../hooks/useData";
 import { useConfirm } from "../hooks/useConfirm";
 import { useToast } from "../hooks/useToast";
 import { customerFullName } from "../db/customers";
 import { formatJalali, toPersianDigits } from "../utils/jalali";
 import { formatNumber } from "../utils/num";
+import type { Customer, ListFolder, Representative, Tag, VisaRequest } from "../types";
 
 export function EmployerDetailPage() {
   const { id } = useParams();
@@ -56,6 +61,10 @@ export function EmployerDetailPage() {
 
   const employer = useEmployer(id);
   const customers = useCustomers();
+  const requests = useRequests();
+  const representatives = useRepresentatives();
+  const lists = useLists();
+  const tags = useTags();
   const docs = useEmployerAttachments(id);
   const customFields = useCustomFields();
   const activities = useActivities(15, id);
@@ -251,23 +260,13 @@ export function EmployerDetailPage() {
                 هنوز مشتری‌ای با این کارفرما ثبت نشده — از فرم ثبت مشتری می‌توانید انتخابش کنید.
               </p>
             ) : (
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {linked.map((c) => (
-                  <Link
-                    key={c.id}
-                    to={`/customers/${c.id}`}
-                    className="glass flex items-center gap-3 rounded-2xl p-3 transition-colors hover:bg-brand-500/8"
-                  >
-                    <Avatar photo={c.photo} name={customerFullName(c)} size="sm" />
-                    <span className="min-w-0">
-                      <span className="block truncate text-[13px] font-bold">{customerFullName(c)}</span>
-                      {c.passportNo && (
-                        <span className="num text-[11px] text-ink-400" dir="ltr">{c.passportNo}</span>
-                      )}
-                    </span>
-                  </Link>
-                ))}
-              </div>
+              <EmployerCustomersPanel
+                linked={linked}
+                requests={requests ?? []}
+                tags={tags ?? []}
+                lists={lists ?? []}
+                representatives={representatives ?? []}
+              />
             )}
           </SectionCard>
         </div>
@@ -340,6 +339,53 @@ export function EmployerDetailPage() {
   );
 }
 
+
+/** Round 22 — «اونجا که مشتریان این کارفرما هست»: the employer panel's customer
+ *  list gets the SAME personalization filter panel as the مشتریان page
+ *  (search / نماینده / لیست / visa status / sort — remembered per device) and
+ *  every customer's TAGS show next to their passport number. */
+function EmployerCustomersPanel({
+  linked,
+  requests,
+  tags,
+  lists,
+  representatives,
+}: {
+  linked: Customer[];
+  requests: VisaRequest[];
+  tags: Tag[];
+  lists: ListFolder[];
+  representatives: Representative[];
+}) {
+  const { panel, rows, anyActive } = useCustomerFilters({
+    pageKey: "employerProfile",
+    customers: linked,
+    requests,
+    tags,
+    lists,
+    representatives,
+    show: { employer: false },
+    searchPlaceholder: "نام یا شماره پاسپورت مشتری…",
+  });
+
+  return (
+    <div className="flex flex-col gap-3" data-employer-customers>
+      {panel}
+      <p className="text-[11px] text-ink-400">
+        {toPersianDigits(rows.length)} مشتری {anyActive ? "در این فیلتر" : ""}
+      </p>
+      <CustomerCardGrid
+        customers={rows}
+        requests={requests}
+        tags={tags}
+        lists={lists}
+        representatives={representatives}
+        showMeta="rep"
+        emptyHint="با این فیلترها مشتری‌ای پیدا نشد — فیلترها را عوض کنید یا پاک کنید"
+      />
+    </div>
+  );
+}
 
 /** Tiny always-visible copy chip (used inside custom rows like the masked password). */
 function CopyChip({ value, label }: { value: string; label: string }) {

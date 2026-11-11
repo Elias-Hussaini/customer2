@@ -126,17 +126,26 @@ export function RequestFormPage() {
     const prefillCustomer = searchParams.get("customer");
     const prefillRep = searchParams.get("rep");
     const prefillList = searchParams.get("list");
+    // Round 22: a prefilled customer brings THEIR OWN representative + list
+    // (the visa must be registered under the customer's profile rep) — an
+    // explicit rep/list param still wins, but the customer's profile beats
+    // the device-remembered last selection.
+    const prefilledCustomer = prefillCustomer
+      ? customers.find((c) => c.id === prefillCustomer)
+      : undefined;
     const lastRep =
       prefillRep ??
-      (prefs.rememberLastSelections && prefs.lastRepresentativeId &&
-      representatives.some((r) => r.id === prefs.lastRepresentativeId)
-        ? prefs.lastRepresentativeId
-        : null);
+      (prefilledCustomer?.representativeId ??
+        (prefs.rememberLastSelections && prefs.lastRepresentativeId &&
+        representatives.some((r) => r.id === prefs.lastRepresentativeId)
+          ? prefs.lastRepresentativeId
+          : null));
     const lastList =
       prefillList ??
-      (prefs.rememberLastSelections && prefs.lastListId && lists.some((l) => l.id === prefs.lastListId)
-        ? prefs.lastListId
-        : null);
+      (prefilledCustomer?.listId ??
+        (prefs.rememberLastSelections && prefs.lastListId && lists.some((l) => l.id === prefs.lastListId)
+          ? prefs.lastListId
+          : null));
     setForm((f) => ({
       ...f,
       customerId: prefillCustomer && customers.some((c) => c.id === prefillCustomer) ? prefillCustomer : null,
@@ -302,7 +311,19 @@ export function RequestFormPage() {
                 <SearchSelect
                   items={customerItems}
                   value={form.customerId}
-                  onSelect={(cid) => patch({ customerId: cid })}
+                  onSelect={(cid) => {
+                    // Round 22: picking a customer pulls in THEIR representative
+                    // and list — the visa belongs under the customer's profile
+                    // rep unless deliberately changed afterwards.
+                    const picked = (customers ?? []).find((c) => c.id === cid);
+                    patch({
+                      customerId: cid,
+                      ...(picked?.representativeId
+                        ? { representativeId: picked.representativeId }
+                        : {}),
+                      ...(picked?.listId ? { listId: picked.listId } : {}),
+                    });
+                  }}
                   placeholder="جستجوی نام یا شماره پاسپورت…"
                   clearable={false}
                 />

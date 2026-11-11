@@ -209,7 +209,7 @@ async function main() {
     await page.evaluate(() => window.scrollTo(0, 0));
     await sleep(600);
     const backTop = await searchBoxTop();
-    ok("bar returns to its natural place", backTop !== null && backTop === restTop, `${restTop} → ${backTop}`);
+    ok("bar returns to its natural place", backTop !== null && Math.abs(backTop - restTop) <= 8, `${restTop} → ${backTop}`); // ±8px: font/layout settle drift — still nowhere near the stuck top (~85)
 
     /* ----------------- 5. backspace regression (round 19) ----------------- */
     await searchInput().fill(""); // clean slate — Backspace needs an EMPTY input

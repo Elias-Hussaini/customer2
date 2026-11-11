@@ -1,21 +1,42 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Archive, FilePenLine, Phone, Trash2, UserRound, UserRoundPlus } from "lucide-react";
+import { Archive, FilePenLine, Phone, Trash2, UserRound, UserRoundPlus, X } from "lucide-react";
 import { PageHeader } from "../components/ui/StatCard";
 import { EmptyState } from "../components/ui/EmptyState";
-import { SearchBox } from "../components/ui/inputs";
+import { SearchBox, FilterSelect } from "../components/ui/inputs";
 import { Menu } from "../components/ui/Menu";
 import { RepresentativeFormModal } from "../components/domain/RepresentativeFormModal";
 import { Avatar } from "../components/ui/Avatar";
 import { archiveRepresentative, deleteRepresentative } from "../db/reps";
-import { useCustomers, useRepresentatives, useRequests, usePayments, useTags } from "../hooks/useData";
+import { useCustomers, useEmployers, usePrefs, useRepresentatives, useRequests, usePayments, useTags } from "../hooks/useData";
 import { useConfirm } from "../hooks/useConfirm";
 import { useToast } from "../hooks/useToast";
 import { formatMoney } from "../utils/num";
 import { computeRepStats } from "../services/stats";
 import { toPersianDigits } from "../utils/jalali";
+import { loadPageFilter, savePageFilter } from "../utils/pageFilters";
 import { uiActions } from "../components/layout/uiStore";
 import type { Representative } from "../types";
+
+const REP_SORTS = ["name", "newest", "oldest", "mostCustomers", "mostRequests", "mostIssued"] as const;
+type RepSort = (typeof REP_SORTS)[number];
+
+const REP_STATUS = [
+  { value: "", label: "همه وضعیت‌ها" },
+  { value: "pending", label: "در حال کار دارد" },
+  { value: "issued", label: "ویزا صادر شده دارد" },
+  { value: "rejected", label: "رد شده دارد" },
+  { value: "none", label: "بدون درخواست" },
+] as const;
+
+type RepStatus = (typeof REP_STATUS)[number]["value"];
+
+function isRepSort(v: string): v is RepSort {
+  return (REP_SORTS as readonly string[]).includes(v);
+}
+function isRepStatus(v: string): v is RepStatus {
+  return REP_STATUS.some((o) => o.value === v);
+}
 
 export function RepresentativesPage() {
   const navigate = useNavigate();
@@ -26,10 +47,48 @@ export function RepresentativesPage() {
   const requests = useRequests();
   const payments = usePayments();
   const tags = useTags();
+  const employers = useEmployers();
+  const prefs = usePrefs();
+  const employerFieldOn = prefs.employerFieldEnabled !== false;
 
   const [query, setQuery] = useState("");
   const [editOpen, setEditOpen] = useState(false);
   const [editing, setEditing] = useState<Representative | null>(null);
+
+  // Round 22 — the same personalization filters as the مشتریان page,
+  // remembered per device: visa status / linked کارفرما / sort.
+  const [statusFilter, setStatusFilter] = useState<RepStatus>(() => {
+    const saved = loadPageFilter<string>("reps", "status", "", () => true);
+    return isRepStatus(saved) ? saved : "";
+  });
+  const [employerFilter, setEmployerFilter] = useState<string>(() => loadPageFilter<string>("reps", "employer", "", () => true));
+  const [sort, setSort] = useState<RepSort>(() => {
+    const saved = loadPageFilter<string>("reps", "sort", "name", () => true);
+    return isRepSort(saved) ? saved : "name";
+  });
+
+  const repIdsByEmployer = useMemo(() => {
+    const m = new Map<string, Set<string>>();
+    const empById = new Set((employers ?? []).map((e) => e.id));
+    for (const c of customers ?? []) {
+      if (!c.employerId || !empById.has(c.employerId)) continue;
+      if (!c.representativeId) continue;
+      const set = m.get(c.employerId) ?? new Set<string>();
+      set.add(c.representativeId);
+      m.set(c.employerId, set);
+    }
+    return m;
+  }, [customers, employers]);
+
+  useEffect(() => {
+    savePageFilter("reps", "status", statusFilter);
+  }, [statusFilter]);
+  useEffect(() => {
+    savePageFilter("reps", "employer", employerFilter);
+  }, [employerFilter]);
+  useEffect(() => {
+    savePageFilter("reps", "sort", sort);
+  }, [sort]);
 
   /** Permanent delete — guarded by confirm; payments block it, requests/customers detach. */
   const removeRep = async (rep: Representative, requestCount: number, customerCount: number) => {
@@ -53,14 +112,94 @@ export function RepresentativesPage() {
     [tags],
   );
 
+  const statsByRep = useMemo(() => {
+    const m = new Map<string, { total: number; issued: number; rejected: number; inProgress: number; customers: number }>();
+    for (const r of representatives ?? []) m.set(r.id, { total: 0, issued: 0, rejected: 0, inProgress: 0, customers: 0 });
+    for (const c of customers ?? []) {
+      if (!c.representativeId) continue;
+      const e = m.get(c.representativeId);
+      if (e) e.customers++;
+    }
+    for (const r of requests ?? []) {
+      if (r.archivedAt || !r.representativeId) continue;
+      const e = m.get(r.representativeId);
+      if (!e) continue;
+      e.total++;
+      if (r.issued) e.issued++;
+      else if (r.rejected) e.rejected++;
+      else e.inProgress++;
+    }
+    return m;
+  }, [representatives, customers, requests]);
+
+  // A saved کارفرما filter whose employer was deleted must not hide every card.
+  const activeEmployerFilter =
+    employerFilter && (employerFilter === "none" || (employers ?? []).some((e) => e.id === employerFilter))
+      ? employerFilter
+      : "";
+
   const rows = useMemo(() => {
     let list = [...(representatives ?? [])];
     if (query.trim()) {
       const q = query.trim().toLowerCase();
       list = list.filter((r) => `${r.name} ${r.phone ?? ""}`.toLowerCase().includes(q));
     }
-    return list.sort((a, b) => a.name.localeCompare(b.name, "fa"));
-  }, [representatives, query]);
+    if (statusFilter) {
+      list = list.filter((r) => {
+        const s = statsByRep.get(r.id);
+        switch (statusFilter) {
+          case "pending":
+            return !!s && s.inProgress > 0;
+          case "issued":
+            return !!s && s.issued > 0;
+          case "rejected":
+            return !!s && s.rejected > 0;
+          case "none":
+            return !s || s.total === 0;
+          default:
+            return true;
+        }
+      });
+    }
+    if (activeEmployerFilter) {
+      // «بدون کارفرما» = none of this rep's customers has any employer at all.
+      const repHasAnyEmployer = (rid: string) =>
+        [...repIdsByEmployer.values()].some((set) => set.has(rid));
+      list = list.filter((r) =>
+        activeEmployerFilter === "none"
+          ? !repHasAnyEmployer(r.id)
+          : (repIdsByEmployer.get(activeEmployerFilter)?.has(r.id) ?? false),
+      );
+    }
+    switch (sort) {
+      case "newest":
+        list.sort((a, b) => b.createdAt - a.createdAt);
+        break;
+      case "oldest":
+        list.sort((a, b) => a.createdAt - b.createdAt);
+        break;
+      case "mostCustomers":
+        list.sort((a, b) => (statsByRep.get(b.id)?.customers ?? 0) - (statsByRep.get(a.id)?.customers ?? 0) || a.name.localeCompare(b.name, "fa"));
+        break;
+      case "mostRequests":
+        list.sort((a, b) => (statsByRep.get(b.id)?.total ?? 0) - (statsByRep.get(a.id)?.total ?? 0) || a.name.localeCompare(b.name, "fa"));
+        break;
+      case "mostIssued":
+        list.sort((a, b) => (statsByRep.get(b.id)?.issued ?? 0) - (statsByRep.get(a.id)?.issued ?? 0) || a.name.localeCompare(b.name, "fa"));
+        break;
+      default:
+        list.sort((a, b) => a.name.localeCompare(b.name, "fa"));
+    }
+    return list;
+  }, [representatives, query, statusFilter, activeEmployerFilter, sort, statsByRep, repIdsByEmployer]);
+
+  const anyFilterActive = !!query.trim() || !!statusFilter || !!activeEmployerFilter;
+
+  const clearAllFilters = () => {
+    setQuery("");
+    setStatusFilter("");
+    setEmployerFilter("");
+  };
 
   return (
     <div className="flex flex-col gap-4">
@@ -80,7 +219,56 @@ export function RepresentativesPage() {
         }
       />
 
-      <SearchBox value={query} onChange={setQuery} placeholder="جستجوی نام یا شماره تماس…" className="glass rounded-2xl p-1" />
+      {/* Round 22 — personalization filters (same family as the مشتریان page). */}
+      <div className="glass flex flex-wrap items-center gap-2 rounded-3xl p-3.5" data-reps-filters>
+        <SearchBox
+          value={query}
+          onChange={setQuery}
+          placeholder="جستجوی نام یا شماره تماس…"
+          className="min-w-[200px] flex-1"
+        />
+        <FilterSelect
+          ariaLabel="وضعیت درخواست‌ها"
+          value={statusFilter}
+          onChange={(v) => setStatusFilter(isRepStatus(v) ? v : "")}
+          options={REP_STATUS.map((s) => ({ value: s.value, label: s.label }))}
+        />
+        {employerFieldOn && (employers ?? []).length > 0 && (
+          <FilterSelect
+            ariaLabel="کارفرما"
+            value={activeEmployerFilter}
+            onChange={setEmployerFilter}
+            options={[
+              { value: "", label: "همه کارفرماها" },
+              { value: "none", label: "بدون کارفرما" },
+              ...(employers ?? [])
+                .filter((e) => (repIdsByEmployer.get(e.id)?.size ?? 0) > 0)
+                .map((e) => ({ value: e.id, label: e.name })),
+            ]}
+          />
+        )}
+        <FilterSelect
+          ariaLabel="مرتب‌سازی"
+          value={sort}
+          onChange={(v) => setSort(isRepSort(v) ? v : "name")}
+          options={[
+            { value: "name", label: "الفبا" },
+            { value: "newest", label: "جدیدترین" },
+            { value: "oldest", label: "قدیمی‌ترین" },
+            { value: "mostCustomers", label: "بیشترین مشتری" },
+            { value: "mostRequests", label: "بیشترین درخواست" },
+            { value: "mostIssued", label: "بیشترین صدور" },
+          ]}
+        />
+        {anyFilterActive && (
+          <button
+            className="btn btn-ghost btn-sm !text-rose-500 dark:!text-rose-400"
+            onClick={clearAllFilters}
+          >
+            <X size={14} /> پاک‌کردن فیلترها
+          </button>
+        )}
+      </div>
 
       {representatives === undefined ? (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -91,8 +279,12 @@ export function RepresentativesPage() {
       ) : rows.length === 0 ? (
         <EmptyState
           icon={UserRound}
-          title="نماینده‌ای ثبت نشده"
-          description="نماینده‌ها سفارش‌های ویزا ارسال می‌کنند و پرونده مالی هرکدام جداگانه محاسبه می‌شود"
+          title="نماینده‌ای یافت نشد"
+          description={
+            anyFilterActive
+              ? "فیلترها را عوض کنید یا پاک کنید"
+              : "نماینده‌ها سفارش‌های ویزا ارسال می‌کنند و پرونده مالی هرکدام جداگانه محاسبه می‌شود"
+          }
           action={
             <button className="btn btn-primary btn-sm" onClick={() => setEditOpen(true)}>
               <UserRoundPlus size={15} /> اولین نماینده

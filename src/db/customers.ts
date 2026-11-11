@@ -1,5 +1,6 @@
 import { db } from "./schema";
 import { logActivity } from "./activities";
+import { syncRequestsToCustomerRep } from "./requests";
 import type { Customer } from "../types";
 import { uid } from "../utils/id";
 import { todayIso } from "../utils/jalali";
@@ -76,7 +77,25 @@ export async function createCustomer(input: CustomerInput): Promise<Customer> {
   return customer;
 }
 
-export async function updateCustomer(id: string, input: CustomerInput): Promise<void> {
+/** How many of the customer's visa requests followed the new representative
+ *  (round 22 — profile rep change propagates into the requests). */
+export interface UpdateCustomerResult {
+  /** Visa requests whose representative was synced to the profile's new one. */
+  syncedRequests: number;
+}
+
+export async function updateCustomer(
+  id: string,
+  input: CustomerInput,
+): Promise<UpdateCustomerResult> {
+  // Round 22: when the PROFILE representative changes, the customer's visa
+  // requests follow it — except requests whose rep was manually overridden
+  // inside the request form (sticky repOverride).
+  const before = await db.customers.get(id);
+  const repChanged =
+    !!input.representativeId &&
+    before != null &&
+    before.representativeId !== input.representativeId;
   await db.customers.update(id, {
     firstName: input.firstName?.trim() || undefined,
     lastName: input.lastName?.trim() || undefined,
@@ -95,12 +114,27 @@ export async function updateCustomer(id: string, input: CustomerInput): Promise<
     updatedAt: Date.now(),
   });
   const updated = await db.customers.get(id);
+  let syncedRequests = 0;
+  if (repChanged) {
+    syncedRequests = await syncRequestsToCustomerRep(id, input.representativeId);
+    if (syncedRequests > 0) {
+      const repName = (await db.representatives.get(input.representativeId!))?.name;
+      await logActivity({
+        type: "update",
+        entity: "request",
+        entityId: id,
+        title: `نمایندهٔ ${syncedRequests.toLocaleString("fa-IR")} درخواست «${updated ? customerFullName(updated) : ""}» به «${repName ?? "—"}» تغییر کرد`,
+        detail: "تغییر نماینده از پروفایل مشتری، در درخواست‌های ویزایش هم اعمال شد",
+      });
+    }
+  }
   await logActivity({
     type: "update",
     entity: "customer",
     entityId: id,
     title: `مشتری «${updated ? customerFullName(updated) : ""}» ویرایش شد`,
   });
+  return { syncedRequests };
 }
 
 export async function archiveCustomer(id: string, name: string): Promise<void> {

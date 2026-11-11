@@ -363,6 +363,7 @@ export function StudioPage() {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
+        back
         title="ابزار عکس"
         subtitle={`ویرایشگر حرفه‌ای + تبدیل سریع PDF + کتابخانهٔ پوشه‌بندی‌شده (${toPersianDigits(images?.length ?? 0)} تصویر)`}
         actions={

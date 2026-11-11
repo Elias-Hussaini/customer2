@@ -31,7 +31,7 @@ import { formatMoney } from "../../utils/num";
 import { customerFullName, findDuplicatePassport, createCustomer } from "../../db/customers";
 import { createRepresentative } from "../../db/reps";
 import { createList } from "../../db/lists";
-import { createRequest, setRequestIssued } from "../../db/requests";
+import { createRequest, setRequestIssued, syncRequestsToCustomerRep } from "../../db/requests";
 import { createEmployer } from "../../db/employers";
 import { createPayment } from "../../db/payments";
 import { getAttachmentsFor } from "../../db/attachments";
@@ -857,14 +857,26 @@ export async function buildToolRegistry(ctx: ToolCtx): Promise<{
         else { const emp = await findEmployer(raw); if (!emp) return fail(`کارفرما «${raw}» پیدا نشد`); patch.employerId = emp.id; }
       }
       if (a.notes !== undefined) patch.notes = str(a.notes);
-      if (a.representative !== undefined) { const rep = await findRep(str(a.representative) ?? ""); if (!rep) return fail("نماینده پیدا نشد"); patch.representativeId = rep.id; }
+      let newRepName: string | null = null;
+      if (a.representative !== undefined) { const rep = await findRep(str(a.representative) ?? ""); if (!rep) return fail("نماینده پیدا نشد"); patch.representativeId = rep.id; newRepName = rep.name; }
       if (a.list !== undefined) { const l = await findList(str(a.list) ?? ""); if (!l) return fail("لیست پیدا نشد"); patch.listId = l.id; }
       if (a.first_name !== undefined) patch.firstName = str(a.first_name) || undefined;
       if (a.last_name !== undefined) patch.lastName = str(a.last_name) || undefined;
       if (a.passport_number !== undefined) patch.passportNo = str(a.passport_number)?.toUpperCase() || undefined;
       await db.customers.update(c.id, patch);
+      // Round 22: a profile-representative change propagates into the
+      // customer's visa requests (except manually overridden rows).
+      let syncedRequests = 0;
+      if (typeof patch.representativeId === "string" && patch.representativeId !== (c.representativeId ?? null)) {
+        syncedRequests = await syncRequestsToCustomerRep(c.id, patch.representativeId);
+      }
       await logActivity({ type: "update", entity: "customer", entityId: c.id, title: `مشتری «${customerFullName(c)}» ویرایش شد`, detail: `توسط دستیار هوشمند — ${Object.keys(patch).filter((k) => k !== "updatedAt").join("، ")}` });
-      return ok({ id: c.id, patched: Object.keys(patch).filter((k) => k !== "updatedAt") }, `${customerFullName(c)} به‌روز شد`);
+      return ok(
+        { id: c.id, patched: Object.keys(patch).filter((k) => k !== "updatedAt"), ...(syncedRequests > 0 ? { synced_requests: syncedRequests } : {}) },
+        syncedRequests > 0
+          ? `${customerFullName(c)} به‌روز شد — نمایندهٔ ${syncedRequests.toLocaleString("fa-IR")} درخواست ویزایش هم به «${newRepName ?? "—"}» تغییر کرد`
+          : `${customerFullName(c)} به‌روز شد`,
+      );
     },
   });
 

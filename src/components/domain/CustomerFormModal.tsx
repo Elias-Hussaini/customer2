@@ -654,8 +654,15 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
         customValues: form.customValues,
       };
       if (customer) {
-        await updateCustomer(customer.id, input);
+        const res = await updateCustomer(customer.id, input);
         toast.success("مشتری ویرایش شد", { cause: "save" });
+        // Round 22: profile rep change propagates into the visa requests —
+        // tell the user how many followed (manual overrides stay untouched).
+        if (res.syncedRequests > 0) {
+          toast.info(
+            `نمایندهٔ ${toPersianDigits(res.syncedRequests)} درخواست ویزای این مشتری هم به نمایندهٔ جدید تغییر کرد`,
+          );
+        }
         onSaved?.({ ...customer, ...input });
       } else {
         const created = await createCustomer(input);

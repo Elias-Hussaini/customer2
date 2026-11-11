@@ -11,6 +11,7 @@ import {
   purgeNationalIdDocTypes,
   scopeDocTypesToOwners,
 } from "./db/docTypes";
+import { backfillRequestReps } from "./db/requests";
 import { runStartupImageOptimizer } from "./services/imageMaintenance";
 import { installRipple } from "./utils/ripple";
 import "./styles/global.css";
@@ -26,11 +27,15 @@ const routerBasename = import.meta.env.BASE_URL.replace(/\/$/, "");
 // the bogus AI-created «کد ملی» slot, and re-scope older AI-created slots to
 // the single profile their files belong to (per-profile slots).
 // Chained: the purge must see the seeded «پشت تذکره» slot.
+// Round 22: one-time repair — every visa request's representative synced to
+// its customer's CURRENT profile representative (the user asked for the
+// blanket fix of all stale rows).
 void (async () => {
   await ensureDefaultDocTypes();
   await stripLegacyDocHints();
   await purgeNationalIdDocTypes();
   await scopeDocTypesToOwners();
+  await backfillRequestReps();
 })();
 
 // Quietly compress oversized stored images (registered before compression

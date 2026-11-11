@@ -22,7 +22,7 @@ import { ActivityFeed } from "../components/ui/ActivityFeed";
 import { RequestsTable } from "../components/domain/RequestsTable";
 import { RepresentativeFormModal } from "../components/domain/RepresentativeFormModal";
 import { ProfilePhotoCard } from "../components/domain/ProfilePhotoCard";
-import { Avatar } from "../components/ui/Avatar";
+import { useCustomerFilters, CustomerCardGrid } from "../components/domain/CustomerFilterPanel";
 import { PaymentFormModal } from "../components/domain/PaymentFormModal";
 import { AttachmentPreview } from "../components/ui/AttachmentPreview";
 import { ExportDialog } from "../components/exports/ExportDialog";
@@ -30,8 +30,10 @@ import { uiActions } from "../components/layout/uiStore";
 import {
   useActivities,
   useCustomers,
+  useEmployers,
   useLists,
   usePayments,
+  usePrefs,
   useReceipts,
   useRepresentativeOrDefault,
   useRequests,
@@ -44,7 +46,7 @@ import { customerFullName } from "../db/customers";
 import { deleteRepresentative } from "../db/reps";
 import { useConfirm } from "../hooks/useConfirm";
 import { useToast } from "../hooks/useToast";
-import type { Attachment, Payment } from "../types";
+import type { Attachment, Customer, Employer, ListFolder, Payment, Tag, VisaRequest } from "../types";
 import { requestStatusFa, currencyLabel } from "../types";
 
 export function RepresentativeDetailPage() {
@@ -59,6 +61,8 @@ export function RepresentativeDetailPage() {
   const customers = useCustomers();
   const lists = useLists();
   const tags = useTags();
+  const employers = useEmployers();
+  const prefs = usePrefs();
   const receipts = useReceipts();
   const activities = useActivities(20, id);
 
@@ -309,36 +313,15 @@ export function RepresentativeDetailPage() {
             key: "customers",
             label: "مشتریان",
             badge: repCustomers.length,
-            content: repCustomers.length === 0 ? (
-              <EmptyState icon={Users} title="مشتری‌ای ندارد" compact />
-            ) : (
-              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
-                {repCustomers.map((c) => {
-                  const list = (lists ?? []).find((l) => l.id === c.listId);
-                  return (
-                    <button
-                      key={c.id}
-                      className="glass flex items-center gap-2.5 rounded-2xl p-3 text-right transition-transform active:scale-95"
-                      onClick={() => navigate(`/customers/${c.id}`)}
-                    >
-                      <Avatar photo={c.photo} name={customerFullName(c)} />
-                      <span className="min-w-0 flex-1">
-                        <p className="truncate text-[13px] font-bold">{customerFullName(c)}</p>
-                        {c.passportNo && (
-                          <p dir="ltr" className="num mt-1 text-[11px] text-ink-400">
-                            {c.passportNo}
-                          </p>
-                        )}
-                        {list && (
-                          <p className="mt-1 truncate text-[10.5px] text-ink-500 dark:text-ink-400">
-                            لیست: {list.name}
-                          </p>
-                        )}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+            content: (
+              <RepCustomersTab
+                repCustomers={repCustomers}
+                requests={requests ?? []}
+                tags={tags ?? []}
+                lists={lists ?? []}
+                employers={employers ?? []}
+                employerFieldOn={prefs.employerFieldEnabled !== false}
+              />
             ),
           },
           {
@@ -429,3 +412,56 @@ export function RepresentativeDetailPage() {
     </div>
   );
 }
+
+/** Round 22 — the rep profile's مشتریان tab: the SAME personalization filter
+ *  panel as the مشتریان page (search / list / کارفرما / visa status / sort,
+ *  remembered per device) over the rep's customer cards, with every
+ *  customer's TAGS shown next to their passport number. */
+function RepCustomersTab({
+  repCustomers,
+  requests,
+  tags,
+  lists,
+  employers,
+  employerFieldOn,
+}: {
+  repCustomers: Customer[];
+  requests: VisaRequest[];
+  tags: Tag[];
+  lists: ListFolder[];
+  employers: Employer[];
+  employerFieldOn: boolean;
+}) {
+  const { panel, rows, anyActive } = useCustomerFilters({
+    pageKey: "repProfile",
+    customers: repCustomers,
+    requests,
+    tags,
+    lists,
+    employers,
+    show: { rep: false, employer: employerFieldOn },
+    searchPlaceholder: "نام یا شماره پاسپورت مشتری…",
+  });
+
+  if (repCustomers.length === 0) {
+    return <EmptyState icon={Users} title="مشتری‌ای ندارد" compact />;
+  }
+
+  return (
+    <div className="flex flex-col gap-3" data-rep-customers>
+      {panel}
+      <p className="text-[11px] text-ink-400">
+        {toPersianDigits(rows.length)} مشتری {anyActive ? "در این فیلتر" : ""}
+      </p>
+      <CustomerCardGrid
+        customers={rows}
+        requests={requests}
+        tags={tags}
+        lists={lists}
+        showMeta="list"
+        emptyHint="با این فیلترها مشتری‌ای پیدا نشد — فیلترها را عوض کنید یا پاک کنید"
+      />
+    </div>
+  );
+}
+

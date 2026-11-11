@@ -98,6 +98,11 @@ export interface VisaRequest {
   id: string;
   customerId: string;
   representativeId: string | null;
+  /** Sticky manual override: the representative was set BY HAND in the visa
+   *  request itself, so later profile-representative changes must NOT sync
+   *  this row (round 22 — «مگر اینکه بعدا بریم باز دستی دوباره توی درخواست
+   *  ویزا عوضش کنیم»). Undefined/false = follows the customer's profile. */
+  repOverride?: boolean;
   listId: string | null;
   visaType?: string;
   /** Tag ids. */
@@ -308,6 +313,9 @@ export interface AppPreferences {
   nidJunkPurged?: boolean;
   /** Internal: legacy shared AI doc slots re-scoped to their single owner once. */
   docOwnerScoped?: boolean;
+  /** Internal: one-time backfill — every visa request's representative synced
+   *  to its customer's current profile representative (round 22). */
+  repSyncBackfilled?: boolean;
   updatedAt: number;
 }
 

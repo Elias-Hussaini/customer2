@@ -126,7 +126,9 @@ const libInput = () => page.locator('input[placeholder="جستجوی نام تص
 const libArrow = () => page.locator('input[placeholder="جستجوی نام تصویر…"] ~ button[aria-label="جستجوی قبلی"]');
 const crumb = (label) => page.locator('nav[aria-label="مسیر پوشه"] button', { hasText: label }).first();
 const tile = (name) => page.locator(`button[aria-label="باز کردن پوشه ${name}"]`).first();
-const backBtn = () => page.locator('button[aria-label="بازگشت"]');
+// Round 22 note: the studio header now has its own back button too — target
+// the EXPLORER's back (unique title) to avoid the strict-mode double match.
+const backBtn = () => page.locator('button[title="بازگشت به پوشه قبلی"]');
 
 async function main() {
   const server = spawn("npx", ["vite", "preview", "--port", String(PORT), "--strictPort"], {
