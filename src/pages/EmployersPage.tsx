@@ -4,7 +4,7 @@
  * archive/restore and hard delete that preserves the linked customers.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Archive,
@@ -20,6 +20,8 @@ import { PageHeader, StatCard } from "../components/ui/StatCard";
 import { EmptyState } from "../components/ui/EmptyState";
 import { SearchBox } from "../components/ui/inputs";
 import { Menu } from "../components/ui/Menu";
+import { DataTable, type Column } from "../components/ui/DataTable";
+import { ViewModeToggle, isCollectionViewMode, type CollectionViewMode } from "../components/ui/ViewModeToggle";
 import { Toggle } from "../components/ui/fields";
 import { EmployerFormModal } from "../components/domain/EmployerFormModal";
 import { Avatar } from "../components/ui/Avatar";
@@ -32,12 +34,14 @@ import {
   useCustomers,
   useEmployers,
   usePrefs,
+  useRequests,
   updatePrefs,
 } from "../hooks/useData";
 import { useConfirm } from "../hooks/useConfirm";
 import { useToast } from "../hooks/useToast";
 import { formatJalali } from "../utils/jalali";
 import { toPersianDigits } from "../utils/jalali";
+import { loadPageFilter, savePageFilter } from "../utils/pageFilters";
 import type { Employer } from "../types";
 
 export function EmployersPage() {
@@ -53,6 +57,16 @@ export function EmployersPage() {
   const [showArchived, setShowArchived] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editing, setEditing] = useState<Employer | null>(null);
+  /** Cards ↔ table display mode (remembered per device). */
+  const [view, setView] = useState<CollectionViewMode>(() => {
+    const saved = loadPageFilter<string>("employers", "view", "cards", isCollectionViewMode);
+    return isCollectionViewMode(saved) ? saved : "cards";
+  });
+  const requests = useRequests();
+
+  useEffect(() => {
+    savePageFilter("employers", "view", view);
+  }, [view]);
 
   const archived = useMemo(
     () => (allEmployers ?? []).filter((e) => e.archivedAt),
@@ -97,6 +111,155 @@ export function EmployersPage() {
     }
   };
 
+  /** Table rows with stats (drives the table view). */
+  const tableRows = useMemo(() => {
+    const idsByEmployer = new Map<string, Set<string>>();
+    for (const c of customers ?? []) {
+      if (!c.employerId) continue;
+      const set = idsByEmployer.get(c.employerId) ?? new Set<string>();
+      set.add(c.id);
+      idsByEmployer.set(c.employerId, set);
+    }
+    return rows.map((emp) => {
+      const ids = idsByEmployer.get(emp.id) ?? new Set<string>();
+      const mine = (requests ?? []).filter((r) => ids.has(r.customerId) && !r.archivedAt);
+      const mineCustomers = (customers ?? []).filter((c) => c.employerId === emp.id);
+      return {
+        ...emp,
+        linked: mineCustomers.length,
+        withCode: mineCustomers.filter((c) => !!c.referrer?.trim()).length,
+        reqCount: mine.length,
+        issued: mine.filter((r) => r.issued).length,
+      };
+    });
+  }, [rows, customers, requests]);
+
+  const empMenu = (emp: Employer) =>
+    [
+      {
+        icon: Briefcase,
+        label: "مشاهده پروفایل",
+        onClick: () => navigate(`/employers/${emp.id}`),
+      },
+      {
+        icon: FilePenLine,
+        label: "ویرایش",
+        onClick: () => {
+          setEditing(emp);
+          setEditOpen(true);
+        },
+      },
+      ...(emp.archivedAt
+        ? [
+            {
+              icon: ArchiveRestore,
+              label: "بازگردانی از آرشیو",
+              onClick: async () => {
+                await restoreEmployer(emp.id, emp.name);
+                toast.info("کارفرما بازگردانده شد");
+              },
+            },
+          ]
+        : [
+            {
+              icon: Archive,
+              label: "بایگانی",
+              onClick: async () => {
+                const ok = await confirm({ title: `بایگانی «${emp.name}»؟` });
+                if (ok) {
+                  await archiveEmployer(emp.id, emp.name);
+                  toast.info("کارفرما بایگانی شد");
+                }
+              },
+            },
+          ]),
+      {
+        icon: Trash2,
+        label: "حذف قطعی",
+        danger: true,
+        onClick: () => void remove(emp),
+      },
+    ];
+
+  const empColumns: Column<(typeof tableRows)[number]>[] = [
+    {
+      key: "name",
+      header: "کارفرما",
+      sortValue: (r) => r.name,
+      render: (r) => (
+        <div className="flex items-center gap-2.5">
+          <Avatar photo={r.photo} name={r.name} />
+          <div className="min-w-0">
+            <span className="block truncate font-semibold">{r.name}</span>
+            {r.phone ? (
+              <span dir="ltr" className="num flex items-center gap-1 text-[11px] text-ink-400">
+                <Phone size={10} /> {r.phone}
+              </span>
+            ) : r.email ? (
+              <span dir="ltr" className="flex items-center gap-1 text-[11px] text-ink-400">
+                <Mail size={10} /> {r.email}
+              </span>
+            ) : null}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "linked",
+      header: "مشتریان",
+      align: "center",
+      sortValue: (r) => r.linked,
+      render: (r) => <span className="num font-bold">{toPersianDigits(r.linked)}</span>,
+    },
+    {
+      key: "withCode",
+      header: "دارای کد اختصاصی",
+      align: "center",
+      sortValue: (r) => r.withCode,
+      render: (r) =>
+        r.withCode > 0 ? (
+          <span className="num font-bold text-[#0b9e6e] dark:text-[#3ddc9a]">{toPersianDigits(r.withCode)}</span>
+        ) : (
+          <span className="text-ink-400">—</span>
+        ),
+    },
+    {
+      key: "reqCount",
+      header: "درخواست‌ها",
+      align: "center",
+      sortValue: (r) => r.reqCount,
+      render: (r) => <span className="num">{toPersianDigits(r.reqCount)}</span>,
+    },
+    {
+      key: "issued",
+      header: "صادر شده",
+      align: "center",
+      sortValue: (r) => r.issued,
+      render: (r) => (
+        <span className="num font-bold text-[#0b9e6e] dark:text-[#3ddc9a]">{toPersianDigits(r.issued)}</span>
+      ),
+    },
+    {
+      key: "actions",
+      header: "",
+      align: "end",
+      render: (r) => (
+        <Menu
+          items={empMenu(r)}
+          trigger={
+            <span className="icon-btn !h-8 !w-8" aria-label="عملیات">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <circle cx="12" cy="5" r="1.8" />
+                <circle cx="12" cy="12" r="1.8" />
+                <circle cx="12" cy="19" r="1.8" />
+              </svg>
+            </span>
+          }
+        />
+      ),
+    },
+  ];
+
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
@@ -132,12 +295,15 @@ export function EmployersPage() {
         />
       </div>
 
-      <SearchBox
-        value={query}
-        onChange={setQuery}
-        placeholder="جستجوی نام، تماس، ایمیل، کد ملی یا نام کاربری…"
-        className="glass rounded-2xl p-1"
-      />
+      <div className="flex flex-wrap items-center gap-2">
+        <SearchBox
+          value={query}
+          onChange={setQuery}
+          placeholder="جستجوی نام، تماس، ایمیل، کد ملی یا نام کاربری…"
+          className="glass min-w-[200px] flex-1 rounded-2xl p-1"
+        />
+        <ViewModeToggle value={view} onChange={setView} />
+      </div>
 
       {/* Master switch for the customer-form field (moved here from Settings). */}
       <div className="glass flex items-center justify-between gap-3 rounded-2xl px-4 py-3">
@@ -169,6 +335,15 @@ export function EmployersPage() {
               <UserRoundPlus size={15} /> اولین کارفرما
             </button>
           }
+        />
+      ) : view === "table" ? (
+        <DataTable
+          columns={empColumns}
+          rows={tableRows}
+          rowKey={(r) => r.id}
+          onRowClick={(r) => navigate(`/employers/${r.id}`)}
+          empty={<EmptyState icon={Briefcase} title="کارفرمایی یافت نشد" compact />}
+          footer={`${toPersianDigits(rows.length)} کارفرما`}
         />
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">

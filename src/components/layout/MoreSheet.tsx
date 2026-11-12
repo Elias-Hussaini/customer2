@@ -2,6 +2,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Archive,
   Banknote,
+  Briefcase,
   CalendarRange,
   DatabaseBackup,
   FileBarChart,
@@ -21,6 +22,13 @@ interface MoreItem {
 }
 
 const MORE_ITEMS: MoreItem[] = [
+  {
+    icon: Briefcase,
+    label: "کارفرماها",
+    description: "پروفایل و مشتریان هر کارفرما",
+    to: "/employers",
+    tint: "bg-[#f59e0b]/12 text-[#c77d0a] dark:text-[#f5b84f]",
+  },
   {
     icon: Banknote,
     label: "پرداخت‌ها",

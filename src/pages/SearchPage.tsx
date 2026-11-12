@@ -13,9 +13,12 @@ import {
   useLists,
   useRepresentatives,
   useRequests,
+  useStageMap,
   useTags,
   useEmployers,
 } from "../hooks/useData";
+import { StageIndicators } from "../components/ui/StageBadge";
+import { beginCustomerHover, endCustomerHover } from "../components/domain/customerHotkeys";
 import { toPersianDigits } from "../utils/jalali";
 import { normalizeFa } from "../utils/normalize";
 
@@ -39,6 +42,8 @@ export function SearchPage() {
   const lists = useLists();
   const tags = useTags();
   const customFields = useCustomFields();
+  const stageMap = useStageMap();
+  const customersById = useMemo(() => new Map((customers ?? []).map((c) => [c.id, c])), [customers]);
 
   const [query, setQuery] = useState(searchParams.get("q") ?? "");
   const [types, setTypes] = useState<HitType[]>([]);
@@ -197,22 +202,39 @@ export function SearchPage() {
                   </span>
                 </div>
                 <ul>
-                  {groupHits.map((hit) => (
+                  {groupHits.map((hit) => {
+                    const hitCustomer = type === "customer" ? customersById.get(hit.id) : undefined;
+                    return (
                     <li key={hit.id}>
                       <button
                         className="flex w-full items-center gap-3 rounded-2xl px-2 py-2.5 text-right transition-colors hover:bg-brand-500/6"
                         onClick={() => navigate(meta.path(hit.id))}
+                        onMouseEnter={
+                          hitCustomer
+                            ? (e) => beginCustomerHover(hitCustomer.id, e.currentTarget)
+                            : undefined
+                        }
+                        onMouseLeave={hitCustomer ? () => endCustomerHover(hitCustomer.id) : undefined}
                       >
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[13.5px] font-semibold">
-                            {splitHighlight(hit.title, query).map((part, i) =>
-                              isHighlightPart(part, query) ? (
-                                <mark key={i} className="rounded bg-brand-500/20 px-0.5 text-inherit">
-                                  {part}
-                                </mark>
-                              ) : (
-                                <span key={i}>{part}</span>
-                              ),
+                          <span className="flex items-center gap-1.5">
+                            <span className="truncate text-[13.5px] font-semibold">
+                              {splitHighlight(hit.title, query).map((part, i) =>
+                                isHighlightPart(part, query) ? (
+                                  <mark key={i} className="rounded bg-brand-500/20 px-0.5 text-inherit">
+                                    {part}
+                                  </mark>
+                                ) : (
+                                  <span key={i}>{part}</span>
+                                ),
+                              )}
+                            </span>
+                            {hitCustomer && (
+                              <StageIndicators
+                                stage={stageMap?.get(hitCustomer.id)}
+                                hasCode={!!hitCustomer.referrer?.trim()}
+                                dotSize={9}
+                              />
                             )}
                           </span>
                           {hit.subtitle && (
@@ -223,7 +245,8 @@ export function SearchPage() {
                         </span>
                       </button>
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               </GlassCard>
             );

@@ -20,6 +20,8 @@ import { RequestsTable } from "../components/domain/RequestsTable";
 import { ListFormModal } from "../components/domain/ListFormModal";
 import { WinFolderIcon } from "../components/domain/FolderIcon";
 import { ExportDialog } from "../components/exports/ExportDialog";
+import { StageIndicators } from "../components/ui/StageBadge";
+import { beginCustomerHover, endCustomerHover } from "../components/domain/customerHotkeys";
 import { moveRequestsToList } from "../db/requests";
 import { childrenOf } from "../db/lists";
 import { uiActions } from "../components/layout/uiStore";
@@ -29,6 +31,7 @@ import {
   useList,
   useRepresentatives,
   useRequests,
+  useStageMap,
   useTags,
   useEmployers,
   usePrefs,
@@ -60,6 +63,7 @@ export function ListDetailPage() {
   const employers = useEmployers();
   const prefs = usePrefs();
   const tags = useTags();
+  const stageMap = useStageMap();
   /** کارفرما joins exports when the feature is on. */
   const employerFieldOn = (prefs.employerFieldEnabled ?? true) !== false;
 
@@ -312,8 +316,17 @@ export function ListDetailPage() {
                   key={c.id}
                   className="glass rounded-2xl p-3.5 text-right transition-transform active:scale-95"
                   onClick={() => navigate(`/customers/${c.id}`)}
+                  onMouseEnter={(e) => beginCustomerHover(c.id, e.currentTarget)}
+                  onMouseLeave={() => endCustomerHover(c.id)}
                 >
-                  <p className="truncate text-[13px] font-bold">{customerFullName(c)}</p>
+                  <p className="flex items-center gap-1.5">
+                    <span className="truncate text-[13px] font-bold">{customerFullName(c)}</span>
+                    <StageIndicators
+                      stage={stageMap?.get(c.id)}
+                      hasCode={!!c.referrer?.trim()}
+                      dotSize={9}
+                    />
+                  </p>
                   {c.passportNo && (
                     <p dir="ltr" className="num mt-1 text-[11px] text-ink-400">
                       {c.passportNo}

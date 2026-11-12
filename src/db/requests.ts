@@ -1,6 +1,7 @@
 import { db } from "./schema";
 import { logActivity } from "./activities";
 import { DEFAULT_PREFS } from "./prefs";
+import { syncStageAfterRequestChange, syncStageAfterRequestCreate } from "./stages";
 import type { VisaRequest } from "../types";
 import { requestStatusFa } from "../types";
 import { uid } from "../utils/id";
@@ -57,6 +58,9 @@ export async function createRequest(input: RequestInput): Promise<VisaRequest> {
     updatedAt: now,
   };
   await db.requests.add(request);
+  // Stage engine: a customer's first pending request advances them to
+  // «ثبت شده برای ویزا»; an issued/rejected new request sets stage5/6 outright.
+  await syncStageAfterRequestCreate(request.customerId);
   await logActivity({
     type: "create",
     entity: "request",
@@ -95,6 +99,12 @@ export async function updateRequest(id: string, input: RequestInput): Promise<vo
     customValues: input.customValues ?? {},
     updatedAt: Date.now(),
   });
+  // Stage engine: keep the customer's journey in step with the flags.
+  await syncStageAfterRequestChange(
+    input.customerId,
+    input.issued,
+    !input.issued && input.rejected === true,
+  );
   await logActivity({
     type: "update",
     entity: "request",
@@ -203,12 +213,16 @@ export async function setRequestIssued(
   issued: boolean,
   issuedAt?: string | null,
 ): Promise<void> {
+  const before = await db.requests.get(id);
   await db.requests.update(id, {
     issued,
     issuedAt: issued ? issuedAt || todayIso() : null,
     ...(issued ? { rejected: false, rejectedAt: null } : {}),
     updatedAt: Date.now(),
   });
+  if (before) {
+    await syncStageAfterRequestChange(before.customerId, issued, false);
+  }
   await logActivity({
     type: issued ? "issue" : "unissue",
     entity: "request",
@@ -226,12 +240,16 @@ export async function setRequestRejected(
   rejected: boolean,
   rejectedAt?: string | null,
 ): Promise<void> {
+  const before = await db.requests.get(id);
   await db.requests.update(id, {
     rejected,
     rejectedAt: rejected ? rejectedAt || todayIso() : null,
     ...(rejected ? { issued: false, issuedAt: null } : {}),
     updatedAt: Date.now(),
   });
+  if (before) {
+    await syncStageAfterRequestChange(before.customerId, false, rejected);
+  }
   await logActivity({
     type: rejected ? "reject" : "unreject",
     entity: "request",

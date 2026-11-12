@@ -303,7 +303,7 @@ const SCHEMA_DOCS: Record<string, { purpose: string; fields: Record<string, stri
       id: "شناسه یکتا", firstName: "نام", lastName: "نام خانوادگی", photo: "عکس پروفایل (dataURL)",
       birthDate: "تاریخ تولد (میلادی yyyy-mm-dd)", passportNo: "شماره پاسپورت",
       passportIssueDate: "تاریخ صدور پاسپورت", passportExpiryDate: "تاریخ انقضای پاسپورت",
-      referrer: "معرف", notes: "یادداشت", representativeId: "نمایندهٔ ثبت‌کننده", listId: "لیست ثبت",
+      referrer: "کد اختصاصی", notes: "یادداشت", representativeId: "نمایندهٔ ثبت‌کننده", listId: "لیست ثبت",
       employerId: "کارفرما (null = بدون کارفرما)", registrationDate: "تاریخ ثبت (yyyy-mm-dd)",
       customValues: "مقادیر فیلدهای سفارشی", createdAt: "زمان ایجاد", updatedAt: "زمان ویرایش", archivedAt: "زمان بایگانی",
     },

@@ -19,6 +19,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Settings2,
   Signal,
   Smartphone,
@@ -27,6 +28,7 @@ import {
   Trash2,
   Plane as VisaIcon,
   Wand2,
+  Waypoints,
   Wrench,
   XCircle,
 } from "lucide-react";
@@ -74,7 +76,17 @@ import { useToast } from "../hooks/useToast";
 import { buildLabel, buildStamp } from "../pwa/version";
 import { checkForUpdatesNow, repairPwaAndReload } from "../pwa/usePwaUpdate";
 import { useConfirm } from "../hooks/useConfirm";
-import { FIELD_TYPE_LABELS, type CustomFieldDef, type FieldEntity, type FieldType, type Tag } from "../types";
+import {
+  CUSTOMER_STAGES,
+  CUSTOMER_STAGE_LABELS,
+  DEFAULT_STAGE_COLORS,
+  FIELD_TYPE_LABELS,
+  type CustomFieldDef,
+  type CustomerStage,
+  type FieldEntity,
+  type FieldType,
+  type Tag,
+} from "../types";
 import { toPersianDigits } from "../utils/jalali";
 import { slugify } from "../utils/normalize";
 import {
@@ -105,6 +117,7 @@ type SettingsSection =
   | "fields"
   | "tags"
   | "visaTypes"
+  | "stages"
   | "docTypes"
   | "currency"
   | "defaults"
@@ -121,6 +134,7 @@ const SECTIONS: { key: SettingsSection; label: string; icon: typeof Palette }[] 
   { key: "fields", label: "فیلدهای سفارشی", icon: Layers },
   { key: "tags", label: "تگ‌ها", icon: TagIcon },
   { key: "visaTypes", label: "انواع ویزا", icon: VisaIcon },
+  { key: "stages", label: "مراحل و رنگ‌ها", icon: Waypoints },
   { key: "docTypes", label: "مدارک و تصاویر", icon: FileImage },
   { key: "currency", label: "واحد پول", icon: Coins },
   { key: "defaults", label: "پیش‌فرض‌های فرم", icon: Wand2 },
@@ -181,6 +195,7 @@ export function SettingsPage() {
           {section === "fields" && <CustomFieldsSection />}
           {section === "tags" && <TagsSection />}
           {section === "visaTypes" && <VisaTypesSection />}
+          {section === "stages" && <StagesColorsSection />}
           {section === "docTypes" && <DocTypesSection />}
           {section === "currency" && <CurrencySection />}
           {section === "defaults" && <DefaultsSection />}
@@ -297,6 +312,27 @@ function ShortcutsSection() {
           <p className="mt-1 text-[11px] leading-5 text-ink-400">
             میان‌برهای دوبل بر اساس جای فیزیکی کلیدها کار می‌کنند؛ یعنی حتی وقتی کیبورد فارسی
             است، همان کلیدِ F (که حرف «ب» می‌نویسد) را دو بار بزنید و فرم درخواست باز می‌شود.
+          </p>
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="تغییر مرحلهٔ مشتری (هاور + کلید)"
+        icon={<Waypoints size={15} className="text-brand-500" />}
+      >
+        <div className="flex flex-col gap-2">
+          <p className="mb-1 text-[12px] leading-6 text-ink-500 dark:text-ink-400">
+            هر جا مشتری می‌بینید — لیست مشتریان، لیست‌ها، پروفایل نمایندگان و کارفرماها، جدول
+            درخواست‌ها — نشانگر موس را روی کارتش نگه دارید و کلید را بزنید؛ مرحلهٔ ویزایش همان‌جا
+            عوض می‌شود (تغییر روی آخرین درخواست فعالش هم اعمال می‌شود):
+          </p>
+          <ShortcutRow keys={["Ctrl"]} label="مرحلهٔ بعد" />
+          <ShortcutRow keys={["Alt"]} label="مرحلهٔ قبل" />
+          <ShortcutRow keys={["Shift"]} label="علامت‌زدن / برداشتن «صادر شده»" />
+          <ShortcutRow keys={["Alt", "Shift"]} label="علامت‌زدن / برداشتن «رد شده»" />
+          <p className="mt-1 text-[11px] leading-5 text-ink-400">
+            کلید باید تنها و به‌صورت ضربه (فشرده و رها) زده شود؛ ترکیب‌های واقعی مثل Ctrl+S یا
+            Ctrl+C کار دیگری را خراب نمی‌کنند. هنگام تایپ داخل فیلدها هم غیرفعال است.
           </p>
         </div>
       </SectionCard>
@@ -898,7 +934,135 @@ function VisaTypesSection() {
   );
 }
 
-/* ---------------------------- Document types ----------------------------- */
+
+
+function StagesColorsSection() {
+  const prefs = usePrefs();
+  const toast = useToast();
+  const overrides = prefs.stageColors ?? {};
+
+  /** Live-updated color of a stage (override > default). */
+  const colorOf = (s: CustomerStage) => overrides[s] || DEFAULT_STAGE_COLORS[s];
+
+  const setColor = async (s: CustomerStage, color: string) => {
+    // Ignore no-op changes (the color picker fires on open sometimes).
+    if (colorOf(s).toLowerCase() === color.toLowerCase()) return;
+    await updatePrefs({ stageColors: { ...overrides, [s]: color } });
+  };
+
+  const resetOne = async (s: CustomerStage) => {
+    const next = { ...overrides };
+    delete next[s];
+    await updatePrefs({ stageColors: next });
+    toast.info(`رنگ «${CUSTOMER_STAGE_LABELS[s]}» به حالت پیش‌فرض برگشت`);
+  };
+
+  const resetAll = async () => {
+    await updatePrefs({ stageColors: {} });
+    toast.success("همهٔ رنگ‌ها به حالت پیش‌فرض برگشتند");
+  };
+
+  const anyCustom = CUSTOMER_STAGES.some((s) => overrides[s]);
+
+  return (
+    <>
+      <SectionCard title="مراحل و رنگ‌ها" icon={<Waypoints size={15} className="text-brand-500" />}>
+        <p className="mb-3 text-[12px] leading-6 text-ink-500 dark:text-ink-400">
+          سفری که هر مشتری از ثبت نام تا صدور ویزا طی می‌کند، در شش مرحله دنبال می‌شود. رنگ هر مرحله
+          به‌صورت یک دایرهٔ کوچک کنار مشتری — در همهٔ لیست‌ها، پروفایل نمایندگان و کارفرماها —
+          نمایش داده می‌شود تا در یک نگاه معلوم باشد هر مشتری کجای مسیر است.
+        </p>
+        <ol className="flex flex-col gap-2">
+          {CUSTOMER_STAGES.map((s, i) => {
+            const isCustom = !!overrides[s];
+            return (
+              <li
+                key={s}
+                className="glass-soft flex flex-wrap items-center gap-3 rounded-2xl px-3.5 py-2.5"
+              >
+                <span className="num flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink-900/5 text-[11px] font-bold text-ink-500 dark:bg-white/5 dark:text-ink-400">
+                  {toPersianDigits(String(i + 1))}
+                </span>
+                <span
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-bold"
+                  style={{ backgroundColor: `${colorOf(s)}1f`, color: colorOf(s) }}
+                >
+                  <span
+                    className="inline-block h-1.5 w-1.5 rounded-full"
+                    style={{ backgroundColor: colorOf(s) }}
+                  />
+                  {CUSTOMER_STAGE_LABELS[s]}
+                </span>
+                {s === "stage6" && (
+                  <span className="text-[10px] text-ink-400">خارج از مسیر اصلی</span>
+                )}
+                <span className="flex-1" />
+                <label
+                  className="relative inline-flex h-8 w-12 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-xl border border-ink-900/10 dark:border-white/10"
+                  style={{ backgroundColor: `${colorOf(s)}26` }}
+                  title="انتخاب رنگ"
+                >
+                  <span
+                    className="absolute inset-0"
+                    style={{ backgroundColor: colorOf(s), opacity: 0.18 }}
+                  />
+                  <span
+                    className="relative h-4.5 w-4.5 rounded-full border-2 border-white shadow"
+                    style={{ backgroundColor: colorOf(s) }}
+                  />
+                  <input
+                    type="color"
+                    value={colorOf(s)}
+                    onChange={(e) => void setColor(s, e.target.value)}
+                    className="absolute inset-0 cursor-pointer opacity-0"
+                    aria-label={`رنگ مرحله ${CUSTOMER_STAGE_LABELS[s]}`}
+                  />
+                </label>
+                <input
+                  dir="ltr"
+                  className="field num !w-24 !py-1 text-center text-[11px]"
+                  value={colorOf(s).toUpperCase()}
+                  onChange={(e) => {
+                    const v = e.target.value.trim();
+                    if (/^#[0-9a-fA-F]{6}$/.test(v)) void setColor(s, v);
+                  }}
+                  aria-label={`کد رنگ مرحله ${CUSTOMER_STAGE_LABELS[s]}`}
+                />
+                {isCustom && (
+                  <button
+                    className="icon-btn !h-8 !w-8"
+                    title={`بازگردانی رنگ ${CUSTOMER_STAGE_LABELS[s]} به پیش‌فرض`}
+                    aria-label={`بازگردانی رنگ ${CUSTOMER_STAGE_LABELS[s]}`}
+                    onClick={() => void resetOne(s)}
+                  >
+                    <RotateCcw size={13} />
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+        {anyCustom && (
+          <button className="btn btn-glass btn-sm mt-3" onClick={() => void resetAll()}>
+            <RotateCcw size={13} /> بازگردانی همهٔ رنگ‌ها به پیش‌فرض
+          </button>
+        )}
+      </SectionCard>
+
+      <SectionCard title="جریان خودکار مراحل" icon={<Wand2 size={15} className="text-brand-500" />}>
+        <div className="flex flex-col gap-2 text-[12px] leading-6 text-ink-600 dark:text-ink-300">
+          <p>• مشتری تازه ثبت می‌شود → <b>مرحله اول</b></p>
+          <p>• «کد اختصاصی» مشتری در پرونده‌اش ثبت شود → خودکار می‌رود به <b>دارای کد اختصاصی</b></p>
+          <p>• برای مشتری درخواست ویزا ثبت شود → <b>ثبت شده برای ویزا</b></p>
+          <p>• ویزا صادر یا رد شود → <b>صادر شده</b> یا <b>رد شده</b></p>
+          <p>• تیک سبز کنار نام مشتری یعنی «کد اختصاصی» دارد.</p>
+        </div>
+      </SectionCard>
+    </>
+  );
+}
+
+
 
 interface DocTypeFormState {
   label: string;

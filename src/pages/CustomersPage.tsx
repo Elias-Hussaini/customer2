@@ -9,14 +9,31 @@ import { JalaliDatePicker } from "../components/ui/JalaliDatePicker";
 import { Menu } from "../components/ui/Menu";
 import { CustomerFormModal } from "../components/domain/CustomerFormModal";
 import { Avatar } from "../components/ui/Avatar";
+import { StageBadge, StageIndicators } from "../components/ui/StageBadge";
+import { HotkeyHint } from "../components/ui/ViewModeToggle";
 import { archiveCustomer, deleteCustomer, customerFullName } from "../db/customers";
-import { useCustomers, useLists, usePrefs, useRepresentatives, useRequests, useEmployers } from "../hooks/useData";
+import {
+  useCustomers,
+  useLists,
+  usePrefs,
+  useRepresentatives,
+  useRequests,
+  useEmployers,
+  useStageMap,
+} from "../hooks/useData";
 import { useConfirm } from "../hooks/useConfirm";
 import { useToast } from "../hooks/useToast";
 import { formatJalali, toPersianDigits } from "../utils/jalali";
 import { quickDateRanges } from "../utils/requestDateFilter";
 import { uiActions } from "../components/layout/uiStore";
 import { loadPageFilter, savePageFilter } from "../utils/pageFilters";
+import { beginCustomerHover, endCustomerHover } from "../components/domain/customerHotkeys";
+import {
+  CUSTOMER_STAGES,
+  CUSTOMER_STAGE_LABELS,
+  normalizeStageFilter,
+  stageOrder,
+} from "../types";
 import type { Customer } from "../types";
 
 const CUSTOMERS_SORTS = ["newest", "oldest", "name", "mostRequests", "mostIssued"] as const;
@@ -27,13 +44,12 @@ function isCustomersSort(v: string): v is CustomersSort {
   return (CUSTOMERS_SORTS as readonly string[]).includes(v);
 }
 
-/** Visa-status filter for a customer (derived from their requests). */
+/** Stage filter for a customer — the journey «مرحله‌های ویزا» (legacy saved
+ *  values like "issued"/"pending" are translated on load). "none" = no request. */
 const STATUS_FILTERS = [
-  { value: "", label: "همه وضعیت‌ها" },
-  { value: "issued", label: "ویزا صادر شده" },
-  { value: "pending", label: "در حال کار" },
-  { value: "rejected", label: "رد شده" },
-  { value: "none", label: "بدون درخواست" },
+  { value: "", label: "همه مراحل" },
+  ...CUSTOMER_STAGES.map((s) => ({ value: s as string, label: CUSTOMER_STAGE_LABELS[s] })),
+  { value: "none", label: "بدون درخواست ویزا" },
 ] as const;
 
 type StatusFilter = (typeof STATUS_FILTERS)[number]["value"];
@@ -58,6 +74,7 @@ export function CustomersPage() {
   const lists = useLists();
   const employers = useEmployers();
   const prefs = usePrefs();
+  const stageMap = useStageMap();
   /** کارفرما is optional — hide its column/filter when switched off. */
   const employerFieldOn = prefs.employerFieldEnabled !== false;
 
@@ -68,7 +85,7 @@ export function CustomersPage() {
   /** کارفرما filter: "none" = بدون کارفرما, "" = همه. */
   const [employerFilter, setEmployerFilter] = useState<string>(() => loadPageFilter<string>("customers", "employer", "", () => true));
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
-    const saved = loadPageFilter<string>("customers", "status", "", () => true);
+    const saved = normalizeStageFilter(loadPageFilter<string>("customers", "status", "", () => true));
     return isStatusFilter(saved) ? saved : "";
   });
   const [sort, setSort] = useState<CustomersSort>(() => {
@@ -198,22 +215,14 @@ export function CustomersPage() {
           .includes(q),
       );
     }
-    // Visa-status filter — derived from the customer's requests.
+    // Stage filter — the customer's effective journey stage (or no request).
     if (statusFilter) {
       list = list.filter((c) => {
-        const s = statsByCustomer.get(c.id);
-        switch (statusFilter) {
-          case "issued":
-            return !!s && s.issued > 0;
-          case "pending":
-            return !!s && s.total - s.issued - s.rejected > 0;
-          case "rejected":
-            return !!s && s.rejected > 0;
-          case "none":
-            return !s || s.total === 0;
-          default:
-            return true;
+        if (statusFilter === "none") {
+          const s = statsByCustomer.get(c.id);
+          return !s || s.total === 0;
         }
+        return stageMap?.get(c.id) === statusFilter;
       });
     }
     // Issued-visa date range — any issued visa inside [from, to] qualifies.
@@ -263,6 +272,7 @@ export function CustomersPage() {
     employerFilter,
     employerFieldOn,
     statusFilter,
+    stageMap,
     issuedFrom,
     issuedTo,
     regFrom,
@@ -279,11 +289,29 @@ export function CustomersPage() {
         <div className="flex items-center gap-2.5">
           <Avatar photo={c.photo} name={customerFullName(c)} />
           <div className="min-w-0">
-            <span className="block truncate font-semibold">{customerFullName(c)}</span>
-            {c.referrer && <span className="block text-[11px] text-ink-400">معرف: {c.referrer}</span>}
+            <span className="flex items-center gap-1.5">
+              <span className="truncate font-semibold">{customerFullName(c)}</span>
+              <StageIndicators
+                stage={stageMap?.get(c.id)}
+                hasCode={!!c.referrer?.trim()}
+                dotSize={9}
+              />
+            </span>
+            {c.referrer && (
+              <span className="block text-[11px] text-ink-400">کد اختصاصی: {c.referrer}</span>
+            )}
           </div>
         </div>
       ),
+    },
+    {
+      key: "stage",
+      header: "مرحله",
+      sortValue: (c) => {
+        const s = stageMap?.get(c.id);
+        return s === "stage6" ? 6 : s === undefined ? -1 : stageOrder(s) + 1;
+      },
+      render: (c) => <StageBadge stage={stageMap?.get(c.id)} size="sm" />,
     },
     {
       key: "passportNo",
@@ -475,7 +503,7 @@ export function CustomersPage() {
           <SearchBox
             value={query}
             onChange={setQuery}
-            placeholder="نام، شماره پاسپورت یا معرف…"
+            placeholder="نام، شماره پاسپورت یا کد اختصاصی…"
             className="min-w-[200px] flex-1"
           />
           <FilterSelect
@@ -511,9 +539,9 @@ export function CustomersPage() {
             ]}
           />
           <FilterSelect
-            ariaLabel="وضعیت ویزا"
+            ariaLabel="مرحله"
             value={statusFilter}
-            onChange={(v) => setStatusFilter(isStatusFilter(v) ? v : "")}
+            onChange={(v) => setStatusFilter(isStatusFilter(normalizeStageFilter(v)) ? (normalizeStageFilter(v) as StatusFilter) : "")}
             options={STATUS_FILTERS.map((s) => ({ value: s.value, label: s.label }))}
           />
           {employerFieldOn && (
@@ -613,12 +641,57 @@ export function CustomersPage() {
         </div>
       </div>
 
+      <HotkeyHint className="-mt-2" />
+
       <DataTable
         columns={columns}
         rows={rows}
         rowKey={(c) => c.id}
         onRowClick={(c) => navigate(`/customers/${c.id}`)}
+        onRowMouseEnter={(c, el) => beginCustomerHover(c.id, el)}
+        onRowMouseLeave={(c) => endCustomerHover(c.id)}
         loading={customers === undefined}
+        mobileCard={(c) => {
+          const rep = repById.get(displayRepId(c) ?? "");
+          const list = listById.get(displayListId(c) ?? "");
+          const s = statsByCustomer.get(c.id);
+          return (
+            <div className="glass flex flex-col gap-2 rounded-2xl p-3.5">
+              <div className="flex items-center gap-2.5">
+                <span className="relative shrink-0">
+                  <Avatar photo={c.photo} name={customerFullName(c)} />
+                  <span className="absolute -bottom-0.5 -left-0.5">
+                    <StageIndicators
+                      stage={stageMap?.get(c.id)}
+                      hasCode={!!c.referrer?.trim()}
+                      dotSize={9}
+                    />
+                  </span>
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13.5px] font-bold">{customerFullName(c)}</span>
+                  {c.passportNo && (
+                    <span dir="ltr" className="num mt-0.5 block text-[11px] text-ink-400">
+                      {c.passportNo}
+                    </span>
+                  )}
+                </span>
+                <StageBadge stage={stageMap?.get(c.id)} size="sm" />
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5 border-t border-ink-900/5 pt-2 text-[10.5px] dark:border-white/5">
+                {rep && <span className="chip-soft">نماینده: {rep.name}</span>}
+                {list && <span className="chip-soft">{list.name}</span>}
+                {s && (
+                  <span className="chip-soft num">
+                    {toPersianDigits(s.total)} درخواست
+                    {s.issued > 0 && <span className="text-[#10b981]"> ({toPersianDigits(s.issued)} صادر)</span>}
+                  </span>
+                )}
+                {c.referrer && <span className="chip-soft">کد اختصاصی: {c.referrer}</span>}
+              </div>
+            </div>
+          );
+        }}
         empty={
           <EmptyState
             icon={Users}

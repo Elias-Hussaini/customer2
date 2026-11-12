@@ -432,7 +432,7 @@ function RepCustomersTab({
   employers: Employer[];
   employerFieldOn: boolean;
 }) {
-  const { panel, rows, anyActive } = useCustomerFilters({
+  const { panel, rows, anyActive, view } = useCustomerFilters({
     pageKey: "repProfile",
     customers: repCustomers,
     requests,
@@ -454,6 +454,7 @@ function RepCustomersTab({
         {toPersianDigits(rows.length)} مشتری {anyActive ? "در این فیلتر" : ""}
       </p>
       <CustomerCardGrid
+        view={view}
         customers={rows}
         requests={requests}
         tags={tags}

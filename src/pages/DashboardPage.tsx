@@ -28,16 +28,20 @@ import {
   usePrefs,
   useRepresentatives,
   useRequests,
+  useStageMap,
   useTags,
 } from "../hooks/useData";
 import { computeDashboardStats } from "../services/stats";
 import { formatMoney } from "../utils/num";
 import { formatJalali, todayIso, toPersianDigits } from "../utils/jalali";
 import { customerFullName } from "../db/customers";
+import { StageIndicators } from "../components/ui/StageBadge";
+import { beginCustomerHover, endCustomerHover } from "../components/domain/customerHotkeys";
 import { uiActions } from "../components/layout/uiStore";
 
 export function DashboardPage() {
   const customers = useCustomers();
+  const stageMap = useStageMap();
   const representatives = useRepresentatives();
   const requests = useRequests();
   const payments = usePayments();
@@ -164,13 +168,22 @@ export function DashboardPage() {
                     <Link
                       to={`/requests/${r.id}/edit`}
                       className="flex items-center gap-3 rounded-2xl px-2 py-2.5 transition-colors hover:bg-brand-500/6"
+                      onMouseEnter={(e) => beginCustomerHover(r.customerId, e.currentTarget)}
+                      onMouseLeave={() => endCustomerHover(r.customerId)}
                     >
                       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-500/10 text-[12px] font-bold text-brand-600 dark:text-brand-300">
                         {customer?.firstName?.[0] ?? "؟"}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13px] font-semibold">
-                          {customer ? customerFullName(customer) : "—"}
+                        <span className="flex items-center gap-1.5">
+                          <span className="truncate text-[13px] font-semibold">
+                            {customer ? customerFullName(customer) : "—"}
+                          </span>
+                          <StageIndicators
+                            stage={stageMap?.get(r.customerId)}
+                            hasCode={!!customer?.referrer?.trim()}
+                            dotSize={9}
+                          />
                         </span>
                         <span className="num block text-[11px] text-ink-500 dark:text-ink-400">
                           {r.visaType ?? "بدون نوع"} • {formatJalali(r.registrationDate)}

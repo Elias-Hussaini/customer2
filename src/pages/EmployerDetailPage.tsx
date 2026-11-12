@@ -357,7 +357,7 @@ function EmployerCustomersPanel({
   lists: ListFolder[];
   representatives: Representative[];
 }) {
-  const { panel, rows, anyActive } = useCustomerFilters({
+  const { panel, rows, anyActive, view } = useCustomerFilters({
     pageKey: "employerProfile",
     customers: linked,
     requests,
@@ -375,6 +375,7 @@ function EmployerCustomersPanel({
         {toPersianDigits(rows.length)} مشتری {anyActive ? "در این فیلتر" : ""}
       </p>
       <CustomerCardGrid
+        view={view}
         customers={rows}
         requests={requests}
         tags={tags}

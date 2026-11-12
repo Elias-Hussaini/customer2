@@ -5,6 +5,8 @@ import { PageHeader } from "../components/ui/StatCard";
 import { EmptyState } from "../components/ui/EmptyState";
 import { SearchBox, FilterSelect } from "../components/ui/inputs";
 import { Menu } from "../components/ui/Menu";
+import { DataTable, type Column } from "../components/ui/DataTable";
+import { ViewModeToggle, isCollectionViewMode, type CollectionViewMode } from "../components/ui/ViewModeToggle";
 import { RepresentativeFormModal } from "../components/domain/RepresentativeFormModal";
 import { Avatar } from "../components/ui/Avatar";
 import { archiveRepresentative, deleteRepresentative } from "../db/reps";
@@ -54,6 +56,15 @@ export function RepresentativesPage() {
   const [query, setQuery] = useState("");
   const [editOpen, setEditOpen] = useState(false);
   const [editing, setEditing] = useState<Representative | null>(null);
+  /** Cards ↔ table display mode (remembered per device). */
+  const [view, setView] = useState<CollectionViewMode>(() => {
+    const saved = loadPageFilter<string>("reps", "view", "cards", isCollectionViewMode);
+    return isCollectionViewMode(saved) ? saved : "cards";
+  });
+
+  useEffect(() => {
+    savePageFilter("reps", "view", view);
+  }, [view]);
 
   // Round 22 — the same personalization filters as the مشتریان page,
   // remembered per device: visa status / linked کارفرما / sort.
@@ -201,6 +212,155 @@ export function RepresentativesPage() {
     setEmployerFilter("");
   };
 
+  /** Table rows — rep + stats (drives both views). */
+  const tableRows = useMemo(
+    () =>
+      rows.map((rep) => {
+        const stats = computeRepStats(rep.id, requests ?? [], urgentTagIds);
+        const repPayments = (payments ?? []).filter((p) => p.representativeId === rep.id);
+        return {
+          ...rep,
+          total: stats.total,
+          issued: stats.issued,
+          inProgress: stats.inProgress,
+          rejected: stats.rejected,
+          customers: statsByRep.get(rep.id)?.customers ?? 0,
+          paidIRT: repPayments.filter((p) => p.currency === "IRT").reduce((s, p) => s + p.amount, 0),
+          paidUSD: repPayments.filter((p) => p.currency === "USD").reduce((s, p) => s + p.amount, 0),
+        };
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows, requests, payments, urgentTagIds, statsByRep],
+  );
+
+  const columns: Column<(typeof tableRows)[number]>[] = [
+    {
+      key: "name",
+      header: "نماینده",
+      sortValue: (r) => r.name,
+      render: (r) => (
+        <div className="flex items-center gap-2.5">
+          <Avatar photo={r.photo} name={r.name} />
+          <div className="min-w-0">
+            <span className="block truncate font-semibold">{r.name}</span>
+            {r.phone && (
+              <span dir="ltr" className="num flex items-center gap-1 text-[11px] text-ink-400">
+                <Phone size={10} /> {r.phone}
+              </span>
+            )}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "customers",
+      header: "مشتریان",
+      align: "center",
+      sortValue: (r) => r.customers,
+      render: (r) => <span className="num font-bold">{toPersianDigits(r.customers)}</span>,
+    },
+    {
+      key: "total",
+      header: "درخواست‌ها",
+      align: "center",
+      sortValue: (r) => r.total,
+      render: (r) => <span className="num">{toPersianDigits(r.total)}</span>,
+    },
+    {
+      key: "issued",
+      header: "صادر شده",
+      align: "center",
+      sortValue: (r) => r.issued,
+      render: (r) => (
+        <span className="num font-bold text-[#0b9e6e] dark:text-[#3ddc9a]">{toPersianDigits(r.issued)}</span>
+      ),
+    },
+    {
+      key: "inProgress",
+      header: "در حال کار",
+      align: "center",
+      sortValue: (r) => r.inProgress,
+      render: (r) => (
+        <span className="num font-bold text-[#c77d0a] dark:text-[#f5b84f]">{toPersianDigits(r.inProgress)}</span>
+      ),
+    },
+    {
+      key: "rejected",
+      header: "رد شده",
+      align: "center",
+      sortValue: (r) => r.rejected,
+      render: (r) =>
+        r.rejected > 0 ? (
+          <span className="num font-bold text-[#dc3535] dark:text-[#f87b7b]">{toPersianDigits(r.rejected)}</span>
+        ) : (
+          <span className="text-ink-400">—</span>
+        ),
+    },
+    {
+      key: "paid",
+      header: "دریافتی",
+      sortValue: (r) => r.paidUSD * 100000 + r.paidIRT,
+      render: (r) => (
+        <span className="flex flex-wrap gap-1.5">
+          {r.paidUSD > 0 && <span className="chip-soft num">{formatMoney(r.paidUSD, "USD")}</span>}
+          {r.paidIRT > 0 && <span className="chip-soft num">{formatMoney(r.paidIRT, "IRT")}</span>}
+          {r.paidUSD === 0 && r.paidIRT === 0 && <span className="text-ink-400">—</span>}
+        </span>
+      ),
+    },
+    {
+      key: "actions",
+      header: "",
+      align: "end",
+      render: (r) => (
+        <Menu
+          items={[
+            { icon: FilePenLine, label: "مشاهده پروفایل", onClick: () => navigate(`/representatives/${r.id}`) },
+            {
+              icon: FilePenLine,
+              label: "ویرایش",
+              onClick: () => {
+                setEditing(r);
+                setEditOpen(true);
+              },
+            },
+            {
+              icon: UserRoundPlus,
+              label: "درخواست جدید برای این نماینده",
+              onClick: () => uiActions.openRequestModal({ representativeId: r.id }),
+            },
+            {
+              icon: Archive,
+              label: "بایگانی",
+              onClick: async () => {
+                const ok = await confirm({ title: `بایگانی «${r.name}»؟` });
+                if (ok) {
+                  await archiveRepresentative(r.id, r.name);
+                  toast.info("نماینده بایگانی شد");
+                }
+              },
+            },
+            {
+              icon: Trash2,
+              label: "حذف قطعی",
+              danger: true,
+              onClick: () => void removeRep(r, r.total, r.customers),
+            },
+          ]}
+          trigger={
+            <span className="icon-btn !h-8 !w-8" aria-label="عملیات">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <circle cx="12" cy="5" r="1.8" />
+                <circle cx="12" cy="12" r="1.8" />
+                <circle cx="12" cy="19" r="1.8" />
+              </svg>
+            </span>
+          }
+        />
+      ),
+    },
+  ];
+
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
@@ -268,6 +428,7 @@ export function RepresentativesPage() {
             <X size={14} /> پاک‌کردن فیلترها
           </button>
         )}
+        <ViewModeToggle value={view} onChange={setView} />
       </div>
 
       {representatives === undefined ? (
@@ -290,6 +451,15 @@ export function RepresentativesPage() {
               <UserRoundPlus size={15} /> اولین نماینده
             </button>
           }
+        />
+      ) : view === "table" ? (
+        <DataTable
+          columns={columns}
+          rows={tableRows}
+          rowKey={(r) => r.id}
+          onRowClick={(r) => navigate(`/representatives/${r.id}`)}
+          empty={<EmptyState icon={UserRound} title="نماینده‌ای یافت نشد" compact />}
+          footer={`${toPersianDigits(rows.length)} نماینده`}
         />
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">

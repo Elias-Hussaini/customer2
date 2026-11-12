@@ -17,6 +17,9 @@ interface DataTableProps<T> {
   onRowClick?: (row: T) => void;
   /** Card renderer for phones — falls back to the first three columns. */
   mobileCard?: (row: T) => ReactNode;
+  /** Row hover tracking (desktop rows + mobile cards) — used by the stage hotkeys. */
+  onRowMouseEnter?: (row: T, el: HTMLElement) => void;
+  onRowMouseLeave?: (row: T) => void;
   empty?: ReactNode;
   loading?: boolean;
   initialSort?: { key: string; dir: "asc" | "desc" };
@@ -35,6 +38,8 @@ export function DataTable<T>({
   rowKey,
   onRowClick,
   mobileCard,
+  onRowMouseEnter,
+  onRowMouseLeave,
   empty,
   loading,
   initialSort,
@@ -124,6 +129,10 @@ export function DataTable<T>({
                 <tr
                   key={rowKey(row)}
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  onMouseEnter={
+                    onRowMouseEnter ? (e) => onRowMouseEnter(row, e.currentTarget) : undefined
+                  }
+                  onMouseLeave={onRowMouseLeave ? () => onRowMouseLeave(row) : undefined}
                   className={`border-b border-ink-900/4 transition-colors last:border-0 dark:border-white/4 ${
                     onRowClick ? "cursor-pointer hover:bg-brand-500/5" : ""
                   }`}
@@ -152,13 +161,24 @@ export function DataTable<T>({
       <div className="flex flex-col gap-2.5 md:hidden">
         {sortedRows.map((row) =>
           mobileCard ? (
-            <div key={rowKey(row)} onClick={onRowClick ? () => onRowClick(row) : undefined}>
+            <div
+              key={rowKey(row)}
+              onClick={onRowClick ? () => onRowClick(row) : undefined}
+              onMouseEnter={
+                onRowMouseEnter ? (e) => onRowMouseEnter(row, e.currentTarget) : undefined
+              }
+              onMouseLeave={onRowMouseLeave ? () => onRowMouseLeave(row) : undefined}
+            >
               {mobileCard(row)}
             </div>
           ) : (
             <div
               key={rowKey(row)}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
+              onMouseEnter={
+                onRowMouseEnter ? (e) => onRowMouseEnter(row, e.currentTarget) : undefined
+              }
+              onMouseLeave={onRowMouseLeave ? () => onRowMouseLeave(row) : undefined}
               className="glass flex flex-col gap-1.5 rounded-2xl p-3.5 text-[13px]"
             >
               {columns.slice(0, 3).map((col) => (

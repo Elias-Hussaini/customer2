@@ -6,6 +6,7 @@ import { requestStatusFa } from "../../types";
 import { DataTable, type Column } from "../ui/DataTable";
 import { Menu } from "../ui/Menu";
 import { StatusPill, TagBadge, TagsRow } from "../ui/Badges";
+import { StageIndicators } from "../ui/StageBadge";
 import { Avatar } from "../ui/Avatar";
 import { Modal } from "../ui/Modal";
 import { formatMoney } from "../../utils/num";
@@ -14,6 +15,8 @@ import { customerFullName } from "../../db/customers";
 import { archiveRequest, deleteRequest, setRequestIssued, setRequestRejected } from "../../db/requests";
 import { useConfirm } from "../../hooks/useConfirm";
 import { useToast } from "../../hooks/useToast";
+import { useStageMap } from "../../hooks/useData";
+import { beginCustomerHover, endCustomerHover } from "./customerHotkeys";
 import { uiActions } from "../layout/uiStore";
 import { toPersianDigits } from "../../utils/jalali";
 
@@ -45,6 +48,8 @@ export function RequestsTable({
   const toast = useToast();
   /** Big profile photo opened from a row's avatar button. */
   const [photoView, setPhotoView] = useState<{ photo: string; name: string } | null>(null);
+  /** Effective stage of every customer (for the colored ring + green tick). */
+  const stageMap = useStageMap();
 
   const customersById = new Map(extras.customers.map((c) => [c.id, c]));
   const repsById = new Map(extras.representatives.map((r) => [r.id, r]));
@@ -93,8 +98,15 @@ export function RequestsTable({
               <Avatar photo={undefined} name={fullName} />
             )}
             <div className="min-w-0">
-              <span className="block truncate font-semibold" title={fullName}>
-                {fullName}
+              <span className="flex items-center gap-1.5">
+                <span className="truncate font-semibold" title={fullName}>
+                  {fullName}
+                </span>
+                <StageIndicators
+                  stage={stageMap?.get(r.customerId)}
+                  hasCode={!!c?.referrer?.trim()}
+                  dotSize={9}
+                />
               </span>
               {c?.passportNo && (
                 <span className="ltr block text-[11px] text-ink-400">{c.passportNo}</span>
@@ -281,6 +293,8 @@ export function RequestsTable({
       rows={requests}
       rowKey={(r) => r.id}
       onRowClick={openRow}
+      onRowMouseEnter={(r, el) => beginCustomerHover(r.customerId, el)}
+      onRowMouseLeave={(r) => endCustomerHover(r.customerId)}
       loading={loading}
       empty={empty}
       initialSort={{ key: "registrationDate", dir: "desc" }}
@@ -308,7 +322,14 @@ export function RequestsTable({
                   <Avatar photo={undefined} name={fullName} className="self-start" />
                 )}
                 <div className="min-w-0">
-                  <p className="truncate text-[14px] font-bold">{fullName}</p>
+                  <p className="flex items-center gap-1.5">
+                    <span className="truncate text-[14px] font-bold">{fullName}</span>
+                    <StageIndicators
+                      stage={stageMap?.get(r.customerId)}
+                      hasCode={!!c?.referrer?.trim()}
+                      dotSize={9}
+                    />
+                  </p>
                   <p
                     className="truncate text-[11px] text-ink-500 dark:text-ink-400"
                     title={

@@ -1,12 +1,15 @@
+import { useMemo } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "../db/schema";
 import { DEFAULT_PREFS, updatePrefs } from "../db/prefs";
+import { buildStageMap } from "../db/stages";
 import type {
   Activity,
   AppPreferences,
   Attachment,
   CustomFieldDef,
   Customer,
+  CustomerStage,
   DocType,
   Employer,
   ListFolder,
@@ -155,6 +158,19 @@ export function useActivities(limit = 20, entityId?: string): Activity[] | undef
 export function usePrefs(): AppPreferences {
   const prefs = useLiveQuery(() => db.preferences.get("app"), []);
   return prefs ?? DEFAULT_PREFS;
+}
+
+/**
+ * Effective visa-journey stage of every active customer (stored value wins,
+ * else derived from requests + special code). Undefined until data loads.
+ */
+export function useStageMap(): Map<string, CustomerStage> | undefined {
+  const customers = useCustomers();
+  const requests = useRequests();
+  return useMemo(() => {
+    if (!customers || !requests) return undefined;
+    return buildStageMap(customers, requests);
+  }, [customers, requests]);
 }
 
 export { updatePrefs };

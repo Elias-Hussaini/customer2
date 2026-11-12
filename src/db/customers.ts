@@ -1,6 +1,7 @@
 import { db } from "./schema";
 import { logActivity } from "./activities";
 import { syncRequestsToCustomerRep } from "./requests";
+import { initialStage, stageAfterCodeEdit } from "./stages";
 import type { Customer } from "../types";
 import { uid } from "../utils/id";
 import { todayIso } from "../utils/jalali";
@@ -61,6 +62,9 @@ export async function createCustomer(input: CustomerInput): Promise<Customer> {
     representativeId: input.representativeId ?? null,
     listId: input.listId ?? null,
     employerId: input.employerId ?? null,
+    // Round 15/23: a fresh customer starts at «مرحله اول» — unless their
+    // special code (کد اختصاصی) is already known, which jumps to «دارای کد اختصاصی».
+    stage: initialStage(input.referrer),
     registrationDate: input.registrationDate || todayIso(),
     customValues: input.customValues ?? {},
     createdAt: now,
@@ -109,6 +113,9 @@ export async function updateCustomer(
     representativeId: input.representativeId ?? null,
     listId: input.listId ?? null,
     employerId: input.employerId ?? null,
+    // Filling the کد اختصاصی auto-advances stage1/2 → «دارای کد اختصاصی»
+    // (clearing it never demotes — Alt is the way back).
+    ...(before ? { stage: stageAfterCodeEdit(before.stage, input.referrer?.trim()) ?? null } : {}),
     registrationDate: input.registrationDate,
     customValues: input.customValues ?? {},
     updatedAt: Date.now(),

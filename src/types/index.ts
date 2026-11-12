@@ -65,6 +65,114 @@ export interface Employer {
   archivedAt?: number | null;
 }
 
+/**
+ * The customer's visa journey («مرحله‌های ویزا») — a linear pipeline from fresh
+ * registration to an issued visa, plus the rejected side-state. Stored on the
+ * customer; request-level issued/rejected flags stay the source of truth for
+ * reports and exports.
+ */
+export type CustomerStage =
+  | "stage1" // مرحله اول — تازه ثبت شده
+  | "stage2" // ثبت شده برای کد اختصاصی
+  | "stage3" // دارای کد اختصاصی
+  | "stage4" // ثبت شده برای ویزا
+  | "stage5" // صادر شده
+  | "stage6"; // رد شده
+
+/** Pipeline order (stage6 = rejected lives outside the line). */
+export const CUSTOMER_STAGES: readonly CustomerStage[] = [
+  "stage1",
+  "stage2",
+  "stage3",
+  "stage4",
+  "stage5",
+  "stage6",
+];
+
+/** Persian labels — the single source of truth for UI, tooltips and filters. */
+export const CUSTOMER_STAGE_LABELS: Record<CustomerStage, string> = {
+  stage1: "مرحله اول",
+  stage2: "ثبت شده برای کد اختصاصی",
+  stage3: "دارای کد اختصاصی",
+  stage4: "ثبت شده برای ویزا",
+  stage5: "صادر شده",
+  stage6: "رد شده",
+};
+
+export function customerStageLabel(s: CustomerStage | null | undefined): string {
+  return s ? (CUSTOMER_STAGE_LABELS[s] ?? "") : "";
+}
+
+/**
+ * Default stage colors — a deliberate progression (slate → violet → blue →
+ * amber → green, red for rejected). Users can override every color in
+ * Settings → «مراحل و رنگ‌ها»; prefs store only the overrides.
+ */
+export const DEFAULT_STAGE_COLORS: Record<CustomerStage, string> = {
+  stage1: "#94a3b8",
+  stage2: "#8b5cf6",
+  stage3: "#3b82f6",
+  stage4: "#f59e0b",
+  stage5: "#10b981",
+  stage6: "#ef4444",
+};
+
+/** Resolve the effective color of a stage (prefs overrides win). */
+export function customerStageColor(
+  s: CustomerStage | null | undefined,
+  overrides?: Partial<Record<CustomerStage, string>> | null,
+): string {
+  if (!s) return DEFAULT_STAGE_COLORS.stage1;
+  return overrides?.[s] || DEFAULT_STAGE_COLORS[s];
+}
+
+/** Pipeline order without the rejected side-state. */
+const STAGE_PIPELINE: readonly CustomerStage[] = [
+  "stage1",
+  "stage2",
+  "stage3",
+  "stage4",
+  "stage5",
+];
+
+export function stageOrder(s: CustomerStage): number {
+  return STAGE_PIPELINE.indexOf(s);
+}
+
+/** Next stage in the pipeline; rejected re-enters at «ثبت شده برای ویزا». */
+export function nextStageOf(s: CustomerStage): CustomerStage {
+  if (s === "stage6") return "stage4";
+  const i = STAGE_PIPELINE.indexOf(s);
+  return i < 0 || i >= STAGE_PIPELINE.length - 1 ? s : STAGE_PIPELINE[i + 1];
+}
+
+/** Previous stage in the pipeline; rejected falls back to «ثبت شده برای ویزا». */
+export function prevStageOf(s: CustomerStage): CustomerStage {
+  if (s === "stage6") return "stage4";
+  const i = STAGE_PIPELINE.indexOf(s);
+  return i <= 0 ? s : STAGE_PIPELINE[i - 1];
+}
+
+/**
+ * Map a saved visa-status filter value to the new stage keys. Legacy values
+ * ("issued" / "pending" / "rejected") from before the stage system keep
+ * working: they translate to the closest stage.
+ */
+export function normalizeStageFilter(v: string): string {
+  if (v === "" || v === "none") return v;
+  if ((CUSTOMER_STAGES as readonly string[]).includes(v)) return v;
+  switch (v) {
+    case "issued":
+      return "stage5";
+    case "pending":
+      return "stage4";
+    case "rejected":
+      return "stage6";
+    default:
+      return "";
+  }
+}
+
 export interface Customer {
   id: string;
   firstName?: string;
@@ -85,6 +193,9 @@ export interface Customer {
   listId?: string | null;
   /** Optional employer (کارفرما) — null = بدون کارفرما. */
   employerId?: string | null;
+  /** The customer's visa journey stage («مرحله‌های ویزا»). Absent = derived
+   *  from their requests / special-code field (see db/stages.ts). */
+  stage?: CustomerStage | null;
   /** Registration date — defaults to today, editable at creation. */
   registrationDate: string;
   /** Values keyed by custom-field key. Survives field-definition edits. */
@@ -304,6 +415,8 @@ export interface AppPreferences {
   employerFieldEnabled?: boolean;
   /** Profile photos auto-convert to 400×600 (نسبت آزاد) when set — default ON. */
   profilePhotoAutoSize?: boolean;
+  /** User overrides of the stage colors (Settings → مراحل و رنگ‌ها). */
+  stageColors?: Partial<Record<CustomerStage, string>>;
   /** Last mode used in the customer form: smart extraction vs manual. */
   /** Internal: default document slots have been seeded once. */
   docTypesSeeded?: boolean;

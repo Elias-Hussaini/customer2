@@ -968,11 +968,11 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
               placeholder="A12345678"
             />
           </FormField>
-          <FormField label="معرف">
+          <FormField label="کد اختصاصی" hint="با ثبت این کد، مشتری خودکار به مرحلهٔ «دارای کد اختصاصی» می‌رود">
             <Input
               value={form.referrer}
               onChange={(e) => setForm({ ...form, referrer: e.target.value })}
-              placeholder="چه کسی معرفی کرده؟"
+              placeholder="کد اختصاصی مشتری (اختیاری)"
             />
           </FormField>
           <FormField label="شغل">

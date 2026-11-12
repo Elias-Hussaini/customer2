@@ -14,6 +14,8 @@ import { ProfileDocsManager } from "../components/domain/ProfileDocsManager";
 import { CustomerFormModal } from "../components/domain/CustomerFormModal";
 import { ProfilePhotoCard } from "../components/domain/ProfilePhotoCard";
 import { RequestsTable } from "../components/domain/RequestsTable";
+import { StageBadge, CodeTick } from "../components/ui/StageBadge";
+import { beginCustomerHover, endCustomerHover } from "../components/domain/customerHotkeys";
 import { ExportDialog } from "../components/exports/ExportDialog";
 import { DroppedFilesModal } from "../components/domain/DroppedFilesModal";
 import { FileDropOverlay, useDropTarget, useFilesDragging } from "../components/ui/DropZone";
@@ -28,6 +30,7 @@ import {
   usePrefs,
   useRepresentatives,
   useRequests,
+  useStageMap,
   useTags,
 } from "../hooks/useData";
 import { useConfirm } from "../hooks/useConfirm";
@@ -57,7 +60,7 @@ const BASE_FIELDS: BaseFieldDef[] = [
   { key: "birthDate", label: "تاریخ تولد", date: true, calendar: "passport" },
   { key: "passportIssueDate", label: "تاریخ صدور پاسپورت", date: true, calendar: "passport" },
   { key: "passportExpiryDate", label: "تاریخ انقضای پاسپورت", date: true, calendar: "passport" },
-  { key: "referrer", label: "معرف" },
+  { key: "referrer", label: "کد اختصاصی" },
   { key: "registrationDate", label: "تاریخ ثبت", date: true },
 ];
 
@@ -69,6 +72,7 @@ export function CustomerDetailPage() {
 
   const customer = useCustomer(id);
   const requests = useRequests();
+  const stageMap = useStageMap();
   const representatives = useRepresentatives();
   const lists = useLists();
   const employers = useEmployers();
@@ -140,7 +144,11 @@ export function CustomerDetailPage() {
       <PageHeader
         back
         title={name}
-        subtitle={customer.passportNo ? `پاسپورت ${customer.passportNo}` : "بدون شماره پاسپورت"}
+        subtitle={
+          <span className="flex flex-wrap items-center gap-2">
+            {customer.passportNo ? `پاسپورت ${customer.passportNo}` : "بدون شماره پاسپورت"}
+          </span>
+        }
         actions={
           <>
             <button className="btn btn-glass btn-sm" onClick={() => setExportOpen(true)}>
@@ -158,6 +166,28 @@ export function CustomerDetailPage() {
           </>
         }
       />
+
+      {/* Stage strip — the colored journey badge + code tick; hover + keys change it */}
+      <div
+        className="glass flex flex-wrap items-center gap-2.5 rounded-3xl px-4 py-3"
+        onMouseEnter={(e) => beginCustomerHover(customer.id, e.currentTarget)}
+        onMouseLeave={() => endCustomerHover(customer.id)}
+        title="با نگه‌داشتن نشانگر اینجا: Ctrl مرحله بعد · Alt مرحله قبل · Shift صادر شده · Alt+Shift رد شده"
+      >
+        <StageBadge stage={stageMap?.get(customer.id)} />
+        {customer.referrer?.trim() ? (
+          <span className="chip-soft num inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px]">
+            <CodeTick has size={13} />
+            کد اختصاصی: {customer.referrer}
+          </span>
+        ) : (
+          <span className="text-[11px] text-ink-400">بدون کد اختصاصی</span>
+        )}
+        <span className="flex-1" />
+        <span className="hidden text-[10px] text-ink-400 sm:block">
+          هاور + Ctrl / Alt / Shift / Alt+Shift = تغییر مرحله
+        </span>
+      </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="flex flex-col gap-4 lg:col-span-2">
