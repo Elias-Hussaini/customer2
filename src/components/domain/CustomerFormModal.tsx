@@ -680,21 +680,29 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
         }
         // Register the visa request together with the customer — same
         // representative, list and registration date. No re-asking.
+        // Round 24 (user rule): this simultaneous request is bookkeeping only —
+        // it must NOT push the fresh customer to «ثبت شده برای ویزا». New
+        // customers start at «مرحله اول» (or «دارای کد اختصاصی» if their code
+        // was filled in this same form). Already-registered customers are
+        // never touched — no migration, no rewrite of their stored stage.
         if (withRequest && reqVisaType) {
-          await createRequest({
-            customerId: created.id,
-            representativeId: form.representativeId,
-            listId: form.listId,
-            visaType: reqVisaType,
-            tags: [],
-            quotedAmount: reqAmount ?? undefined,
-            currency: reqAmount != null ? reqCurrency : undefined,
-            registrationDate: input.registrationDate,
-            issued: false,
-            issuedAt: null,
-            rejected: false,
-            rejectedAt: null,
-          });
+          await createRequest(
+            {
+              customerId: created.id,
+              representativeId: form.representativeId,
+              listId: form.listId,
+              visaType: reqVisaType,
+              tags: [],
+              quotedAmount: reqAmount ?? undefined,
+              currency: reqAmount != null ? reqCurrency : undefined,
+              registrationDate: input.registrationDate,
+              issued: false,
+              issuedAt: null,
+              rejected: false,
+              rejectedAt: null,
+            },
+            { advanceStage: false },
+          );
           toast.success(`مشتری «${customerFullName(created)}» با درخواست «${reqVisaType}» ثبت شد`, { cause: "save" });
         } else {
           toast.success(`مشتری «${customerFullName(created)}» ثبت شد`, { cause: "save" });
@@ -1045,6 +1053,7 @@ export function CustomerFormModal({ open, onClose, customer, onSaved }: Props) {
                 <p className="mt-0.5 text-[11px] leading-5 text-ink-500 dark:text-ink-400">
                   با همان نماینده و لیستِ همین فرم ثبت می‌شود و دیگر لازم نیست جداگانه ثبتش کنید.
                   بعداً می‌توانید مبلغ، وضعیت صدور و مدارک را تکمیل کنید.
+                  <span className="font-bold">مرحلهٔ مشتری از «مرحله اول» شروع می‌شود</span> — این درخواست مرحله را جلو نمی‌برد.
                 </p>
               </div>
               <Toggle checked={withRequest} onChange={setWithRequest} />

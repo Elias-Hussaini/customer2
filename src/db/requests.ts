@@ -26,7 +26,23 @@ export interface RequestInput {
   customValues?: Record<string, unknown>;
 }
 
-export async function createRequest(input: RequestInput): Promise<VisaRequest> {
+/** Options for createRequest.
+ *
+ * `advanceStage: false` is used by the NEW-customer registration flow
+ * (CustomerFormModal): the simultaneous visa request is pure bookkeeping —
+ * it must NOT push the fresh customer's journey to «ثبت شده برای ویزا».
+ * The customer keeps the stage createCustomer gave them («مرحله اول», or
+ * «دارای کد اختصاصی» when their code was filled in the same form). Only a
+ * SEPARATE request creation (request form, AI agent, seed) advances the
+ * stage. Default (no opts / true) keeps the legacy behavior. */
+export interface CreateRequestOptions {
+  advanceStage?: boolean;
+}
+
+export async function createRequest(
+  input: RequestInput,
+  opts: CreateRequestOptions = {},
+): Promise<VisaRequest> {
   const now = Date.now();
   // A brand-new request typed in the form counts as a manual choice when it
   // does NOT match its customer's profile representative — otherwise it just
@@ -60,7 +76,12 @@ export async function createRequest(input: RequestInput): Promise<VisaRequest> {
   await db.requests.add(request);
   // Stage engine: a customer's first pending request advances them to
   // «ثبت شده برای ویزا»; an issued/rejected new request sets stage5/6 outright.
-  await syncStageAfterRequestCreate(request.customerId);
+  // Skipped ONLY for the simultaneous new-customer registration — the fresh
+  // customer stays at «مرحله اول» (round 24 user rule). Never touches
+  // already-registered customers: no migration, no rewrite of stored stages.
+  if (opts.advanceStage !== false) {
+    await syncStageAfterRequestCreate(request.customerId);
+  }
   await logActivity({
     type: "create",
     entity: "request",

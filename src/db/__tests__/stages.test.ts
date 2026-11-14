@@ -227,6 +227,37 @@ describe("auto-advance rules", () => {
     expect((await db.customers.get(issued.id))!.stage).toBe("stage5");
   });
 
+  it("round 24: the simultaneous request of a NEW customer does NOT jump the stage", async () => {
+    // The CustomerFormModal path: createCustomer → createRequest(…, { advanceStage: false }).
+    const fresh = await seedCustomer(); // no code → مرحله اول
+    expect((await db.customers.get(fresh.id))!.stage).toBe("stage1");
+    const r = await createRequest(req({ customerId: fresh.id }), { advanceStage: false });
+    // The request exists (bookkeeping) but the journey did NOT advance.
+    expect(await db.requests.get(r.id)).toBeTruthy();
+    expect((await db.requests.get(r.id))!.issued).toBe(false);
+    expect((await db.customers.get(fresh.id))!.stage).toBe("stage1");
+
+    // Code filled in the same form → دارای کد اختصاصی (kept, not overwritten).
+    const withCode = await seedCustomer({ referrer: "K-7" });
+    expect((await db.customers.get(withCode.id))!.stage).toBe("stage3");
+    await createRequest(req({ customerId: withCode.id }), { advanceStage: false });
+    expect((await db.customers.get(withCode.id))!.stage).toBe("stage3");
+
+    // Already-registered customers are NEVER rewritten by this path.
+    const existing = await seedCustomer({ stage: "stage4" });
+    await createRequest(req({ customerId: existing.id }), { advanceStage: false });
+    expect((await db.customers.get(existing.id))!.stage).toBe("stage4");
+    const existingIssued = await seedCustomer({ stage: "stage5" });
+    await createRequest(req({ customerId: existingIssued.id }), { advanceStage: false });
+    expect((await db.customers.get(existingIssued.id))!.stage).toBe("stage5");
+
+    // Real-world progress afterwards still syncs (issue → صادر شده).
+    await setRequestIssued(r.id, true, day(3));
+    expect((await db.customers.get(fresh.id))!.stage).toBe("stage5");
+    await setRequestIssued(r.id, false);
+    expect((await db.customers.get(fresh.id))!.stage).toBe("stage4");
+  });
+
   it("request issue/reject sync the customer stage both ways", async () => {
     const c = await seedCustomer();
     const r = await createRequest(req({ customerId: c.id }));
