@@ -1,6 +1,11 @@
 import { useEffect, useRef } from "react";
 import { useToast } from "../hooks/useToast";
 import { BUILD_SHA } from "./version";
+import {
+  getSecuritySnapshot,
+  reloadSecurityState,
+  SECURITY_STORAGE_KEY,
+} from "../security/securityStore";
 
 type ToastApi = ReturnType<typeof useToast>;
 
@@ -10,11 +15,15 @@ type ToastApi = ReturnType<typeof useToast>;
  */
 let registrationRef: ServiceWorkerRegistration | null = null;
 let updateFnRef: ((reload?: boolean) => Promise<void>) | null = null;
+let registerPromise: Promise<void> | null = null;
 let watchersArmed = false;
+let storageSyncArmed = false;
 let lastPromptAt = 0;
 
 /** Set by the hook; surfaces the sticky update toast when a new deploy lands. */
 let showUpdatePrompt: (() => void) | null = null;
+/** Set by the hook; announces offline-ready once. */
+let notifyOfflineReady: (() => void) | null = null;
 
 /** Re-check for a new deploy every 5 minutes while the app stays open. */
 const UPDATE_POLL_MS = 5 * 60_000;
@@ -91,6 +100,108 @@ async function waitForInstall(): Promise<ServiceWorkerRegistration | null> {
 }
 
 /**
+ * Register the service worker (deduped — safe under StrictMode and repeated
+ * calls). Split out of the hook so the security kill-switch can re-register
+ * later without re-mounting the app.
+ */
+async function registerServiceWorker(): Promise<void> {
+  if (updateFnRef || !("serviceWorker" in navigator)) return;
+  if (registerPromise) return registerPromise;
+  registerPromise = (async () => {
+    try {
+      const { registerSW } = await import("virtual:pwa-register");
+      updateFnRef = registerSW({
+        immediate: true,
+        onNeedRefresh() {
+          showUpdatePrompt?.();
+        },
+        onOfflineReady() {
+          notifyOfflineReady?.();
+        },
+        onRegisteredSW(_swUrl, registration) {
+          registrationRef = registration ?? null;
+          armUpdateWatchers();
+        },
+      });
+    } catch (e) {
+      // Dev mode or unsupported environment — skip silently (retry allowed).
+      registerPromise = null;
+      console.warn("PWA registration skipped", e);
+    }
+  })();
+  return registerPromise;
+}
+
+/**
+ * Cache kill-switch (hidden security console): unregister EVERY service
+ * worker and wipe CacheStorage. User data lives in IndexedDB and is never
+ * touched — after this the app is internet-only.
+ */
+export async function purgePwaCaches(): Promise<void> {
+  registrationRef = null;
+  try {
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.allSettled(regs.map((r) => r.unregister()));
+    }
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      await Promise.allSettled(keys.map((k) => caches.delete(k)));
+    }
+  } catch {
+    // best effort — never block the app on this
+  }
+}
+
+/**
+ * Live inspection of the browser's cache state (hidden console status + QA).
+ */
+export async function inspectPwaState(): Promise<{
+  swCount: number;
+  cacheNames: string[];
+  controlled: boolean;
+}> {
+  let swCount = 0;
+  let controlled = false;
+  try {
+    if ("serviceWorker" in navigator) {
+      swCount = (await navigator.serviceWorker.getRegistrations()).length;
+      controlled = !!navigator.serviceWorker.controller;
+    }
+  } catch {
+    /* ignore */
+  }
+  let cacheNames: string[] = [];
+  try {
+    if ("caches" in window) cacheNames = await caches.keys();
+  } catch {
+    /* ignore */
+  }
+  return { swCount, cacheNames, controlled };
+}
+
+/**
+ * Bring the browser's cache state in line with the security flag:
+ *  - cacheOff = true  → purge (unregister SW + wipe CacheStorage)
+ *  - cacheOff = false → best-effort re-register so offline mode returns
+ * Called at startup, after console toggles, after unlock, and on cross-tab
+ * storage changes.
+ */
+export async function applySecurityCacheState(): Promise<void> {
+  const { cacheOff } = getSecuritySnapshot();
+  if (cacheOff) {
+    await purgePwaCaches();
+    return;
+  }
+  // Re-enabling: drop stale refs so the fresh registration takes over.
+  if (updateFnRef) {
+    updateFnRef = null;
+    registerPromise = null;
+  }
+  await registerServiceWorker();
+}
+
+/**
  * Manual check — powers the «بررسی بروزرسانی» button in Settings.
  * Runs a real SW update check AND the version.json probe, then acts:
  *  - "latest"  → nothing to do
@@ -137,18 +248,7 @@ export async function checkForUpdatesNow(): Promise<UpdateCheckResult> {
  * IndexedDB, caches only ever hold static build assets.
  */
 export async function repairPwaAndReload(): Promise<void> {
-  try {
-    if ("serviceWorker" in navigator) {
-      const regs = await navigator.serviceWorker.getRegistrations();
-      await Promise.allSettled(regs.map((r) => r.unregister()));
-    }
-    if ("caches" in window) {
-      const keys = await caches.keys();
-      await Promise.allSettled(keys.map((k) => caches.delete(k)));
-    }
-  } catch {
-    // best effort — the reload below still escapes the stuck page
-  }
+  await purgePwaCaches();
   window.location.reload();
 }
 
@@ -180,15 +280,29 @@ function armUpdateWatchers(): void {
 }
 
 /**
+ * Cross-tab sync for the hidden security layer: another tab toggled the cache
+ * kill-switch or tripped the anomaly lock → mirror it here immediately.
+ */
+function armSecurityStorageSync(): void {
+  if (storageSyncArmed) return;
+  storageSyncArmed = true;
+  window.addEventListener("storage", (e) => {
+    if (e.key !== SECURITY_STORAGE_KEY) return;
+    reloadSecurityState();
+    void applySecurityCacheState();
+  });
+}
+
+/**
  * Wires the PWA service-worker update flow to a sticky toast.
  * With vite-plugin-pwa registerType: "prompt", the user stays in control:
  * a new deploy shows «نسخه جدید آماده است» with a به‌روزرسانی button and the
  * page reloads only when they click it.
  *
- * On top of the browser's own navigation-time check we also poll every 5
- * minutes and whenever the tab becomes visible, AND compare the deployed
- * version.json sha against the compiled-in BUILD_SHA — so the toast re-arms
- * even when the classic SW flow fired once and was missed/evicted.
+ * Security kill-switch: when the hidden security console has turned the cache
+ * OFF, the service worker is never registered (and any leftover worker /
+ * caches are purged) — the app works only with internet until it is turned
+ * back on.
  */
 export function useRegisterPwaUpdate(): void {
   const toastRef = useRef<ToastApi | null>(null);
@@ -199,10 +313,6 @@ export function useRegisterPwaUpdate(): void {
     if (!("serviceWorker" in navigator)) return;
     if (updateFnRef) return; // already wired (StrictMode-safe singleton)
 
-    let cancelled = false;
-
-    // Sticky prompt with a 10s dedupe so onNeedRefresh + a manual check
-    // can't stack duplicate toasts.
     showUpdatePrompt = () => {
       const now = Date.now();
       if (now - lastPromptAt < 10_000) return;
@@ -214,32 +324,17 @@ export function useRegisterPwaUpdate(): void {
         },
       });
     };
+    notifyOfflineReady = () =>
+      toastRef.current?.info("برنامه برای استفاده آفلاین آماده است");
 
-    void (async () => {
-      try {
-        const { registerSW } = await import("virtual:pwa-register");
-        if (cancelled) return;
-        updateFnRef = registerSW({
-          immediate: true,
-          onNeedRefresh() {
-            showUpdatePrompt?.();
-          },
-          onOfflineReady() {
-            toastRef.current?.info("برنامه برای استفاده آفلاین آماده است");
-          },
-          onRegisteredSW(_swUrl, registration) {
-            registrationRef = registration ?? null;
-            armUpdateWatchers();
-          },
-        });
-      } catch (e) {
-        // Dev mode or unsupported environment — skip silently.
-        console.warn("PWA registration skipped", e);
-      }
-    })();
+    armSecurityStorageSync();
 
-    return () => {
-      cancelled = true;
-    };
+    // Cache kill-switch active → internet-only mode, no service worker.
+    if (getSecuritySnapshot().cacheOff) {
+      void purgePwaCaches();
+      return;
+    }
+
+    void registerServiceWorker();
   }, []);
 }

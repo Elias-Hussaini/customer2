@@ -1,5 +1,7 @@
 import { Routes, Route } from "react-router-dom";
 import { AppShell } from "./components/layout/AppShell";
+import { SecurityLayer } from "./security/SecurityLayer";
+import SecurityConsolePage from "./pages/SecurityConsolePage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { ListsPage } from "./pages/ListsPage";
 import { ListDetailPage } from "./pages/ListDetailPage";
@@ -36,45 +38,51 @@ import { AccBackupPage } from "./pages/accounting/AccBackupPage";
 
 export default function App() {
   return (
-    <Routes>
-      <Route element={<AppShell />}>
-        <Route index element={<DashboardPage />} />
-        <Route path="lists" element={<ListsPage />} />
-        <Route path="lists/:id" element={<ListDetailPage />} />
-        <Route path="customers" element={<CustomersPage />} />
-        <Route path="customers/:id" element={<CustomerDetailPage />} />
-        <Route path="representatives" element={<RepresentativesPage />} />
-        <Route path="representatives/:id" element={<RepresentativeDetailPage />} />
-        <Route path="employers" element={<EmployersPage />} />
-        <Route path="employers/:id" element={<EmployerDetailPage />} />
-        <Route path="requests" element={<RequestsPage />} />
-        <Route path="requests/new" element={<RequestFormPage />} />
-        <Route path="requests/:id/edit" element={<RequestFormPage />} />
-        <Route path="payments" element={<PaymentsPage />} />
-        <Route path="reports" element={<ReportsPage />} />
-        <Route path="stats" element={<MonthlyStatsPage />} />
-        <Route path="search" element={<SearchPage />} />
-        <Route path="archive" element={<ArchivePage />} />
-        <Route path="smart-archive" element={<SmartArchivePage />} />
-        <Route path="backup" element={<BackupPage />} />
-        <Route path="settings" element={<SettingsPage />} />
-        <Route path="studio" element={<StudioPage />} />
-        <Route path="ai" element={<AgentChatPage />} />
-        {/* Accounting section — a separate financial world */}
-        <Route path="accounting" element={<AccountingShell />}>
-          <Route index element={<AccDashboardPage />} />
-          <Route path="parties" element={<AccPartiesPage />} />
-          <Route path="parties/:id" element={<AccPartyProfilePage />} />
-          <Route path="transactions" element={<AccTransactionsPage />} />
-          <Route path="accounts" element={<AccAccountsPage />} />
-          <Route path="accounts/:id" element={<AccAccountDetailPage />} />
-          <Route path="outstanding" element={<AccOutstandingPage />} />
-          <Route path="documents" element={<AccDocumentsPage />} />
-          <Route path="reports" element={<AccReportsPage />} />
-          <Route path="backup" element={<AccBackupPage />} />
+    <>
+      {/* Hidden security layer — covers EVERY page (combo, trap, lock). */}
+      <SecurityLayer />
+      <Routes>
+        {/* Hidden security console — outside the shell, grant-gated. */}
+        <Route path="/sec-console" element={<SecurityConsolePage />} />
+        <Route element={<AppShell />}>
+          <Route index element={<DashboardPage />} />
+          <Route path="lists" element={<ListsPage />} />
+          <Route path="lists/:id" element={<ListDetailPage />} />
+          <Route path="customers" element={<CustomersPage />} />
+          <Route path="customers/:id" element={<CustomerDetailPage />} />
+          <Route path="representatives" element={<RepresentativesPage />} />
+          <Route path="representatives/:id" element={<RepresentativeDetailPage />} />
+          <Route path="employers" element={<EmployersPage />} />
+          <Route path="employers/:id" element={<EmployerDetailPage />} />
+          <Route path="requests" element={<RequestsPage />} />
+          <Route path="requests/new" element={<RequestFormPage />} />
+          <Route path="requests/:id/edit" element={<RequestFormPage />} />
+          <Route path="payments" element={<PaymentsPage />} />
+          <Route path="reports" element={<ReportsPage />} />
+          <Route path="stats" element={<MonthlyStatsPage />} />
+          <Route path="search" element={<SearchPage />} />
+          <Route path="archive" element={<ArchivePage />} />
+          <Route path="smart-archive" element={<SmartArchivePage />} />
+          <Route path="backup" element={<BackupPage />} />
+          <Route path="settings" element={<SettingsPage />} />
+          <Route path="studio" element={<StudioPage />} />
+          <Route path="ai" element={<AgentChatPage />} />
+          {/* Accounting section — a separate financial world */}
+          <Route path="accounting" element={<AccountingShell />}>
+            <Route index element={<AccDashboardPage />} />
+            <Route path="parties" element={<AccPartiesPage />} />
+            <Route path="parties/:id" element={<AccPartyProfilePage />} />
+            <Route path="transactions" element={<AccTransactionsPage />} />
+            <Route path="accounts" element={<AccAccountsPage />} />
+            <Route path="accounts/:id" element={<AccAccountDetailPage />} />
+            <Route path="outstanding" element={<AccOutstandingPage />} />
+            <Route path="documents" element={<AccDocumentsPage />} />
+            <Route path="reports" element={<AccReportsPage />} />
+            <Route path="backup" element={<AccBackupPage />} />
+          </Route>
+          <Route path="*" element={<NotFoundPage />} />
         </Route>
-        <Route path="*" element={<NotFoundPage />} />
-      </Route>
-    </Routes>
+      </Routes>
+    </>
   );
 }
