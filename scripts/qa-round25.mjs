@@ -8,7 +8,7 @@
  */
 import { chromium } from "playwright";
 
-const BASE = "http://localhost:4173/customer2";
+const BASE = process.env.QA_BASE ?? "http://localhost:4173/customer2";
 const results = [];
 const ok = (name, cond, extra = "") => {
   results.push({ name, pass: !!cond, extra });
