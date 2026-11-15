@@ -54,6 +54,10 @@ export interface AnomalyState {
 }
 
 export interface SecurityState {
+  /** Install gate: false → the app demands the owner password once (round 26).
+   *  Persists per system/browser — fresh installs AND legacy installs (which
+   *  lack the flag) both start locked. */
+  gateUnlocked: boolean;
   /** true → no service worker, no CacheStorage; internet-only. */
   cacheOff: boolean;
   /** Cache state before the trap was armed (restored on disarm/unlock). */
@@ -66,6 +70,7 @@ export interface SecurityState {
 }
 
 const DEFAULT_STATE: SecurityState = {
+  gateUnlocked: false,
   cacheOff: false,
   cacheBeforeAnomaly: null,
   anomaly: null,
@@ -82,6 +87,7 @@ function readStorage(): SecurityState {
     const parsed = JSON.parse(raw) as Partial<SecurityState>;
     const merged = { ...DEFAULT_STATE, ...parsed };
     // shape guards — corrupt values can never brick the app
+    if (typeof merged.gateUnlocked !== "boolean") merged.gateUnlocked = false;
     if (typeof merged.cacheOff !== "boolean") merged.cacheOff = false;
     if (
       !merged.anomaly ||
@@ -243,6 +249,35 @@ export function registerAnomalyClick(): boolean {
   }
   set({ anomaly: { ...state.anomaly, clicks } });
   return false;
+}
+
+/* ------------------------------- install gate ----------------------------- */
+
+/**
+ * Install-time gate (round 26): every system — fresh install or one that
+ * already had the app — must enter the owner password ONCE before the app
+ * opens. Wrong attempts share the counter/cooldown with the trap lock, so
+ * brute-forcing the gate burns the same 30-second cooldown.
+ */
+export async function tryGateUnlock(password: string): Promise<UnlockResult> {
+  if (state.cooldownUntil > Date.now()) return "cooldown";
+  let hash = "";
+  try {
+    hash = await sha256Hex(password);
+  } catch {
+    return "wrong";
+  }
+  if (hash !== LOCK_PASSWORD_SHA256) {
+    const failedAttempts = state.failedAttempts + 1;
+    const cooldownUntil =
+      failedAttempts % FAILS_BEFORE_COOLDOWN === 0
+        ? Date.now() + COOLDOWN_MS
+        : state.cooldownUntil;
+    set({ failedAttempts, cooldownUntil });
+    return "wrong";
+  }
+  set({ gateUnlocked: true, failedAttempts: 0, cooldownUntil: 0 });
+  return "ok";
 }
 
 /* --------------------------------- unlock --------------------------------- */

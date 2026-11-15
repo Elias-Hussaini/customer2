@@ -315,27 +315,6 @@ function ShortcutsSection() {
           </p>
         </div>
       </SectionCard>
-
-      <SectionCard
-        title="تغییر مرحلهٔ مشتری (هاور + کلید)"
-        icon={<Waypoints size={15} className="text-brand-500" />}
-      >
-        <div className="flex flex-col gap-2">
-          <p className="mb-1 text-[12px] leading-6 text-ink-500 dark:text-ink-400">
-            هر جا مشتری می‌بینید — لیست مشتریان، لیست‌ها، پروفایل نمایندگان و کارفرماها، جدول
-            درخواست‌ها — نشانگر موس را روی کارتش نگه دارید و کلید را بزنید؛ مرحلهٔ ویزایش همان‌جا
-            عوض می‌شود (تغییر روی آخرین درخواست فعالش هم اعمال می‌شود):
-          </p>
-          <ShortcutRow keys={["Ctrl"]} label="مرحلهٔ بعد" />
-          <ShortcutRow keys={["Alt"]} label="مرحلهٔ قبل" />
-          <ShortcutRow keys={["Shift"]} label="علامت‌زدن / برداشتن «صادر شده»" />
-          <ShortcutRow keys={["Alt", "Shift"]} label="علامت‌زدن / برداشتن «رد شده»" />
-          <p className="mt-1 text-[11px] leading-5 text-ink-400">
-            کلید باید تنها و به‌صورت ضربه (فشرده و رها) زده شود؛ ترکیب‌های واقعی مثل Ctrl+S یا
-            Ctrl+C کار دیگری را خراب نمی‌کنند. هنگام تایپ داخل فیلدها هم غیرفعال است.
-          </p>
-        </div>
-      </SectionCard>
     </>
   );
 }
@@ -1047,17 +1026,6 @@ function StagesColorsSection() {
             <RotateCcw size={13} /> بازگردانی همهٔ رنگ‌ها به پیش‌فرض
           </button>
         )}
-      </SectionCard>
-
-      <SectionCard title="جریان خودکار مراحل" icon={<Wand2 size={15} className="text-brand-500" />}>
-        <div className="flex flex-col gap-2 text-[12px] leading-6 text-ink-600 dark:text-ink-300">
-          <p>• مشتری تازه ثبت می‌شود → <b>مرحله اول</b></p>
-          <p>• «کد اختصاصی» مشتری در پرونده‌اش ثبت شود → خودکار می‌رود به <b>دارای کد اختصاصی</b></p>
-          <p>• درخواست ویزا <b>جداگانه</b> ثبت شود → <b>ثبت شده برای ویزا</b></p>
-          <p>• ثبتِ همزمان درخواست در فرمِ مشتریِ جدید، مرحله را جلو نمی‌برد — مشتری از <b>مرحله اول</b> شروع می‌کند</p>
-          <p>• ویزا صادر یا رد شود → <b>صادر شده</b> یا <b>رد شده</b></p>
-          <p>• تیک سبز کنار نام مشتری یعنی «کد اختصاصی» دارد.</p>
-        </div>
       </SectionCard>
     </>
   );

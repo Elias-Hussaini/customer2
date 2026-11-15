@@ -172,7 +172,6 @@ export function CustomerDetailPage() {
         className="glass flex flex-wrap items-center gap-2.5 rounded-3xl px-4 py-3"
         onMouseEnter={(e) => beginCustomerHover(customer.id, e.currentTarget)}
         onMouseLeave={() => endCustomerHover(customer.id)}
-        title="با نگه‌داشتن نشانگر اینجا: Ctrl مرحله بعد · Alt مرحله قبل · Shift صادر شده · Alt+Shift رد شده"
       >
         <StageBadge stage={stageMap?.get(customer.id)} />
         {customer.referrer?.trim() ? (
@@ -184,9 +183,6 @@ export function CustomerDetailPage() {
           <span className="text-[11px] text-ink-400">بدون کد اختصاصی</span>
         )}
         <span className="flex-1" />
-        <span className="hidden text-[10px] text-ink-400 sm:block">
-          هاور + Ctrl / Alt / Shift / Alt+Shift = تغییر مرحله
-        </span>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">

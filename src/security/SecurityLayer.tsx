@@ -17,6 +17,9 @@ import { LockScreen } from "./LockScreen";
  * Global security layer — mounted OUTSIDE the app shell so it covers every
  * page (including the hidden console and the accounting section).
  *
+ *  - Install gate (round 26): on every system — fresh install or legacy —
+ *    the app opens on a one-time password overlay until the owner password
+ *    is entered once. The secret combo is DEAD while the gate is closed.
  *  - Secret combo: hold Ctrl+Alt+Shift and type 09029327968 in order →
  *    the hidden security console opens (sessionStorage grant + navigation).
  *    Detected via PHYSICAL key codes, so it works on any keyboard layout
@@ -49,8 +52,8 @@ export function SecurityLayer() {
     const onKeyDown = (e: KeyboardEvent) => {
       const snap = getSecuritySnapshot();
       // The combo is dead while the screen is locked — the password is the
-      // only way out of the trap.
-      if (snap.locked) {
+      // only way out of the trap — and while the install gate is still closed.
+      if (snap.locked || !snap.gateUnlocked) {
         buffer = "";
         return;
       }
@@ -124,5 +127,12 @@ export function SecurityLayer() {
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
-  return <LockScreen />;
+  return (
+    <>
+      {/* One-time install gate — covers everything, even before the app. */}
+      <LockScreen variant="gate" />
+      {/* Anomaly trap lock. */}
+      <LockScreen variant="trap" />
+    </>
+  );
 }

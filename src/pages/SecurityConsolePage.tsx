@@ -10,8 +10,6 @@ import {
   WifiOff,
 } from "lucide-react";
 import {
-  ANOMALY_MAX_CLICKS,
-  ANOMALY_MIN_CLICKS,
   armAnomaly,
   disarmAnomaly,
   hasConsoleAccess,
@@ -101,7 +99,8 @@ export default function SecurityConsolePage() {
     try {
       armAnomaly(); // force-disables the cache + revokes this console's grant
       await applySecurityCacheState(); // purge SW + caches right now
-      toast.info("حالت ناهنجاری فعال شد — همه‌چیز طبیعی به نظر می‌رسد.");
+      // SILENT by design (round 26): no toast, no hint — the console just
+      // closes and the main page opens, looking perfectly normal.
       // «صفحه امنیتی بسته بشه و صفحه اصلی باز بشه»
       navigate("/");
     } finally {
@@ -143,7 +142,6 @@ export default function SecurityConsolePage() {
             </div>
             <div>
               <h1 className="text-lg font-extrabold text-white">کنسول امنیتی</h1>
-              <p className="text-xs text-ink-400">صفحه مخفی — فقط با ترکیب کلید مخفی</p>
             </div>
           </div>
           <button
@@ -227,11 +225,6 @@ export default function SecurityConsolePage() {
                 <div className="text-[11px] text-ink-400">تحت کنترل کش</div>
               </div>
             </div>
-            <p className="mt-3 text-[11px] leading-5 text-ink-500">
-              غیرفعال‌سازی کش، سرویس‌ورکر و حافظه‌های آفلاین مرورگر را کامل پاک
-              می‌کند؛ داده‌های شما (مشتریان، مدارک، پرداخت‌ها) دست‌نخورده می‌مانند.
-              فعال‌سازی مجدد، حالت آفلاین را برمی‌گرداند و صفحه یک‌بار بازآوری می‌شود.
-            </p>
           </div>
         </section>
 
@@ -286,29 +279,9 @@ export default function SecurityConsolePage() {
                   {faDigits(anomaly.clicks)}
                 </span>
               </div>
-              <p className="mt-2 text-[11px] leading-5 text-ink-500">
-                قفل صفحه بین کلیک {faDigits(ANOMALY_MIN_CLICKS)} تا{" "}
-                {faDigits(ANOMALY_MAX_CLICKS)} (به‌صورت تصادفی) فعال می‌شود؛ کش
-                برنامه تا پایان این حالت غیرفعال است و با پایان آن، وضعیت قبلی
-                کش خودکار برمی‌گردد. این صفحه هنگام فعال‌سازی بسته می‌شود و بعد
-                از آن فقط با ترکیب کلید مخفی دوباره باز می‌شود.
-              </p>
             </div>
-          ) : (
-            <p className="mt-4 rounded-2xl bg-white/[0.04] p-4 text-[11px] leading-6 text-ink-400">
-              با فعال‌سازی، این صفحه بسته و صفحه اصلی باز می‌شود؛ همه‌چیز کاملاً
-              طبیعی به نظر می‌رسد، اما پس از {faDigits(ANOMALY_MIN_CLICKS)} تا{" "}
-              {faDigits(ANOMALY_MAX_CLICKS)} کلیک، صفحه به‌دلیل «تشخیص الگوریتمِ
-              به‌خطرافتادن مدارک» قفل شده و رمز عبور می‌خواهد. کش برنامه نیز تا
-              پایان حالت، خودکار غیرفعال می‌شود.
-            </p>
-          )}
+          ) : null}
         </section>
-
-        <p className="pb-4 text-center text-[11px] text-ink-600">
-          دسترسی به این صفحه فقط با نگه‌داشتن Ctrl+Alt+Shift و تایپ شماره مخفی
-          به‌ترتیب ممکن است.
-        </p>
       </div>
     </div>
   );

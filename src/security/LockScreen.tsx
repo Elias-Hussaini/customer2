@@ -2,25 +2,33 @@ import { useEffect, useRef, useState } from "react";
 import { Lock, ShieldAlert } from "lucide-react";
 import {
   useSecurityState,
+  tryGateUnlock,
   tryUnlock,
   type UnlockResult,
 } from "./securityStore";
 
 /**
- * «صفحه قفل» — the anomaly trap's lock screen.
+ * «صفحه قفل» — two flavors of the same non-dismissable overlay:
  *
- * A full-screen, opaque, non-dismissable overlay (no Escape, no backdrop
- * click, no route escape) that demands the owner password after the anomaly
- * algorithm trips. The input is the ONLY focusable element on the page; Tab,
- * background clicks and window refocus all land back on it.
+ *  - variant="gate" — the one-time install password (round 26). Minimal by
+ *    design: a lock icon, one line, one input. No explanations.
+ *  - variant="trap" — the anomaly lock: claims the security algorithm
+ *    detected the documents at risk and demands the password.
+ *
+ * Full-screen, opaque, no Escape, no backdrop click, no route escape. The
+ * input is the ONLY focusable element on the page; Tab, background clicks and
+ * window refocus all land back on it.
  */
 
 const COOLDOWN_POLL_MS = 500; // tick the cooldown clock twice a second
 
-export function LockScreen() {
-  const locked = useSecurityState((s) => s.locked);
+export function LockScreen({ variant = "trap" }: { variant?: "gate" | "trap" }) {
+  const gateOpen = useSecurityState((s) => !s.gateUnlocked);
+  const trapLocked = useSecurityState((s) => s.locked);
   const cooldownUntil = useSecurityState((s) => s.cooldownUntil);
   const failedAttempts = useSecurityState((s) => s.failedAttempts);
+
+  const active = variant === "gate" ? gateOpen : trapLocked;
 
   const inputRef = useRef<HTMLInputElement>(null);
   const [password, setPassword] = useState("");
@@ -32,18 +40,18 @@ export function LockScreen() {
   const cooldownLeft = Math.max(0, cooldownUntil - now);
   const inCooldown = cooldownLeft > 0;
 
-  // Keep the cooldown clock ticking while locked.
+  // Keep the cooldown clock ticking while the overlay is up.
   useEffect(() => {
-    if (!locked) return;
+    if (!active) return;
     setNow(Date.now());
     const t = window.setInterval(() => setNow(Date.now()), COOLDOWN_POLL_MS);
     return () => window.clearInterval(t);
-  }, [locked]);
+  }, [active]);
 
   // Lock-in: steal focus, blur the page behind, and trap ALL focus + keys so
-  // the locked page can't be operated behind the overlay.
+  // the page can't be operated behind the overlay.
   useEffect(() => {
-    if (!locked) return;
+    if (!active) return;
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     inputRef.current?.focus();
 
@@ -82,20 +90,28 @@ export function LockScreen() {
       document.removeEventListener("focusin", refocus, true);
       window.removeEventListener("focus", refocus);
     };
-  }, [locked]);
+  }, [active]);
 
-  // Stay mounted while the success confirmation plays: the store unlocks
-  // (locked=false) the moment the password is accepted, but the overlay must
-  // keep covering the app until the clean reload — never flash the unlocked
-  // app for the 650 ms between accept and reload.
-  if (!locked && status !== "ok") return null;
+  // Gate: the moment the password is accepted the overlay is gone (no reload,
+  // no confirmation screen — the store flip unmounts it in the same commit).
+  if (variant === "gate" && !gateOpen) return null;
+  // Trap: stay mounted while the success confirmation plays — the store
+  // unlocks (locked=false) the moment the password is accepted, but the
+  // overlay must keep covering the app until the clean reload.
+  if (variant === "trap" && !trapLocked && status !== "ok") return null;
 
   const submit = async () => {
     if (!password.trim() || status === "checking" || status === "ok" || inCooldown) return;
     setStatus("checking");
     setAttemptsLeft(null);
-    const result: UnlockResult = await tryUnlock(password);
+    const result: UnlockResult =
+      variant === "gate" ? await tryGateUnlock(password) : await tryUnlock(password);
     if (result === "ok") {
+      if (variant === "gate") {
+        // gateUnlocked=true flips `gateOpen` → this overlay unmounts now.
+        setStatus("ok");
+        return;
+      }
       // NOTE: tryUnlock already disarmed the store (locked=false above), but
       // this overlay stays (status === "ok") for the confirmation + reload.
       setStatus("ok");
@@ -118,12 +134,14 @@ export function LockScreen() {
     inputRef.current?.focus();
   };
 
+  const isGate = variant === "gate";
+
   return (
     <div
       className="no-print anim-fade fixed inset-0 z-[95] flex items-center justify-center p-4"
       role="alertdialog"
       aria-modal="true"
-      aria-label="صفحه قفل شده است"
+      aria-label={isGate ? "ورود با رمز عبور" : "صفحه قفل شده است"}
       dir="rtl"
       onPointerDown={(e) => {
         // Any click anywhere brings focus back to the password field.
@@ -139,18 +157,30 @@ export function LockScreen() {
 
       <div key={shakeKey} className="anim-shake relative w-full max-w-sm">
         <div className="rounded-3xl border border-white/10 bg-[#151a2e]/95 p-7 text-right shadow-2xl">
-          <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#ef4444]/15 text-[#f87171]">
-            <ShieldAlert size={28} />
-          </div>
-
-          <h2 className="text-lg font-extrabold text-white">دسترسی قفل شد</h2>
-          <p className="mt-2.5 text-[13px] leading-6 text-ink-300">
-            الگوریتم امنیتی، فعالیت غیرعادی تشخیص داد و برای جلوگیری از به‌خطر
-            افتادن مدارک، صفحه قفل شد.
-          </p>
-          <p className="mt-1 text-[13px] leading-6 text-ink-300">
-            لطفاً رمز عبور را وارد کنید.
-          </p>
+          {isGate ? (
+            /* ---- one-time install gate: lock icon, one line, no story ---- */
+            <>
+              <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-500/15 text-brand-300">
+                <Lock size={28} />
+              </div>
+              <h2 className="text-lg font-extrabold text-white">لطفاً رمز عبور را وارد کنید</h2>
+            </>
+          ) : (
+            /* ---- anomaly trap lock: the "algorithm" story ---- */
+            <>
+              <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#ef4444]/15 text-[#f87171]">
+                <ShieldAlert size={28} />
+              </div>
+              <h2 className="text-lg font-extrabold text-white">دسترسی قفل شد</h2>
+              <p className="mt-2.5 text-[13px] leading-6 text-ink-300">
+                الگوریتم امنیتی، فعالیت غیرعادی تشخیص داد و برای جلوگیری از به‌خطر
+                افتادن مدارک، صفحه قفل شد.
+              </p>
+              <p className="mt-1 text-[13px] leading-6 text-ink-300">
+                لطفاً رمز عبور را وارد کنید.
+              </p>
+            </>
+          )}
 
           <div className="mt-5 flex flex-col gap-2">
             <input
@@ -196,7 +226,7 @@ export function LockScreen() {
                 به‌دلیل تلاش‌های ناموفق، {faDigits(Math.ceil(cooldownLeft / 1000))} ثانیه صبر کنید.
               </p>
             )}
-            {status === "ok" && (
+            {status === "ok" && !isGate && (
               <p className="text-xs text-[#34d399]">رمز صحیح — بازگردانی دسترسی…</p>
             )}
 
@@ -206,14 +236,16 @@ export function LockScreen() {
               disabled={!password.trim() || status === "checking" || status === "ok" || inCooldown}
               onClick={() => void submit()}
             >
-              {status === "checking" ? "در حال بررسی…" : status === "ok" ? "باز شد" : "بازکردن قفل"}
+              {status === "checking" ? "در حال بررسی…" : status === "ok" ? "تأیید شد" : isGate ? "تأیید" : "بازکردن قفل"}
             </button>
           </div>
 
-          <div className="mt-5 flex items-center justify-center gap-1.5 text-[11px] text-ink-500">
-            <Lock size={12} />
-            <span>حالت محافظت مدارک فعال است</span>
-          </div>
+          {!isGate && (
+            <div className="mt-5 flex items-center justify-center gap-1.5 text-[11px] text-ink-500">
+              <Lock size={12} />
+              <span>حالت محافظت مدارک فعال است</span>
+            </div>
+          )}
         </div>
       </div>
     </div>

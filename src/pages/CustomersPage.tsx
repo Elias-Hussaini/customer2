@@ -10,7 +10,6 @@ import { Menu } from "../components/ui/Menu";
 import { CustomerFormModal } from "../components/domain/CustomerFormModal";
 import { Avatar } from "../components/ui/Avatar";
 import { StageBadge, StageIndicators } from "../components/ui/StageBadge";
-import { HotkeyHint } from "../components/ui/ViewModeToggle";
 import { archiveCustomer, deleteCustomer, customerFullName } from "../db/customers";
 import {
   useCustomers,
@@ -640,8 +639,6 @@ export function CustomersPage() {
           )}
         </div>
       </div>
-
-      <HotkeyHint className="-mt-2" />
 
       <DataTable
         columns={columns}

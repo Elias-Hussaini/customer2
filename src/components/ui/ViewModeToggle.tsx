@@ -53,24 +53,3 @@ export function ViewModeToggle({
     </span>
   );
 }
-
-/** One subtle line explaining the hover stage shortcuts (discoverability). */
-export function HotkeyHint({ className = "" }: { className?: string }) {
-  return (
-    <p className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[10px] leading-4 text-ink-400 ${className}`}>
-      <span>با نگه‌داشتن نشانگر روی هر مشتری:</span>
-      <span className="flex items-center gap-1">
-        <kbd className="kbd">Ctrl</kbd> مرحله بعد
-      </span>
-      <span className="flex items-center gap-1">
-        <kbd className="kbd">Alt</kbd> مرحله قبل
-      </span>
-      <span className="flex items-center gap-1">
-        <kbd className="kbd">Shift</kbd> صادر شده
-      </span>
-      <span className="flex items-center gap-1">
-        <kbd className="kbd">Alt+Shift</kbd> رد شده
-      </span>
-    </p>
-  );
-}

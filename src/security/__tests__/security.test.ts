@@ -47,6 +47,7 @@ const {
   reloadSecurityState,
   resetSecurityState,
   setCacheOff,
+  tryGateUnlock,
   tryUnlock,
 } = S;
 
@@ -65,11 +66,12 @@ afterEach(() => {
 });
 
 describe("security: default state", () => {
-  it("starts fully neutral (cache on, no trap, unlocked)", () => {
+  it("starts fully neutral (cache on, no trap, unlocked) but gate LOCKED", () => {
     const s = getSecuritySnapshot();
     expect(s.cacheOff).toBe(false);
     expect(s.anomaly).toBeNull();
     expect(s.locked).toBe(false);
+    expect(s.gateUnlocked).toBe(false);
   });
 
   it("random threshold always lands inside 15..20", () => {
@@ -176,6 +178,54 @@ describe("security: anomaly trap", () => {
     // the last counted click (even in the NEW page) trips the lock
     expect(fresh.registerAnomalyClick()).toBe(true);
     expect(fresh.getSecuritySnapshot().locked).toBe(true);
+  });
+});
+
+describe("security: install gate (round 26)", () => {
+  it("legacy round-25 storage (no gateUnlocked key) self-heals to LOCKED", () => {
+    localStorageShim.setItem(
+      SECURITY_STORAGE_KEY,
+      JSON.stringify({ cacheOff: false, locked: false, anomaly: null }),
+    );
+    reloadSecurityState();
+    expect(getSecuritySnapshot().gateUnlocked).toBe(false);
+  });
+
+  it("wrong gate password keeps the gate shut and counts attempts", async () => {
+    await expect(tryGateUnlock("nope")).resolves.toBe("wrong");
+    expect(getSecuritySnapshot().gateUnlocked).toBe(false);
+    expect(getSecuritySnapshot().failedAttempts).toBe(1);
+  });
+
+  it("the real password opens the gate exactly once and it persists", async () => {
+    await expect(tryGateUnlock(REAL_PASSWORD)).resolves.toBe("ok");
+    expect(getSecuritySnapshot().gateUnlocked).toBe(true);
+    expect(getSecuritySnapshot().failedAttempts).toBe(0);
+    // survives a reload / second page load
+    reloadSecurityState();
+    expect(getSecuritySnapshot().gateUnlocked).toBe(true);
+    // re-unlocking is a harmless no-op that stays open
+    await expect(tryGateUnlock(REAL_PASSWORD)).resolves.toBe("ok");
+    expect(getSecuritySnapshot().gateUnlocked).toBe(true);
+  });
+
+  it("gate unlock never touches the trap / cache state", async () => {
+    armAnomaly();
+    await expect(tryGateUnlock(REAL_PASSWORD)).resolves.toBe("ok");
+    const s = getSecuritySnapshot();
+    expect(s.anomaly).not.toBeNull(); // trap stays armed
+    expect(s.locked).toBe(false);
+    expect(s.cacheOff).toBe(true); // trap still forces the cache off
+  });
+
+  it("gate and trap share the 5-strike cooldown (brute-force protection)", async () => {
+    for (let i = 0; i < 5; i++) {
+      await expect(tryGateUnlock("nope")).resolves.toBe("wrong");
+    }
+    expect(getSecuritySnapshot().cooldownUntil).toBeGreaterThan(Date.now());
+    // even the right password is refused during the cooldown
+    await expect(tryGateUnlock(REAL_PASSWORD)).resolves.toBe("cooldown");
+    expect(getSecuritySnapshot().gateUnlocked).toBe(false);
   });
 });
 
