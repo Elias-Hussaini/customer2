@@ -1,14 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  ArrowLeftRight,
   BadgeCheck,
   ChevronDown,
   FileArchive,
+  FileText,
   FolderOpen,
   FolderPlus,
   FolderTree,
+  Frame,
+  HardDrive,
   Inbox,
   Loader2,
+  Maximize2,
   Paperclip,
   PenLine,
   RotateCcw,
@@ -17,6 +22,7 @@ import {
   UserRound,
   Users,
 } from "lucide-react";
+import { saveAs } from "file-saver";
 import { PageHeader } from "../components/ui/StatCard";
 import { EmptyState } from "../components/ui/EmptyState";
 import { FilterSelect, SectionCard, SearchBox } from "../components/ui/inputs";
@@ -54,8 +60,26 @@ import {
   type FolderMode,
   type PlanOverride,
 } from "../utils/smartArchive/engine";
+import {
+  buildCustomersPdfZip,
+  DEFAULT_PDF_OPTIONS,
+  groupEntriesByCustomer,
+  pdfFileNameFor,
+  pdfFolderFor,
+  pickPdfDirectory,
+  writePdfsToDirectory,
+  type CustomerGroup,
+  type CustomerPdfMargin,
+  type CustomerPdfOptions,
+  type CustomerPdfOrientation,
+  type CustomerPdfPageSize,
+  type CustomerPdfQuality,
+  type CustomersPdfResult,
+} from "../utils/smartArchive/customerPdf";
 
 type ArchiveMode = "visas" | "documents";
+type OutputFormat = "zip" | "pdf";
+type PdfDestination = "folder" | "zip";
 
 /** Everything about the archive structure the user can tune — persisted
  *  per mode (visas / documents) so the last setup is always remembered. */
@@ -184,6 +208,76 @@ function loadStructPrefs(mode: ArchiveMode): StructPrefs {
   };
 }
 
+/* --------------------- PDF dossier (پروندهٔ هر مشتری) --------------------- */
+
+/** Tokens that make sense for the PDF FILE name (per customer, not per file). */
+const PDF_NAME_TOKENS: { token: string; desc: string }[] = [
+  { token: "{مشتری}", desc: "نام مشتری" },
+  { token: "{پاسپورت}", desc: "شماره پاسپورت" },
+  { token: "{نماینده}", desc: "نام نماینده" },
+  { token: "{کارفرما}", desc: "نام کارفرما" },
+  { token: "{تاریخ}", desc: "تاریخ امروز (شمسی)" },
+];
+
+const PDF_PAGE_SIZES: { value: CustomerPdfPageSize; label: string; hint: string }[] = [
+  { value: "a4", label: "A4", hint: "کاغذ استاندارد پرینتر" },
+  { value: "a5", label: "A5", hint: "نصف A4 — حجم کمتر" },
+  { value: "fit", label: "هم‌اندازهٔ مدرک", hint: "هر صفحه دقیقاً اندازهٔ خود فایل — بدون کوچک‌شدن" },
+];
+
+const PDF_ORIENTATIONS: { value: CustomerPdfOrientation; label: string; hint: string }[] = [
+  { value: "auto", label: "خودکار", hint: "عمودی یا افقی بر اساس شکل مدرک" },
+  { value: "portrait", label: "عمودی", hint: "همهٔ صفحات عمودی" },
+  { value: "landscape", label: "افقی", hint: "همهٔ صفحات افقی" },
+];
+
+const PDF_QUALITIES: { value: CustomerPdfQuality; label: string; hint: string }[] = [
+  { value: "light", label: "سبک", hint: "حجم کم — برای ارسال در واتساپ/تلگرام" },
+  { value: "standard", label: "استاندارد", hint: "تعادل حجم و کیفیت" },
+  { value: "high", label: "بالا", hint: "بهترین کیفیت — حجم بیشتر" },
+];
+
+const PDF_MARGINS: { value: CustomerPdfMargin; label: string; hint: string }[] = [
+  { value: "none", label: "بدون حاشیه", hint: "مدرک تمام صفحه می‌شود" },
+  { value: "narrow", label: "کم", hint: "۸ میلی‌متر" },
+  { value: "normal", label: "معمولی", hint: "۱۱ میلی‌متر" },
+];
+
+const PDF_FOLDER_MODES: { value: PdfFolderChoice; label: string; hint: string }[] = [
+  { value: "flat", label: "همه در یک پوشه", hint: "همهٔ PDFها کنار هم" },
+  { value: "perRep", label: "پوشهٔ هر نماینده", hint: "احمدی / علی رضایی.pdf" },
+  { value: "perEmployer", label: "پوشهٔ هر کارفرما", hint: "کارفرما / علی رضایی.pdf" },
+  { value: "custom", label: "الگوی دلخواه", hint: "مسیر را با {نماینده} و {مشتری} بسازید" },
+];
+
+type PdfFolderChoice = "flat" | "perRep" | "perEmployer" | "custom";
+type PdfDestChoice = "folder" | "zip";
+
+const isPdfOutputFormat = (v: string): v is OutputFormat => v === "zip" || v === "pdf";
+const oneOf =
+  <T extends string>(...allowed: T[]) =>
+  (v: string): v is T =>
+    (allowed as string[]).includes(v);
+
+/** Load the remembered PDF-dossier setup (validated per key). */
+function loadPdfPrefs(): { opts: CustomerPdfOptions; dest: PdfDestChoice } {
+  const page = "smart-archive-pdf";
+  const d = DEFAULT_PDF_OPTIONS;
+  const opts: CustomerPdfOptions = {
+    cover: loadPageFilter<string>(page, "cover", "1", () => true) === "1",
+    captions: loadPageFilter<string>(page, "captions", "1", () => true) === "1",
+    pageSize: loadPageFilter<CustomerPdfPageSize>(page, "pageSize", d.pageSize, oneOf("a4", "a5", "fit")),
+    orientation: loadPageFilter<CustomerPdfOrientation>(page, "orientation", d.orientation, oneOf("auto", "portrait", "landscape")),
+    quality: loadPageFilter<CustomerPdfQuality>(page, "quality", d.quality, oneOf("light", "standard", "high")),
+    margin: loadPageFilter<CustomerPdfMargin>(page, "margin", d.margin, oneOf("none", "narrow", "normal")),
+    nameTemplate: loadPageFilter(page, "nameTemplate", d.nameTemplate, () => true),
+    folderMode: loadPageFilter<CustomerPdfOptions["folderMode"]>(page, "folderMode", d.folderMode, oneOf("flat", "perRep", "perEmployer", "custom")),
+    folderTemplate: loadPageFilter(page, "folderTemplate", d.folderTemplate, () => true),
+  };
+  const dest = loadPageFilter<PdfDestChoice>(page, "dest", "folder", oneOf("folder", "zip"));
+  return { opts, dest };
+}
+
 /** A sample rendering of a template so the user sees what it produces. */
 function templateExample(tpl: string): string {
   return (
@@ -245,6 +339,18 @@ export function SmartArchivePage() {
   const [folderNameDirty, setFolderNameDirty] = useState(false);
   const prefsPage = `smart-archive-${mode}`;
 
+  /* --------------- PDF dossier output (documents mode only) -------------- */
+  const [output, setOutput] = useState<OutputFormat>(() =>
+    loadPageFilter<OutputFormat>("smart-archive-documents", "output", "zip", isPdfOutputFormat),
+  );
+  const [{ opts: pdfOpts, dest: pdfDestRaw }, setPdfPrefs] = useState(() => loadPdfPrefs());
+  /** directory picking is only offered where the API exists (Chrome/Edge) */
+  const canPickDir = useMemo(
+    () => typeof window !== "undefined" && typeof (window as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker === "function",
+    [],
+  );
+  const pdfDest: PdfDestChoice = canPickDir ? pdfDestRaw : "zip";
+
   /* --------------------- extra (user-added) empty folders ----------------- */
   const [extraFolders, setExtraFolders] = useState<string[]>([]);
   const [newFolderName, setNewFolderName] = useState("");
@@ -289,6 +395,24 @@ export function SmartArchivePage() {
     savePageFilter(prefsPage, "nameTemplate", struct.nameTemplate);
     savePageFilter(prefsPage, "docSubfolders", struct.docSubfolders ? "1" : "0");
   }, [prefsPage, struct]);
+
+  /* ----------------------- persist the PDF setup --------------------------- */
+  useEffect(() => {
+    savePageFilter("smart-archive-documents", "output", output);
+  }, [output]);
+  useEffect(() => {
+    const page = "smart-archive-pdf";
+    savePageFilter(page, "cover", pdfOpts.cover ? "1" : "0");
+    savePageFilter(page, "captions", pdfOpts.captions ? "1" : "0");
+    savePageFilter(page, "pageSize", pdfOpts.pageSize);
+    savePageFilter(page, "orientation", pdfOpts.orientation);
+    savePageFilter(page, "quality", pdfOpts.quality);
+    savePageFilter(page, "margin", pdfOpts.margin);
+    savePageFilter(page, "nameTemplate", pdfOpts.nameTemplate);
+    savePageFilter(page, "folderMode", pdfOpts.folderMode);
+    savePageFilter(page, "folderTemplate", pdfOpts.folderTemplate);
+    savePageFilter(page, "dest", pdfDestRaw);
+  }, [pdfOpts, pdfDestRaw]);
 
   /* ---------- structure changes release old folder overrides -------------- */
   /** When the folder rules change, dragged/renamed destinations from the old
@@ -384,6 +508,29 @@ export function SmartArchivePage() {
   );
 
   const tree = useMemo(() => buildTree(plan.items, plan.emptyFolders), [plan]);
+
+  /* ------------------------ PDF dossier grouping -------------------------- */
+  /** In PDF-dossier mode every customer becomes ONE PDF — group the in-scope
+   *  entries per customer (external files have no customer and drop out). */
+  const pdfMode = mode === "documents" && output === "pdf";
+  const pdfGroups = useMemo<CustomerGroup[]>(
+    () => (pdfMode ? groupEntriesByCustomer(allEntries) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pdfMode, entries, externalFiles],
+  );
+  /** customers that have at least one image/PDF (i.e. will really produce a PDF) */
+  const pdfGroupsReady = useMemo(
+    () =>
+      pdfGroups.filter((g) =>
+        g.entries.some(
+          (e) =>
+            e.mime.startsWith("image/") ||
+            e.mime === "application/pdf" ||
+            /\.pdf$/i.test(e.originalName),
+        ),
+      ),
+    [pdfGroups],
+  );
 
   /* ------------------------------ interactions ---------------------------- */
 
@@ -564,6 +711,70 @@ export function SmartArchivePage() {
     }
   };
 
+  /** Build one PDF per customer (their whole پرونده) and place them in a
+   *  folder — a REAL directory when the browser supports it, ZIP otherwise.
+   *  The directory picker runs FIRST: it needs the fresh click gesture. */
+  const downloadPdfs = async () => {
+    if (busy) return;
+    const groups = pdfGroupsReady;
+    if (groups.length === 0) return;
+    setBusy(true);
+    setProgress(0);
+    try {
+      let result: CustomersPdfResult | null = null;
+      let via: "folder" | "zip" = "zip";
+
+      if (pdfDest === "folder") {
+        let dir = null;
+        try {
+          dir = await pickPdfDirectory();
+        } catch (e) {
+          if ((e as DOMException)?.name === "AbortError") {
+            toast.info("ذخیره پرونده‌ها لغو شد");
+            return;
+          }
+          dir = null;
+        }
+        if (dir) {
+          result = await writePdfsToDirectory(dir, groups, pdfOpts, (p) => setProgress(p.pct));
+          via = "folder";
+        }
+      }
+
+      if (!result) {
+        const { blob, result: zipResult } = await buildCustomersPdfZip(
+          groups,
+          pdfOpts,
+          (p) => setProgress(p.pct),
+        );
+        result = zipResult;
+        saveAs(blob, `${struct.zipName.replace(/\.zip$/i, "").trim() || "پرونده‌های PDF"}.zip`);
+        via = "zip";
+      }
+
+      const skipped =
+        groups.length - result.files.length > 0
+          ? ` — ${toPersianDigits(groups.length - result.files.length)} مشتری فایل قابل تبدیلی نداشت`
+          : "";
+      const warn =
+        result.issues.length > 0
+          ? ` — ${toPersianDigits(result.issues.length)} فایل نادیده گرفته شد (فقط عکس و PDF)`
+          : "";
+      toast.success(
+        via === "folder"
+          ? `${toPersianDigits(result.files.length)} پروندهٔ PDF در پوشهٔ انتخاب‌شده ذخیره شد${skipped}${warn}`
+          : `ZIP شامل ${toPersianDigits(result.files.length)} پروندهٔ PDF دانلود شد${skipped}${warn}`,
+        { cause: "export" },
+      );
+    } catch (e) {
+      console.error(e);
+      toast.error("خطا در ساخت پرونده‌های PDF — دوباره تلاش کنید", { cause: "export" });
+    } finally {
+      setBusy(false);
+      setProgress(0);
+    }
+  };
+
   const treeActions: ArchiveTreeActions = {
     overrides,
     collapsed,
@@ -631,17 +842,34 @@ export function SmartArchivePage() {
       <PageHeader
         icon={FileArchive}
         title="بایگانی هوشمند"
-        subtitle="خروجی ZIP مدارک و ویزاهای صادر شده — با ساختار پوشه و نام‌گذاری دلخواه"
+        subtitle={
+          pdfMode
+            ? "پروندهٔ هر مشتری در یک PDF — با جلد، نام‌گذاری و ساختار دلخواه"
+            : "خروجی ZIP مدارک و ویزاهای صادر شده — با ساختار پوشه و نام‌گذاری دلخواه"
+        }
         actions={
           <button
             className="btn btn-primary btn-sm"
-            onClick={() => void download()}
-            disabled={busy || (plan.items.length === 0 && plan.emptyFolders.length === 0)}
+            onClick={() => (pdfMode ? void downloadPdfs() : void download())}
+            disabled={
+              busy ||
+              (pdfMode
+                ? pdfGroupsReady.length === 0
+                : plan.items.length === 0 && plan.emptyFolders.length === 0)
+            }
           >
-            {busy ? <Loader2 size={15} className="animate-spin" /> : <FileArchive size={15} />}
+            {busy ? (
+              <Loader2 size={15} className="animate-spin" />
+            ) : pdfMode ? (
+              <FileText size={15} />
+            ) : (
+              <FileArchive size={15} />
+            )}
             {busy
               ? `در حال ساخت… ${toPersianDigits(progress)}٪`
-              : `دانلود ZIP (${toPersianDigits(plan.items.length)} فایل)`}
+              : pdfMode
+                ? `دانلود PDFها (${toPersianDigits(pdfGroupsReady.length)} مشتری)`
+                : `دانلود ZIP (${toPersianDigits(plan.items.length)} فایل)`}
           </button>
         }
       />
@@ -675,6 +903,38 @@ export function SmartArchivePage() {
           </button>
         ))}
       </div>
+
+      {/* Output format — ZIP of the original files vs one PDF per customer */}
+      {mode === "documents" && (
+        <div
+          className="glass mx-auto flex w-fit gap-1 rounded-full p-1.5"
+          role="radiogroup"
+          aria-label="قالب خروجی"
+        >
+          {(
+            [
+              { value: "zip", label: "فایل‌های اصلی (ZIP)", icon: FileArchive },
+              { value: "pdf", label: "پروندهٔ هر مشتری (PDF)", icon: FileText },
+            ] as const
+          ).map((f) => (
+            <button
+              key={f.value}
+              type="button"
+              role="radio"
+              aria-checked={output === f.value}
+              onClick={() => setOutput(f.value)}
+              className={`flex items-center gap-1.5 whitespace-nowrap rounded-full px-4 py-2 text-[12.5px] font-bold transition-all ${
+                output === f.value
+                  ? "bg-brand-500 text-white shadow-[0_6px_18px_-6px_rgba(99,91,255,0.55)]"
+                  : "text-ink-500 hover:text-ink-800 dark:text-ink-400 dark:hover:text-ink-100"
+              }`}
+            >
+              <f.icon size={15} />
+              {f.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Filters — the full report filter set */}
       <div className="glass flex flex-col gap-2.5 rounded-3xl p-3.5">
@@ -884,7 +1144,140 @@ export function SmartArchivePage() {
         </SectionCard>
       )}
 
-      {/* Extra files from the device — both modes */}
+      {/* PDF dossier customization (documents mode, PDF output) */}
+      {pdfMode && (
+        <SectionCard title="شخصی‌سازی پرونده‌های PDF" icon={<FileText size={15} className="text-brand-500" />}>
+          <div className="flex flex-col gap-2.5">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div className="glass-soft rounded-2xl p-3">
+                <Toggle
+                  checked={pdfOpts.cover}
+                  onChange={() => setPdfPrefs((p) => ({ ...p, opts: { ...p.opts, cover: !p.opts.cover } }))}
+                  label="صفحهٔ جلد با مشخصات مشتری"
+                />
+                <p className="mt-1 pr-7 text-[10.5px] leading-4 text-ink-400">نام، شماره پاسپورت، نماینده، کارفرما و تعداد مدارک</p>
+              </div>
+              <div className="glass-soft rounded-2xl p-3">
+                <Toggle
+                  checked={pdfOpts.captions}
+                  onChange={() => setPdfPrefs((p) => ({ ...p, opts: { ...p.opts, captions: !p.opts.captions } }))}
+                  label="نام مدرک بالای هر صفحه"
+                />
+                <p className="mt-1 pr-7 text-[10.5px] leading-4 text-ink-400">مثل «پاسپورت» یا «ویزا — صفحهٔ ۱ از ۲»</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2.5 lg:grid-cols-2">
+              <div className="flex flex-col gap-2.5">
+                <OptionPicker
+                  label="اندازهٔ صفحه"
+                  icon={Maximize2}
+                  options={PDF_PAGE_SIZES}
+                  value={pdfOpts.pageSize}
+                  onChange={(v) => setPdfPrefs((p) => ({ ...p, opts: { ...p.opts, pageSize: v as CustomerPdfPageSize } }))}
+                />
+                {pdfOpts.pageSize !== "fit" && (
+                  <OptionPicker
+                    label="جهت صفحه"
+                    icon={ArrowLeftRight}
+                    options={PDF_ORIENTATIONS}
+                    value={pdfOpts.orientation}
+                    onChange={(v) => setPdfPrefs((p) => ({ ...p, opts: { ...p.opts, orientation: v as CustomerPdfOrientation } }))}
+                  />
+                )}
+                <OptionPicker
+                  label="کیفیت و حجم"
+                  icon={Sparkles}
+                  options={PDF_QUALITIES}
+                  value={pdfOpts.quality}
+                  onChange={(v) => setPdfPrefs((p) => ({ ...p, opts: { ...p.opts, quality: v as CustomerPdfQuality } }))}
+                />
+                {pdfOpts.pageSize !== "fit" && (
+                  <OptionPicker
+                    label="حاشیهٔ صفحه"
+                    icon={Frame}
+                    options={PDF_MARGINS}
+                    value={pdfOpts.margin}
+                    onChange={(v) => setPdfPrefs((p) => ({ ...p, opts: { ...p.opts, margin: v as CustomerPdfMargin } }))}
+                  />
+                )}
+              </div>
+
+              <div className="flex flex-col gap-2.5">
+                <div>
+                  <p className="mb-1.5 text-[12px] font-bold">نام فایل PDF هر مشتری</p>
+                  <Input
+                    dir="auto"
+                    className="font-mono text-[12px]"
+                    value={pdfOpts.nameTemplate}
+                    onChange={(e) =>
+                      setPdfPrefs((p) => ({ ...p, opts: { ...p.opts, nameTemplate: e.target.value } }))
+                    }
+                    placeholder="{مشتری}"
+                    aria-label="الگوی نام فایل PDF"
+                  />
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {PDF_NAME_TOKENS.map((t) => (
+                      <button
+                        key={t.token}
+                        type="button"
+                        title={t.desc}
+                        onClick={() =>
+                          setPdfPrefs((p) => ({ ...p, opts: { ...p.opts, nameTemplate: p.opts.nameTemplate + t.token } }))
+                        }
+                        className="rounded-full bg-brand-500/10 px-2.5 py-1 font-mono text-[11px] font-bold text-brand-600 transition-all hover:bg-brand-500/20 dark:text-brand-300"
+                        dir="ltr"
+                      >
+                        {t.token}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <OptionPicker
+                  label="ساختار پوشه‌ها"
+                  icon={FolderTree}
+                  options={PDF_FOLDER_MODES}
+                  value={pdfOpts.folderMode}
+                  onChange={(v) => setPdfPrefs((p) => ({ ...p, opts: { ...p.opts, folderMode: v as CustomerPdfOptions["folderMode"] } }))}
+                  stayOpenOn={["custom"]}
+                >
+                  {pdfOpts.folderMode === "custom" && (
+                    <div className="mb-1.5 rounded-xl bg-brand-500/6 p-2.5">
+                      <Input
+                        dir="auto"
+                        className="font-mono text-[12px]"
+                        value={pdfOpts.folderTemplate}
+                        onChange={(e) =>
+                          setPdfPrefs((p) => ({ ...p, opts: { ...p.opts, folderTemplate: e.target.value } }))
+                        }
+                        placeholder="{نماینده}/{مشتری}"
+                        aria-label="الگوی مسیر پوشهٔ PDFها"
+                      />
+                    </div>
+                  )}
+                </OptionPicker>
+                <OptionPicker
+                  label="محل ذخیره"
+                  icon={HardDrive}
+                  options={
+                    canPickDir
+                      ? [
+                          { value: "folder", label: "پوشهٔ سیستم", hint: "خودتان پوشه را انتخاب می‌کنید و PDFها همان‌جا ذخیره می‌شوند" },
+                          { value: "zip", label: "فایل ZIP", hint: "همهٔ PDFها داخل یک ZIP — روی هر دستگاهی کار می‌کند" },
+                        ]
+                      : [{ value: "zip", label: "فایل ZIP", hint: "همهٔ PDFها داخل یک ZIP دانلود می‌شود" }]
+                  }
+                  value={pdfDest}
+                  onChange={(v) => setPdfPrefs((p) => ({ ...p, dest: v as PdfDestChoice }))}
+                />
+              </div>
+            </div>
+          </div>
+        </SectionCard>
+      )}
+
+      {/* Extra files from the device — ZIP output only */}
+      {!pdfMode && (
       <SectionCard
         title="فایل‌های اضافی از دستگاه (اختیاری)"
         icon={<Paperclip size={15} className="text-brand-500" />}
@@ -969,8 +1362,10 @@ export function SmartArchivePage() {
           )}
         </div>
       </SectionCard>
+      )}
 
-      {/* Structure + naming — compact collapsible pickers instead of button grids */}
+      {/* Structure + naming — ZIP output only */}
+      {!pdfMode && (
       <SectionCard title="ساختار پوشه‌ها و نام‌گذاری" icon={<FolderTree size={15} className="text-brand-500" />}>
         <div className="grid grid-cols-1 gap-2.5 lg:grid-cols-2">
           <div className="flex flex-col gap-2.5">
@@ -1143,8 +1538,63 @@ export function SmartArchivePage() {
           </div>
         </div>
       </SectionCard>
+      )}
 
       {/* Preview */}
+      {pdfMode ? (
+        <SectionCard title="پیش‌نمایش پرونده‌های PDF" icon={<FileText size={15} className="text-brand-500" />}>
+          {collecting ? (
+            <div className="flex items-center justify-center gap-2 py-10 text-sm text-ink-400">
+              <Loader2 size={17} className="animate-spin" /> در حال جمع‌آوری فایل‌ها…
+            </div>
+          ) : pdfGroupsReady.length === 0 ? (
+            <EmptyState
+              icon={FileText}
+              title="پرونده‌ای برای ساخت PDF پیدا نشد"
+              description="مشتری‌ها باید عکس یا PDF در پرونده‌شان داشته باشند — فیلترها یا محتوای بایگانی را بررسی کنید"
+              compact
+            />
+          ) : (
+            <div className="flex flex-col gap-2.5">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="chip num">{toPersianDigits(pdfGroupsReady.length)} پروندهٔ PDF</span>
+                <span className="chip num">
+                  {toPersianDigits(pdfGroupsReady.reduce((s, g) => s + g.entries.length, 0))} فایل
+                </span>
+                {pdfGroups.length - pdfGroupsReady.length > 0 && (
+                  <span className="chip num !bg-[#fdeaea] !text-[#c0392b]">
+                    {toPersianDigits(pdfGroups.length - pdfGroupsReady.length)} مشتری بدون فایل قابل تبدیل
+                  </span>
+                )}
+              </div>
+              <ul className="max-h-72 divide-y divide-ink-900/5 overflow-y-auto rounded-2xl border border-ink-900/8 dark:divide-white/5 dark:border-white/10">
+                {pdfGroupsReady.map((g) => {
+                  const docs = g.entries.filter((e) => e.kind === "doc").length;
+                  const visas = g.entries.filter((e) => e.kind === "issuedVisa").length;
+                  const folder = pdfFolderFor(g, pdfOpts);
+                  return (
+                    <li key={g.customerId} className="flex items-center gap-2 px-3 py-2">
+                      <FileText size={14} className="shrink-0 text-brand-500" />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[12.5px] font-bold" dir="auto">{g.customerName}</p>
+                        <p className="truncate text-[10.5px] text-ink-400" dir="auto">
+                          {docs > 0 && `${toPersianDigits(docs)} مدرک`}
+                          {docs > 0 && visas > 0 && " + "}
+                          {visas > 0 && `${toPersianDigits(visas)} ویزا`}
+                          {folder ? ` — ${folder}/` : ""}
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded-lg bg-brand-500/8 px-2 py-1 text-[11px] font-bold text-brand-600 dark:text-brand-300" dir="auto">
+                        {pdfFileNameFor(g, pdfOpts)}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+        </SectionCard>
+      ) : (
       <SectionCard
         title="پیش‌نمایش بایگانی"
         icon={<FolderTree size={15} className="text-brand-500" />}
@@ -1296,13 +1746,14 @@ export function SmartArchivePage() {
           </div>
         )}
       </SectionCard>
+      )}
 
       {/* progress bar */}
       {busy && (
         <div className="glass fixed inset-x-4 bottom-24 z-40 mx-auto max-w-md rounded-2xl p-3.5 shadow-lg sm:bottom-6">
           <div className="mb-2 flex items-center justify-between text-[12px] font-bold">
             <span className="flex items-center gap-1.5">
-              <Loader2 size={14} className="animate-spin" /> در حال ساخت بایگانی ZIP…
+              <Loader2 size={14} className="animate-spin" /> {pdfMode ? "در حال ساخت پرونده‌های PDF…" : "در حال ساخت بایگانی ZIP…"}
             </span>
             <span className="num">{toPersianDigits(progress)}٪</span>
           </div>

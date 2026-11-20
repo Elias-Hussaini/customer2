@@ -16,6 +16,8 @@ import { downloadBlob } from "./tabular";
  * Both engines are heavy — lazy-loaded on first export.
  */
 export async function captureElement(el: HTMLElement): Promise<HTMLCanvasElement> {
+  // NOTE: also used by the Smart Archive per-customer PDF builder
+  // (smartArchive/customerPdf.ts) to rasterize Persian cover pages / captions.
   await document.fonts.ready;
   try {
     const { domToCanvas } = await import("modern-screenshot");

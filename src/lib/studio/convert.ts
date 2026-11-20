@@ -96,6 +96,50 @@ function canvasToJpegBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   });
 }
 
+/* ------------------------------------------------------------------ */
+/* Page renderer for the Smart Archive per-customer PDF builder.       */
+/* ------------------------------------------------------------------ */
+
+export interface PdfRasterQuality {
+  /** pdfjs render scale (1 = 72 DPI). */
+  scale: number;
+  /** Cap on the long edge of a rendered page (px) — keeps memory sane. */
+  maxEdge: number;
+}
+
+/** Render every page of a PDF Blob to white-backed canvases (no JPEG step —
+ *  the caller decides the encoding). Throws for encrypted/broken files. */
+export async function renderPdfPagesToCanvases(
+  blob: Blob,
+  quality: PdfRasterQuality,
+  onPage?: (page: number, total: number) => void,
+): Promise<HTMLCanvasElement[]> {
+  const lib = await loadPdfjs();
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const doc = await lib.getDocument({ data: bytes }).promise;
+  try {
+    const canvases: HTMLCanvasElement[] = [];
+    for (let i = 1; i <= doc.numPages; i++) {
+      onPage?.(i, doc.numPages);
+      const page = await doc.getPage(i);
+      const base = page.getViewport({ scale: 1 });
+      const scale = Math.min(quality.scale, quality.maxEdge / Math.max(base.width, base.height));
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(viewport.width);
+      canvas.height = Math.round(viewport.height);
+      const ctx = canvas.getContext("2d", { alpha: false })!;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvas, canvasContext: ctx, viewport }).promise;
+      canvases.push(canvas);
+    }
+    return canvases;
+  } finally {
+    void doc.destroy();
+  }
+}
+
 /** Normalize any picked file into images: PDFs are split into pages, image
  *  files pass straight through. Persian errors come back for rejects. */
 export async function filesToImages(
